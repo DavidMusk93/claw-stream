@@ -67,7 +67,8 @@ function readJable(code) {
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function extractHashAttr(magnet) {
-  const m = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i);
+  const decoded = magnet.replace(/&amp;/g, '&');
+  const m = decoded.match(/xt=urn:btih:([a-f0-9]{40})/i);
   return m ? m[1].toLowerCase() : '';
 }
 
@@ -113,7 +114,7 @@ const actressData = solo.map(function(a) {
       likes: w.likes || '',
       cover_b64: w.cover_b64 || '',
       cover_local: jableCoverMap[codeUpper] || '',
-      magnet: w.magnet || '',
+      magnet: (w.magnet || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
       m3u8_url: m3u8Map[codeUpper] || '',
       resolution: w.resolution || '',
     };
@@ -820,6 +821,7 @@ ${cardsHtml}</main>
       if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
 
       // POST /add 启动 torrent 下载
+      console.log('[play] fetching /torrent/add for hash=' + hash);
       fetch('/torrent/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -827,6 +829,7 @@ ${cardsHtml}</main>
       })
       .then(function(r){ return r.json(); })
       .then(function(data){
+        console.log('[play] /add data=' + JSON.stringify(data));
         if(data.error){
           modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>';
           return;
@@ -840,7 +843,6 @@ ${cardsHtml}</main>
         var checkReady = function(){
           checkAttempts++;
           var elapsed = Math.round((Date.now() - checkStartTime) / 1000);
-
           fetch('/torrent/status/' + hash)
           .then(function(r){ return r.json(); })
           .then(function(s){
@@ -855,30 +857,44 @@ ${cardsHtml}</main>
               return;
             }
 
-            // metadata 就绪，检查 peers 数量
-            if(s.peers < 3){
+            // metadata 就绪，设置视频源
+            modalVideo.src = '/torrent/stream/' + hash;
+
+            if(s.cached){
+              // 已缓存：直接本地读取，不需要显示 peers
+              modalLoading.innerHTML = '<span>正在加载本地文件...</span>';
+            } else if(s.peers < 3){
               modalLoading.innerHTML = '<span>Peers 较少 (' + s.peers + ')，缓冲可能较慢...</span>';
             } else {
               modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + '</span>';
             }
 
-            // metadata 就绪，设置视频源
-            modalVideo.src = '/torrent/stream/' + hash;
+            // 未缓存时轮询 peers/speed；已缓存时不需要
+            if(!s.cached){
+              progressInterval = setInterval(function(){
+                fetch('/torrent/status/' + hash)
+                .then(function(r){ return r.json(); })
+                .then(function(status){
+                  if(status.ready && !status.cached){
+                    var speed = (status.speed / 1024 / 1024).toFixed(1);
+                    modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + speed + ' MB/s</span>';
+                  }
+                })
+                .catch(function(err){});
+              }, 1000);
+            }
 
-            // 轮询进度显示
-            progressInterval = setInterval(function(){
-              fetch('/torrent/status/' + hash)
-              .then(function(r){ return r.json(); })
-              .then(function(status){
-                if(status.ready){
-                  var speed = (status.speed / 1024 / 1024).toFixed(1);
-                  modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + speed + ' MB/s</span>';
-                }
-              })
-              .catch(function(err){});
-            }, 1000);
+            // loadedmetadata：浏览器已读取视频元数据，可以准备播放了
+            modalVideo.addEventListener('loadedmetadata', function(){
+              if(s.cached){
+                modalLoading.style.display = 'none';
+                modalVideo.play().catch(function(err){
+                  console.error('Play error:', err);
+                });
+              }
+            }, { once: true });
 
-            // 视频可以播放时隐藏 loading
+            // canplay：有足够数据开始播放
             modalVideo.addEventListener('canplay', function(){
               if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
               modalLoading.style.display = 'none';

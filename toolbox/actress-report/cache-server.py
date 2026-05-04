@@ -169,16 +169,26 @@ class CacheHandler(SimpleHTTPRequestHandler):
                 if content_length > 0:
                     body = self.rfile.read(content_length)
 
+            # 收集需要转发的请求头
+            headers = {}
+            for key in ("Range", "Accept", "User-Agent", "Content-Type"):
+                value = self.headers.get(key)
+                if value:
+                    headers[key] = value
+
             req = urllib.request.Request(
                 f"http://localhost:8768{target_path}",
                 data=body,
                 method=method,
-                headers={"Content-Type": self.headers.get("Content-Type", "")} if body else {},
+                headers=headers,
             )
             with urllib.request.urlopen(req, timeout=60) as resp:
                 self.send_response(resp.status)
                 for key, value in resp.headers.items():
-                    if key.lower() not in ("transfer-encoding", "content-encoding", "content-length"):
+                    if key.lower() not in ("transfer-encoding", "content-encoding"):
+                        # 避免重复 CORS 头（torrent-server 已设置）
+                        if key.lower() in ("access-control-allow-origin", "access-control-allow-methods", "access-control-allow-headers"):
+                            continue
                         self.send_header(key, value)
                 # 流式传输：分 64KB 块读写
                 import shutil
