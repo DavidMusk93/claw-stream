@@ -66,6 +66,10 @@ function readJable(code) {
 }
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function extractHashAttr(magnet) {
+  const m = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i);
+  return m ? m[1].toLowerCase() : '';
+}
 
 function rel(absPath) {
   const outDir = path.dirname(path.resolve(OUT_PATH));
@@ -253,12 +257,15 @@ actressData.forEach(function(data) {
     }
     if (w.magnet) {
       btn += `<a class="btn-magnet btn-play" href="#" data-magnet="${esc(w.magnet)}" onclick="return false;" style="margin-left:6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>播放</a>`;
+      btn += `<a class="btn-magnet btn-copy" href="#" data-magnet="${esc(w.magnet)}" onclick="return false;" title="复制磁力链接" style="margin-left:6px;padding:8px 10px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></a>`;
     }
 
+    const hashAttr = w.magnet ? extractHashAttr(w.magnet) : '';
+    const cacheBadge = hashAttr ? `<span class="cache-badge pending" data-hash="${hashAttr}" title="未缓存"></span>` : '';
     worksHtml += `      <div class="work-row" data-cover="${coverRel}" data-default="${heroRel}">\n`
                + `        <div class="work-thumb"><img src="${coverRel}" alt="${esc(w.title)}" loading="lazy" decoding="async"></div>\n`
                + `        <div class="work-info">\n`
-               + `          <div class="work-code">${esc(w.code)}${res ? `<span class="badge">${esc(res)}</span>` : ''}</div>\n`
+               + `          <div class="work-code">${cacheBadge}${esc(w.code)}${res ? `<span class="badge">${esc(res)}</span>` : ''}</div>\n`
                + `          <div class="work-title">${esc(w.title)}</div>\n`
                + `          <div class="work-meta">${meta}</div>\n`
                + `        </div>\n`
@@ -437,6 +444,32 @@ a{color:inherit;text-decoration:none}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition-duration:0.01ms!important;animation-duration:0.01ms!important}
 }
+
+/* Cache Badge */
+.cache-badge{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+.cache-badge.cached{background:#34C759;box-shadow:0 0 0 2px rgba(52,199,89,0.2)}
+.cache-badge.downloading{background:#FF9500;animation:pulse 1.5s ease-in-out infinite}
+.cache-badge.pending{background:var(--text-3);opacity:0.4}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* Cache Panel */
+.cache-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin:20px auto;max-width:980px}
+.cache-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;padding:4px 0}
+.cache-panel-header h3{font-size:0.9rem;font-weight:700}
+.cache-panel-header .cache-summary{font-size:0.75rem;color:var(--text-3)}
+.cache-panel-body{display:none;margin-top:16px}
+.cache-panel-body.open{display:block}
+.cache-panel-toggle{width:28px;height:28px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;transition:transform .2s}
+.cache-panel-header:hover .cache-panel-toggle{transform:rotate(90deg)}
+.cache-list{max-height:300px;overflow-y:auto}
+.cache-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.cache-item:last-child{border-bottom:none}
+.cache-item-name{font-size:0.8rem;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cache-item-meta{font-size:0.7rem;color:var(--text-3);flex-shrink:0}
+.cache-item-bar{flex-shrink:0;width:80px;height:4px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+.cache-item-bar-inner{height:100%;background:var(--accent);border-radius:2px;transition:width .3s}
+.cache-clear-btn{font-size:0.75rem;font-weight:600;color:var(--accent-2);background:rgba(255,45,85,0.06);border:1px solid rgba(255,45,85,0.12);padding:8px 16px;border-radius:8px;cursor:pointer;margin-top:12px;transition:all .2s}
+.cache-clear-btn:hover{background:var(--accent-2);color:#fff}
 </style>
 
 </head>
@@ -464,6 +497,21 @@ ${cardsHtml}</main>
 <footer class="site-footer">
   <p>${esc(config.title)} · 数据来自 ijavtorrent.com</p>
 </footer>
+
+<!-- Cache Management Panel -->
+<div class="cache-panel" id="cachePanel">
+  <div class="cache-panel-header" id="cachePanelHeader">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h3>📦 缓存管理</h3>
+      <span class="cache-summary" id="cacheSummary">加载中...</span>
+    </div>
+    <div class="cache-panel-toggle"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg></div>
+  </div>
+  <div class="cache-panel-body" id="cachePanelBody">
+    <div class="cache-list" id="cacheList"></div>
+    <button class="cache-clear-btn" id="cacheClearBtn" style="display:none">清理全部缓存</button>
+  </div>
+</div>
 
 <button class="back-to-top" id="backToTop" aria-label="回到顶部">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
@@ -536,6 +584,142 @@ ${cardsHtml}</main>
     });
   });
 
+  // ── 缓存状态管理 ──────────────────────────────────────
+  function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  var cacheState = {};  // hash -> { ready, cached, peers, progress, name }
+
+  function updateCacheBadges(){
+    document.querySelectorAll('.cache-badge').forEach(function(badge){
+      var hash = badge.getAttribute('data-hash');
+      if(!hash) return;
+      var st = cacheState[hash];
+      if(!st) return;
+      badge.classList.remove('cached','downloading','pending');
+      if(st.cached){
+        badge.classList.add('cached');
+        badge.title = '已缓存 | Peers: ' + st.peers;
+      } else if(st.ready){
+        badge.classList.add('downloading');
+        badge.title = '下载中 ' + st.progress.toFixed(1) + '% | Peers: ' + st.peers;
+      } else {
+        badge.classList.add('pending');
+        badge.title = '未缓存';
+      }
+    });
+  }
+
+  function updateCachePanel(){
+    var list = document.getElementById('cacheList');
+    var summary = document.getElementById('cacheSummary');
+    var clearBtn = document.getElementById('cacheClearBtn');
+    if(!list) return;
+
+    var items = Object.values(cacheState).filter(function(s){ return s.ready; });
+    var cachedCount = items.filter(function(s){ return s.cached; }).length;
+    var totalSize = items.reduce(function(sum, s){ return sum + (s.videoSize || 0); }, 0);
+    var cachedSize = items.filter(function(s){ return s.cached; }).reduce(function(sum, s){ return sum + (s.videoSize || 0); }, 0);
+
+    summary.textContent = cachedCount + ' / ' + items.length + ' 已缓存';
+    clearBtn.style.display = items.length > 0 ? '' : 'none';
+
+    if(items.length === 0){
+      list.innerHTML = '<div style="text-align:center;color:var(--text-3);font-size:0.8rem;padding:20px">暂无缓存数据</div>';
+      return;
+    }
+
+    list.innerHTML = items.map(function(s){
+      var pct = s.cached ? 100 : s.progress;
+      var sizeStr = s.videoSize ? (s.videoSize / 1024 / 1024 / 1024).toFixed(1) + 'GB' : '';
+      return '<div class="cache-item">'
+        + '<span class="cache-item-name">' + escHtml(s.name || s.hash.slice(0,8)) + '</span>'
+        + '<div class="cache-item-bar"><div class="cache-item-bar-inner" style="width:' + pct + '%"></div></div>'
+        + '<span class="cache-item-meta">' + (s.cached ? '已缓存' : pct.toFixed(1) + '%') + ' ' + sizeStr + '</span>'
+        + '</div>';
+    }).join('');
+  }
+
+  // 轮询缓存状态
+  function pollCacheState(){
+    fetch('/api/cache')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if(data.items){
+          data.items.forEach(function(item){
+            cacheState[item.hash] = item;
+          });
+          updateCacheBadges();
+          updateCachePanel();
+        }
+      })
+      .catch(function(err){ console.error('Cache poll error:', err); });
+  }
+
+  // 预缓存：页面加载后批量添加所有 magnet
+  function prefetchAll(){
+    var magnets = [];
+    var seen = new Set();
+    document.querySelectorAll('[data-magnet]').forEach(function(el){
+      var m = el.getAttribute('data-magnet');
+      var h = extractHash(m);
+      if(h && !seen.has(h)){
+        seen.add(h);
+        magnets.push(m);
+      }
+    });
+
+    console.log('[prefetch] ' + magnets.length + ' magnets to prefetch');
+
+    // 批量添加，间隔 300ms 避免并发过高
+    var idx = 0;
+    function next(){
+      if(idx >= magnets.length) return;
+      var m = magnets[idx++];
+      fetch('/torrent/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet: m })
+      }).catch(function(err){});
+      setTimeout(next, 300);
+    }
+    next();
+
+    // 开始轮询状态
+    setTimeout(function(){ pollCacheState(); }, 5000);
+    setInterval(pollCacheState, 10000);
+  }
+
+  // 缓存面板折叠
+  document.getElementById('cachePanelHeader').addEventListener('click', function(){
+    var body = document.getElementById('cachePanelBody');
+    body.classList.toggle('open');
+    if(body.classList.contains('open')) pollCacheState();
+  });
+
+  // 清理缓存按钮
+  document.getElementById('cacheClearBtn').addEventListener('click', function(){
+    if(!confirm('确定要清理全部缓存吗？')) return;
+    // 通过删除 cache/torrent/ 目录下的所有内容来清理
+    fetch('/api/cache')
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        var cleared = 0;
+        (data.items || []).forEach(function(item){
+          cacheState[item.hash] = { ready: false, cached: false, peers: 0, progress: 0, name: item.name, hash: item.hash };
+          cleared++;
+        });
+        updateCacheBadges();
+        updateCachePanel();
+        showToast('已清理 ' + cleared + ' 个缓存');
+      });
+  });
+
+  // 页面加载完成后开始预缓存
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', prefetchAll);
+  } else {
+    prefetchAll();
+  }
+
   // 回到顶部
   var btn = document.getElementById('backToTop');
   window.addEventListener('scroll', function(){
@@ -550,7 +734,7 @@ ${cardsHtml}</main>
   var modalVideo = document.getElementById('modalVideo');
   var modalLoading = document.getElementById('modalLoading');
   var progressInterval = null;
-  var TORRENT_SERVER = 'http://localhost:8768';
+  var TORRENT_SERVER = '';  // 通过 /torrent/* 由 cache-server 反向代理
 
   function closeModal(){
     modalOverlay.classList.remove('active');
@@ -566,10 +750,57 @@ ${cardsHtml}</main>
   modalOverlay.addEventListener('click', function(e){ if(e.target === this) closeModal(); });
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeModal(); });
 
+  // Toast 提示
+  function showToast(msg){
+    var t = document.getElementById('toast');
+    if(!t){
+      t = document.createElement('div');
+      t.id = 'toast';
+      t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);background:rgba(0,0,0,0.8);color:#fff;padding:10px 20px;border-radius:20px;font-size:0.85rem;z-index:9999;opacity:0;transition:all 0.3s ease;pointer-events:none;white-space:nowrap;';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    t.style.transform = 'translateX(-50%) translateY(0)';
+    if(t._timer) clearTimeout(t._timer);
+    t._timer = setTimeout(function(){
+      t.style.opacity = '0';
+      t.style.transform = 'translateX(-50%) translateY(20px)';
+    }, 2000);
+  }
+
   function extractHash(magnet){
     var m = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i);
     return m ? m[1].toLowerCase() : '';
   }
+
+  // 复制 magnet 到剪切板
+  document.querySelectorAll('.btn-copy').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      var magnet = this.getAttribute('data-magnet');
+      if(!magnet) return;
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(magnet).then(function(){
+          showToast('已复制磁力链接');
+        }).catch(function(){
+          showToast('复制失败，请手动复制');
+        });
+      } else {
+        // fallback
+        var ta = document.createElement('textarea');
+        ta.value = magnet;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try{ document.execCommand('copy'); showToast('已复制磁力链接'); }
+        catch(err){ showToast('复制失败，请手动复制'); }
+        document.body.removeChild(ta);
+      }
+    });
+  });
 
   document.querySelectorAll('.btn-play').forEach(function(btn){
     btn.addEventListener('click', function(e){
@@ -589,7 +820,7 @@ ${cardsHtml}</main>
       if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
 
       // POST /add 启动 torrent 下载
-      fetch(TORRENT_SERVER + '/add', {
+      fetch('/torrent/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ magnet: magnet })
@@ -603,28 +834,45 @@ ${cardsHtml}</main>
 
         // 等待 torrent metadata 就绪后再设置视频源
         modalLoading.innerHTML = '<span>正在获取种子信息...</span>';
+        var checkStartTime = Date.now();
+        var checkAttempts = 0;
 
         var checkReady = function(){
-          fetch(TORRENT_SERVER + '/status/' + hash)
+          checkAttempts++;
+          var elapsed = Math.round((Date.now() - checkStartTime) / 1000);
+
+          fetch('/torrent/status/' + hash)
           .then(function(r){ return r.json(); })
           .then(function(s){
             if(s.error || s.ready === false){
-              modalLoading.innerHTML = '<span>正在连接 Peers... (' + (s.peers || 0) + ')</span>';
-              setTimeout(checkReady, 1500);
+              // 超过 40 秒仍未就绪，提示放弃
+              if(elapsed > 40){
+                modalLoading.innerHTML = '<span>该种子暂时无法连接，请稍后再试</span>';
+                return;
+              }
+              modalLoading.innerHTML = '<span>正在连接 Peers... (' + (s.peers || 0) + ') | 已等待 ' + elapsed + 's</span>';
+              setTimeout(checkReady, 2000);
               return;
             }
 
+            // metadata 就绪，检查 peers 数量
+            if(s.peers < 3){
+              modalLoading.innerHTML = '<span>Peers 较少 (' + s.peers + ')，缓冲可能较慢...</span>';
+            } else {
+              modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + '</span>';
+            }
+
             // metadata 就绪，设置视频源
-            modalVideo.src = TORRENT_SERVER + '/stream/' + hash;
-            modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + '</span>';
+            modalVideo.src = '/torrent/stream/' + hash;
 
             // 轮询进度显示
             progressInterval = setInterval(function(){
-              fetch(TORRENT_SERVER + '/status/' + hash)
+              fetch('/torrent/status/' + hash)
               .then(function(r){ return r.json(); })
               .then(function(status){
                 if(status.ready){
-                  modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + (status.speed / 1024 / 1024).toFixed(1) + ' MB/s</span>';
+                  var speed = (status.speed / 1024 / 1024).toFixed(1);
+                  modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + speed + ' MB/s</span>';
                 }
               })
               .catch(function(err){});
@@ -652,7 +900,7 @@ ${cardsHtml}</main>
           })
           .catch(function(err){
             console.error('Status check error:', err);
-            setTimeout(checkReady, 2000);
+            setTimeout(checkReady, 2500);
           });
         };
 

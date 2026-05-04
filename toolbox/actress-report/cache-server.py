@@ -130,9 +130,14 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
         self.send_header("Cache-Control", "public, max-age=31536000")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def translate_path(self, path):
         """将 URL 路径映射到本地文件路径"""
@@ -153,8 +158,54 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
         return super().translate_path(path)
 
+    def _proxy_to_torrent(self, method, target_path):
+        """将请求转发到 torrent-server (localhost:8768)，流式传输避免内存问题"""
+        import urllib.request
+
+        try:
+            body = None
+            if method == "POST":
+                content_length = int(self.headers.get("Content-Length", 0))
+                if content_length > 0:
+                    body = self.rfile.read(content_length)
+
+            req = urllib.request.Request(
+                f"http://localhost:8768{target_path}",
+                data=body,
+                method=method,
+                headers={"Content-Type": self.headers.get("Content-Type", "")} if body else {},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                self.send_response(resp.status)
+                for key, value in resp.headers.items():
+                    if key.lower() not in ("transfer-encoding", "content-encoding", "content-length"):
+                        self.send_header(key, value)
+                # 流式传输：分 64KB 块读写
+                import shutil
+                self.end_headers()
+                shutil.copyfileobj(resp, self.wfile)
+        except urllib.error.HTTPError as e:
+            self.send_response(e.code)
+            for key, value in e.headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(e.read())
+        except Exception as e:
+            print(f"[proxy] torrent error: {e}")
+            self.send_error(502, f"Torrent server error: {e}")
+
     def do_GET(self):
         path = unquote(self.path)
+
+        # 缓存状态 API
+        if path == "/api/cache":
+            self._proxy_to_torrent("GET", "/cache")
+            return
+
+        # 反向代理 torrent-server 请求
+        if path.startswith("/torrent"):
+            self._proxy_to_torrent("GET", path[len("/torrent"):])
+            return
 
         # 处理视频片段代理请求
         if path.startswith("/cache/") and (path.endswith(".ts") or path.endswith(".key")):
@@ -201,6 +252,13 @@ class CacheHandler(SimpleHTTPRequestHandler):
             return
 
         return super().do_GET()
+
+    def do_POST(self):
+        path = unquote(self.path)
+        if path.startswith("/torrent"):
+            self._proxy_to_torrent("POST", path[len("/torrent"):])
+            return
+        self.send_error(405, "Method not allowed")
 
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
