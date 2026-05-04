@@ -1,0 +1,19 @@
+{
+  "actresses": [
+    { "name": "白峰ミウ", "jp": "Shiromine Miu", "handle": "miu_shiromine", "code": "SAME-234", "type": "solo" },
+    { "name": "夢実かなえ", "jp": "Yumemi Kanae", "handle": "yumemi_kanae", "code": "MFYD-115", "type": "solo" },
+    { "name": "柏木ふみか", "jp": "Kashiwagi Fumika", "handle": "fumika_kashiwagi", "code": "EBWH-322", "type": "solo" },
+    { "name": "森日菜子", "jp": "Mori Hinako", "handle": "mori_hinako", "code": "MIKR-089", "type": "solo" },
+    { "name": "miru", "jp": "miru", "handle": "miru_12345", "code": "SNOS-177", "type": "solo" },
+    { "name": "金松季歩", "jp": "Kanematsu Kiho", "handle": "kiho_kanematsu", "code": "SNOS-148", "type": "solo" },
+    { "name": "神木玲", "jp": "Kamiki Rei", "handle": "rei_kamiki", "code": "START-542", "type": "solo" },
+    { "name": "瀧本雫葉", "jp": "Takimoto Shizuha", "handle": "shizuhakitamoto", "code": "ABF-340", "type": "solo" },
+    { "name": "天宮響", "jp": "Amamiya Hibiki", "handle": "hibiki_amamiya", "code": "VEMA-258", "type": "solo" },
+    { "name": "楓カレン", "jp": "Kaede Karen", "handle": "karen_kaede", "code": "IPZZ-802", "type": "solo" },
+    { "name": "美ノ瀬すずめ", "jp": "Mino Se Suzume", "handle": "suzume_mino", "code": "DLDSS-314", "type": "solo" },
+    { "name": "涼森れむ", "jp": "Suzumori Remu", "handle": "remu_suzumori", "code": "ABF-338", "type": "solo" },
+    { "name": "瀬戸環奈", "jp": "Seto Kanna", "handle": "kanna_seto0510", "code": "SNOS-131", "type": "solo", "note": "2025/01 S1 debut SONE-614 | Latest: 2026/04 SNOS-131" }
+  ],
+  "title": "SOLO Collection 2026",
+  "sort_by": "date_desc"
+}
