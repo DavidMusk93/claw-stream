@@ -251,8 +251,8 @@ actressData.forEach(function(data) {
     if (w.magnet) {
       btn += `<a class="btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>磁力${res ? ' ' + esc(res) : ''}</a>`;
     }
-    if (w.m3u8_url) {
-      btn += `<a class="btn-magnet btn-play" href="#" data-m3u8="${esc(w.m3u8_url)}" onclick="return false;" style="margin-left:6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>播放</a>`;
+    if (w.magnet) {
+      btn += `<a class="btn-magnet btn-play" href="#" data-magnet="${esc(w.magnet)}" onclick="return false;" style="margin-left:6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>播放</a>`;
     }
 
     worksHtml += `      <div class="work-row" data-cover="${coverRel}" data-default="${heroRel}">\n`
@@ -438,7 +438,7 @@ a{color:inherit;text-decoration:none}
   *,*::before,*::after{transition-duration:0.01ms!important;animation-duration:0.01ms!important}
 }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+
 </head>
 <body>
 
@@ -545,18 +545,19 @@ ${cardsHtml}</main>
     window.scrollTo({top:0, behavior:'smooth'});
   });
 
-  // 弹窗视频播放（m3u8）
+  // 弹窗视频播放（Torrent 流）
   var modalOverlay = document.getElementById('videoModal');
   var modalVideo = document.getElementById('modalVideo');
   var modalLoading = document.getElementById('modalLoading');
-  var currentHls = null;
+  var progressInterval = null;
+  var TORRENT_SERVER = 'http://localhost:8768';
 
   function closeModal(){
     modalOverlay.classList.remove('active');
     modalVideo.pause();
     modalVideo.src = '';
     modalVideo.removeAttribute('src');
-    if(currentHls){ currentHls.destroy(); currentHls = null; }
+    if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
     modalLoading.style.display = 'none';
     modalLoading.innerHTML = '<span>正在加载...</span>';
   }
@@ -565,57 +566,102 @@ ${cardsHtml}</main>
   modalOverlay.addEventListener('click', function(e){ if(e.target === this) closeModal(); });
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeModal(); });
 
+  function extractHash(magnet){
+    var m = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i);
+    return m ? m[1].toLowerCase() : '';
+  }
+
   document.querySelectorAll('.btn-play').forEach(function(btn){
     btn.addEventListener('click', function(e){
       e.preventDefault();
       e.stopPropagation();
-      var m3u8 = this.getAttribute('data-m3u8');
-      if(!m3u8) return;
+      var magnet = this.getAttribute('data-magnet');
+      if(!magnet) return;
+
+      var hash = extractHash(magnet);
+      if(!hash) return;
 
       modalLoading.style.display = 'flex';
       modalOverlay.classList.add('active');
 
-      if(currentHls){ currentHls.destroy(); currentHls = null; }
       modalVideo.pause();
       modalVideo.removeAttribute('src');
+      if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
 
-      if(typeof Hls !== 'undefined' && Hls.isSupported()){
-        var hls = new Hls({
-          maxBufferLength: 90,
-          maxMaxBufferLength: 300,
-          capLevelToPlayerSize: true,
-          startLevel: -1,
-          fragLoadingMaxRetry: 4,
-          manifestLoadingMaxRetry: 4,
-          levelLoadingMaxRetry: 4,
-        });
-        currentHls = hls;
+      // POST /add 启动 torrent 下载
+      fetch(TORRENT_SERVER + '/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet: magnet })
+      })
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if(data.error){
+          modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>';
+          return;
+        }
 
-        hls.on(Hls.Events.MANIFEST_PARSED, function(){
-          modalLoading.style.display = 'none';
-          modalVideo.play().catch(function(err){ console.error('HLS play error:', err); });
-        });
-        hls.on(Hls.Events.ERROR, function(event, data){
-          if(data.fatal){
-            console.error('HLS fatal error:', data.type, data.details);
-            if(data.type === Hls.ErrorTypes.NETWORK_ERROR){
-              hls.startLoad();
-            } else if(data.type === Hls.ErrorTypes.MEDIA_ERROR){
-              hls.recoverMediaError();
-            } else {
-              modalLoading.innerHTML = '<span>播放失败，请重试</span>';
+        // 等待 torrent metadata 就绪后再设置视频源
+        modalLoading.innerHTML = '<span>正在获取种子信息...</span>';
+
+        var checkReady = function(){
+          fetch(TORRENT_SERVER + '/status/' + hash)
+          .then(function(r){ return r.json(); })
+          .then(function(s){
+            if(s.error || s.ready === false){
+              modalLoading.innerHTML = '<span>正在连接 Peers... (' + (s.peers || 0) + ')</span>';
+              setTimeout(checkReady, 1500);
+              return;
             }
-          }
-        });
 
-        hls.loadSource(m3u8);
-        hls.attachMedia(modalVideo);
-      } else if(modalVideo.canPlayType('application/vnd.apple.mpegurl')){
-        modalVideo.src = m3u8;
-        modalVideo.addEventListener('loadedmetadata', function(){ modalLoading.style.display = 'none'; modalVideo.play(); });
-      } else {
-        modalLoading.innerHTML = '<span>您的浏览器不支持 HLS 播放</span>';
-      }
+            // metadata 就绪，设置视频源
+            modalVideo.src = TORRENT_SERVER + '/stream/' + hash;
+            modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + '</span>';
+
+            // 轮询进度显示
+            progressInterval = setInterval(function(){
+              fetch(TORRENT_SERVER + '/status/' + hash)
+              .then(function(r){ return r.json(); })
+              .then(function(status){
+                if(status.ready){
+                  modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + (status.speed / 1024 / 1024).toFixed(1) + ' MB/s</span>';
+                }
+              })
+              .catch(function(err){});
+            }, 1000);
+
+            // 视频可以播放时隐藏 loading
+            modalVideo.addEventListener('canplay', function(){
+              if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
+              modalLoading.style.display = 'none';
+              modalVideo.play().catch(function(err){
+                console.error('Play error:', err);
+              });
+            }, { once: true });
+
+            // 视频需要缓冲时显示 loading
+            modalVideo.addEventListener('waiting', function(){
+              modalLoading.style.display = 'flex';
+            });
+
+            // 错误处理
+            modalVideo.addEventListener('error', function(){
+              if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
+              modalLoading.innerHTML = '<span>播放失败，请重试</span>';
+            }, { once: true });
+          })
+          .catch(function(err){
+            console.error('Status check error:', err);
+            setTimeout(checkReady, 2000);
+          });
+        };
+
+        checkReady();
+      })
+      .catch(function(err){
+        console.error('Torrent start failed:', err);
+        modalLoading.innerHTML = '<span>无法连接播放服务器</span>';
+      });
     });
   });
 

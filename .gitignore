@@ -1,0 +1,36 @@
+# Workspace personal files
+.openclaw/
+memory/
+soul
+soul_context_md.sh
+AGENTS.md
+HEARTBEAT.md
+IDENTITY.md
+MEMORY.md
+SOUL.md
+TOOLS.md
+USER.md
+
+# Other projects
+Project_Soul_Anchor/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Python
+.venv*/
+__pycache__/
+*.pyc
+
+# Cache
+cache/
+*.ts
+!cache-server.py
+
+# Test files
+test-*.mjs
+test-*.js
+
+# OS
+.DS_Store
