@@ -35,13 +35,14 @@ SPAM_PATTERNS = [re.compile(p, re.I) for p in [
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def find_local_video(hash_str):
-    """在 torrent 下载目录中查找已下载的视频文件"""
+def find_video_state(hash_str):
+    """查找视频文件并检查头部是否已下载就绪"""
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
-        return None, 0
+        return None, 0, False
     best = None
     best_size = 0
+    best_logic = 0
     for root, dirs, files in os.walk(dir_path):
         for f in files:
             ext = os.path.splitext(f)[1].lower()
@@ -50,14 +51,29 @@ def find_local_video(hash_str):
             fp = os.path.join(root, f)
             try:
                 st = os.stat(fp)
-                # 检查实际磁盘使用（稀疏文件可能逻辑大小很大但实际只有部分下载）
                 real_size = st.st_blocks * 512
                 if real_size > best_size:
                     best_size = real_size
                     best = fp
+                    best_logic = st.st_size
             except OSError:
                 pass
-    return best, best_size
+    if not best or best_size < 1024 * 1024:
+        return best, best_size, False
+
+    # 检查头部是否有足够的视频数据（ftyp + moov for faststart MP4）
+    head_ready = False
+    try:
+        with open(best, "rb") as f:
+            head = f.read(512 * 1024)
+            # 只要有非 0 数据且包含 ftyp 就认为头部就绪
+            # faststart MP4: ftyp(头部) + moov(头部) + mdat(数据)
+            # 不需要尾部就绪，因为 moov 已经在头部
+            if len(head) > 0 and not all(b == 0 for b in head) and b"ftyp" in head:
+                head_ready = True
+    except Exception:
+        pass
+    return best, best_size, head_ready
 
 
 def format_size(b):
@@ -164,6 +180,16 @@ class TorrentEngine:
     def _handle_alert(self, alert):
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
+        elif isinstance(alert, lt.torrent_checked_alert):
+            # 文件校验完成后，重新应用播放优先级
+            h = alert.handle
+            hash_str = str(h.info_hash())
+            with self.lock:
+                if hash_str in self.torrents:
+                    info = self.torrents[hash_str]
+                    # 如果是播放模式（非预缓存），重新设置头部 urgent
+                    if not info.get("prefetch"):
+                        self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -186,13 +212,9 @@ class TorrentEngine:
         info["video_path"] = os.path.join(info["handle"].status().save_path, name)
         info["video_size"] = size
 
-        # 只下载视频文件
-        file_prios = [0] * fs.num_files()
-        file_prios[idx] = 7
-        handle.prioritize_files(file_prios)
-
         num_pieces = ti.num_pieces()
         if info.get("prefetch"):
+            # 预加载模式：前 2% pieces 优先级 4，其余 0
             start, end = self._calc_prefetch_pieces(ti, idx)
             piece_prios = [0] * num_pieces
             for p in range(start, min(end + 1, num_pieces)):
@@ -200,43 +222,52 @@ class TorrentEngine:
             handle.prioritize_pieces(piece_prios)
             print(f"[torrent] prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
         else:
+            # 默认：所有 pieces 优先级 0（等播放时再设置头部 urgent）
             piece_prios = [0] * num_pieces
             handle.prioritize_pieces(piece_prios)
             print(f"[torrent] added: {name} ({format_size(size)})")
 
         info["ready"] = True
 
+    def _apply_play_priority(self, h, info):
+        """应用播放优先级：头部 urgent，其余暂停"""
+        if not h.status().has_metadata:
+            return False
+        ti = h.torrent_file()
+        fs = ti.files()
+        idx = info["video_idx"]
+        if idx is None:
+            return False
+        num_pieces = ti.num_pieces()
+        piece_length = ti.piece_length()
+        file_offset = fs.file_offset(idx)
+        start_piece = file_offset // piece_length
+
+        # 头部 pieces: urgent deadline + 优先级 7
+        head_count = min(20, num_pieces)
+        for p in range(start_piece, min(start_piece + head_count, num_pieces)):
+            h.set_piece_deadline(p, 0)
+
+        # 其余 pieces: 优先级 0（暂停下载）
+        piece_prios = [0] * num_pieces
+        for p in range(start_piece, min(start_piece + head_count, num_pieces)):
+            piece_prios[p] = 7
+        h.prioritize_pieces(piece_prios)
+
+        print(f"[torrent] play priority: {info['hash'][:12]}... head={head_count}pcs")
+        return True
+
     def set_full_priority(self, hash_str):
+        """播放模式：头部 urgent，其余暂停——确保头部先就绪"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
             return False
         h = info["handle"]
-        if not h.status().has_metadata:
-            return False
-
-        ti = h.torrent_file()
-        fs = ti.files()
-        idx = info["video_idx"]
-
-        file_prios = [0] * fs.num_files()
-        file_prios[idx] = 7
-        h.prioritize_files(file_prios)
-
-        num_pieces = ti.num_pieces()
-        piece_prios = [7] * num_pieces
-        h.prioritize_pieces(piece_prios)
-
-        piece_length = ti.piece_length()
-        file_offset = fs.file_offset(idx)
-        head_pieces = min(10, num_pieces)
-        start_piece = file_offset // piece_length
-        for p in range(start_piece, min(start_piece + head_pieces, num_pieces)):
-            h.set_piece_deadline(p, 0)
-
-        info["last_access"] = time.time()
-        print(f"[torrent] full speed: {hash_str[:12]}... (head pieces urgent)")
-        return True
+        result = self._apply_play_priority(h, info)
+        if result:
+            info["last_access"] = time.time()
+        return result
 
     def get_status(self, hash_str):
         with self.lock:
@@ -246,15 +277,14 @@ class TorrentEngine:
 
         h = info["handle"]
         s = h.status()
-
-        # 本地文件实际大小（已下载部分）
-        local_path, local_size = find_local_video(hash_str)
+        local_path, local_size, head_ready = find_video_state(hash_str)
 
         return {
             "hash": hash_str,
             "name": s.name,
             "ready": info["ready"] and s.has_metadata,
-            "cached": local_size > 1024 * 1024,  # > 1MB 认为有缓存
+            "cached": local_size > 1024 * 1024,
+            "head_ready": head_ready,
             "peers": s.num_peers,
             "progress": s.progress * 100,
             "download_rate": s.download_rate,
@@ -343,9 +373,9 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
     def _serve_video(self, hash_str):
         """直接从本地文件提供视频流（支持 Range）"""
-        path, real_size = find_local_video(hash_str)
-        if not path or real_size < 1024:
-            self.send_error(404, "Video not cached yet")
+        path, real_size, head_ready = find_video_state(hash_str)
+        if not path or not head_ready:
+            self.send_error(404, "Video head not ready yet")
             return
 
         total_size = os.path.getsize(path)  # 逻辑大小（稀疏文件可能很大）
@@ -410,18 +440,18 @@ class CacheHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(status).encode())
             return
 
-        # 缓存检查（只看本地文件）
+        # 缓存检查（头部就绪才能播放）
         check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
         if check_match:
             hash_str = check_match.group(1).lower()
-            local_path, local_size = find_local_video(hash_str)
-            exists = local_path is not None and local_size > 1024 * 1024
+            local_path, local_size, head_ready = find_video_state(hash_str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "hash": hash_str,
-                "cached": exists,
+                "cached": local_size > 1024 * 1024,
+                "head_ready": head_ready,
                 "path": local_path,
                 "size": local_size,
             }).encode())

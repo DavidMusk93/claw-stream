@@ -604,9 +604,9 @@ ${cardsHtml}</main>
       if(!hash) return;
       var st = cacheState[hash];
       badge.classList.remove('cached','downloading','pending');
-      if(st && st.cached){
+      if(st && st.head_ready){
         badge.classList.add('cached');
-        badge.title = '已缓存 | ' + formatBytes(st.size || 0);
+        badge.title = '可播放 | ' + formatBytes(st.size || 0);
       } else if(st && st.downloading){
         badge.classList.add('downloading');
         badge.title = '下载中 ' + (st.progress || 0).toFixed(1) + '% | Peers: ' + (st.peers || 0);
@@ -682,6 +682,7 @@ ${cardsHtml}</main>
             var st = cacheState[item.hash] || {};
             cacheState[item.hash] = {
               cached: item.cached,
+              head_ready: item.head_ready,
               downloading: item.progress < 100 && item.peers > 0,
               ready: item.ready,
               progress: item.progress,
@@ -757,6 +758,7 @@ ${cardsHtml}</main>
             var st = cacheState[h] || {};
             cacheState[h] = {
               cached: !!data.cached,
+              head_ready: !!data.head_ready,
               downloading: st.downloading || false,
               ready: st.ready || false,
               progress: st.progress || 0,
@@ -919,8 +921,8 @@ ${cardsHtml}</main>
       fetch('/api/check/' + hash)
         .then(function(r){ return r.json(); })
         .then(function(data){
-          if(data.cached && data.size > 1024 * 1024){
-            // 有缓存 → 直接播放
+          if(data.head_ready){
+            // 头部就绪 → 直接播放
             startPlayback(hash);
             return;
           }
