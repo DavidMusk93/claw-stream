@@ -35,8 +35,27 @@ SPAM_PATTERNS = [re.compile(p, re.I) for p in [
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
+def _scan_mp4_moov(path, max_read=16 * 1024 * 1024):
+    """扫描 MP4 文件，找到 moov box 的结束位置"""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(max_read)
+            offset = 0
+            while offset < len(data) - 8:
+                size = int.from_bytes(data[offset:offset+4], "big")
+                box_type = data[offset+4:offset+8]
+                if size == 0 or size > 100 * 1024 * 1024:
+                    break
+                if box_type == b"moov":
+                    return offset + size
+                offset += size
+    except Exception:
+        pass
+    return 0
+
+
 def find_video_state(hash_str):
-    """查找视频文件并检查头部是否已下载就绪"""
+    """查找视频文件并检查 moov 是否完整下载"""
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
         return None, 0, False
@@ -61,15 +80,29 @@ def find_video_state(hash_str):
     if not best or best_size < 1024 * 1024:
         return best, best_size, False
 
-    # 检查头部是否有足够的视频数据（ftyp + moov for faststart MP4）
+    # 扫描 moov 位置
+    moov_end = _scan_mp4_moov(best)
+    if moov_end == 0:
+        # moov 不在头部，尝试在尾部查找
+        try:
+            with open(best, "rb") as f:
+                f.seek(max(0, best_logic - 1024 * 1024))
+                tail = f.read()
+                if b"moov" in tail:
+                    # moov 在尾部，需要完整下载才能播放
+                    moov_end = best_logic
+                else:
+                    return best, best_size, False
+        except Exception:
+            return best, best_size, False
+
+    # 确认 moov_end 在已下载区域（非 0）
     head_ready = False
     try:
         with open(best, "rb") as f:
-            head = f.read(512 * 1024)
-            # 只要有非 0 数据且包含 ftyp 就认为头部就绪
-            # faststart MP4: ftyp(头部) + moov(头部) + mdat(数据)
-            # 不需要尾部就绪，因为 moov 已经在头部
-            if len(head) > 0 and not all(b == 0 for b in head) and b"ftyp" in head:
+            f.seek(moov_end - 1024)
+            tail = f.read(1024)
+            if len(tail) == 1024 and not all(b == 0 for b in tail):
                 head_ready = True
     except Exception:
         pass
@@ -244,7 +277,8 @@ class TorrentEngine:
         start_piece = file_offset // piece_length
 
         # 头部 pieces: urgent deadline + 优先级 7
-        head_count = min(20, num_pieces)
+        # moov 最大可达 12MB，需要至少 6 pieces，保险起见下载 30pcs (~60MB)
+        head_count = min(30, num_pieces)
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             h.set_piece_deadline(p, 0)
 

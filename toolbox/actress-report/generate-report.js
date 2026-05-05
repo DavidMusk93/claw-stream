@@ -983,12 +983,22 @@ ${cardsHtml}</main>
 
   function startPlayback(hash){
     modalLoading.innerHTML = '<span>正在加载视频...</span>';
-    modalVideo.src = '/stream/' + hash;
     modalVideo.currentHash = hash;
 
-    modalVideo.addEventListener('canplay', function(){
+    // 先绑定监听器，再设置 src（防止 canplay 在绑定前触发）
+    var canplayFired = false;
+    function onCanplay(){
+      canplayFired = true;
       modalLoading.style.display = 'none';
       modalVideo.play().catch(function(err){ console.error('Play error:', err); });
+    }
+    modalVideo.addEventListener('canplay', onCanplay, { once: true });
+
+    // 备用：loadedmetadata 也触发（某些浏览器 canplay 不可靠）
+    modalVideo.addEventListener('loadedmetadata', function(){
+      if(!canplayFired){
+        modalLoading.innerHTML = '<span>缓冲第一帧...</span>';
+      }
     }, { once: true });
 
     modalVideo.addEventListener('waiting', function(){
@@ -1006,7 +1016,6 @@ ${cardsHtml}</main>
     });
 
     modalVideo.addEventListener('seeked', function(){
-      // seek 完成后如果进入播放则隐藏，否则 waiting 会再次显示
       if(!modalVideo.paused){
         modalLoading.style.display = 'none';
       }
@@ -1016,12 +1025,16 @@ ${cardsHtml}</main>
       modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>';
     }, { once: true });
 
-    // 10秒超时
+    // 设置 src 并强制加载
+    modalVideo.src = '/stream/' + hash;
+    modalVideo.load();
+
+    // 30秒超时
     setTimeout(function(){
       if(modalLoading.style.display !== 'none'){
         modalLoading.innerHTML = '<span>加载超时，请检查文件完整性</span>';
       }
-    }, 10000);
+    }, 30000);
   }
 
   // 键盘快捷键：← 后退 10s，→ 前进 10s，ESC 关闭
