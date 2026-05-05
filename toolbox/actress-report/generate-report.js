@@ -951,8 +951,8 @@ ${cardsHtml}</main>
                   var speed = (s.download_rate / 1024 / 1024).toFixed(1);
                   var pct = s.progress.toFixed(1);
 
-                  if(s.cached){
-                    // 已缓存足够数据 → 开始播放
+                  if(s.head_ready){
+                    // 头部就绪 → 开始播放
                     clearInterval(progressTimer);
                     progressTimer = null;
                     startPlayback(hash);
@@ -984,6 +984,7 @@ ${cardsHtml}</main>
   function startPlayback(hash){
     modalLoading.innerHTML = '<span>正在加载视频...</span>';
     modalVideo.src = '/stream/' + hash;
+    modalVideo.currentHash = hash;
 
     modalVideo.addEventListener('canplay', function(){
       modalLoading.style.display = 'none';
@@ -999,6 +1000,18 @@ ${cardsHtml}</main>
       modalLoading.style.display = 'none';
     });
 
+    modalVideo.addEventListener('seeking', function(){
+      modalLoading.style.display = 'flex';
+      modalLoading.innerHTML = '<span>定位中...</span>';
+    });
+
+    modalVideo.addEventListener('seeked', function(){
+      // seek 完成后如果进入播放则隐藏，否则 waiting 会再次显示
+      if(!modalVideo.paused){
+        modalLoading.style.display = 'none';
+      }
+    });
+
     modalVideo.addEventListener('error', function(){
       modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>';
     }, { once: true });
@@ -1010,6 +1023,20 @@ ${cardsHtml}</main>
       }
     }, 10000);
   }
+
+  // 键盘快捷键：← 后退 10s，→ 前进 10s，ESC 关闭
+  document.addEventListener('keydown', function(e){
+    if(!modalOverlay.classList.contains('active')) return;
+    if(e.key === 'ArrowLeft'){
+      e.preventDefault();
+      modalVideo.currentTime = Math.max(0, modalVideo.currentTime - 10);
+    } else if(e.key === 'ArrowRight'){
+      e.preventDefault();
+      modalVideo.currentTime = Math.min(modalVideo.duration || Infinity, modalVideo.currentTime + 10);
+    } else if(e.key === 'Escape'){
+      closeModal();
+    }
+  });
 
 })();
 </script>

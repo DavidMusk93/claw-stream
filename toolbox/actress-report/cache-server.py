@@ -371,8 +371,34 @@ class CacheHandler(SimpleHTTPRequestHandler):
             return ws_path
         return super().translate_path(path)
 
+    def _seek_priority(self, hash_str, start_byte, end_byte):
+        """根据 Range 请求设置对应 pieces 为 urgent"""
+        with self.engine.lock:
+            info = self.engine.torrents.get(hash_str)
+        if not info:
+            return
+        h = info["handle"]
+        if not h.status().has_metadata:
+            return
+        ti = h.torrent_file()
+        fs = ti.files()
+        idx = info["video_idx"]
+        if idx is None:
+            return
+        piece_length = ti.piece_length()
+        file_offset = fs.file_offset(idx)
+        num_pieces = ti.num_pieces()
+
+        # 计算 Range 对应的 piece 范围（加前后各 2 个 piece 缓冲）
+        start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
+        end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
+
+        # 设置 urgent deadline
+        for p in range(start_piece, end_piece + 1):
+            h.set_piece_deadline(p, 0)
+
     def _serve_video(self, hash_str):
-        """直接从本地文件提供视频流（支持 Range）"""
+        """直接从本地文件提供视频流（支持 Range），seek 时触发 urgent 下载"""
         path, real_size, head_ready = find_video_state(hash_str)
         if not path or not head_ready:
             self.send_error(404, "Video head not ready yet")
@@ -386,6 +412,9 @@ class CacheHandler(SimpleHTTPRequestHandler):
             start = int(parts[0])
             end = int(parts[1]) if parts[1] else total_size - 1
             chunk_size = (end - start) + 1
+
+            # Seek 到未下载区域时，通知 libtorrent urgent 下载
+            self._seek_priority(hash_str, start, end)
 
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {start}-{end}/{total_size}")
