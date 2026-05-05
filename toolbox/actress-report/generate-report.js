@@ -655,7 +655,7 @@ ${cardsHtml}</main>
       .catch(function(err){ console.error('Cache poll error:', err); });
   }
 
-  // 预缓存：页面加载后批量添加所有 magnet
+  // 预缓存：页面加载后只预添加最新的 13 个 magnet（标记为 prefetch）
   function prefetchAll(){
     var magnets = [];
     var seen = new Set();
@@ -668,19 +668,21 @@ ${cardsHtml}</main>
       }
     });
 
-    console.log('[prefetch] ' + magnets.length + ' magnets to prefetch');
+    // 只取最新的 13 个（按 HTML 中的顺序，最新的在前）
+    var prefetchMagnets = magnets.slice(0, 13);
+    console.log('[prefetch] ' + prefetchMagnets.length + ' / ' + magnets.length + ' magnets to prefetch');
 
-    // 批量添加，间隔 300ms 避免并发过高
+    // 批量添加，间隔 500ms 避免并发过高
     var idx = 0;
     function next(){
-      if(idx >= magnets.length) return;
-      var m = magnets[idx++];
+      if(idx >= prefetchMagnets.length) return;
+      var m = prefetchMagnets[idx++];
       fetch('/torrent/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ magnet: m })
+        body: JSON.stringify({ magnet: m, prefetch: true })
       }).catch(function(err){});
-      setTimeout(next, 300);
+      setTimeout(next, 500);
     }
     next();
 
@@ -821,7 +823,6 @@ ${cardsHtml}</main>
       if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
 
       // POST /add 启动 torrent 下载
-      console.log('[play] fetching /torrent/add for hash=' + hash);
       fetch('/torrent/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -829,7 +830,6 @@ ${cardsHtml}</main>
       })
       .then(function(r){ return r.json(); })
       .then(function(data){
-        console.log('[play] /add data=' + JSON.stringify(data));
         if(data.error){
           modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>';
           return;
@@ -838,85 +838,73 @@ ${cardsHtml}</main>
         // 等待 torrent metadata 就绪后再设置视频源
         modalLoading.innerHTML = '<span>正在获取种子信息...</span>';
         var checkStartTime = Date.now();
-        var checkAttempts = 0;
 
         var checkReady = function(){
-          checkAttempts++;
           var elapsed = Math.round((Date.now() - checkStartTime) / 1000);
           fetch('/torrent/status/' + hash)
           .then(function(r){ return r.json(); })
           .then(function(s){
             if(s.error || s.ready === false){
-              // 超过 40 秒仍未就绪，提示放弃
-              if(elapsed > 40){
+              // 超过 30 秒仍未就绪，提示放弃
+              if(elapsed > 30){
                 modalLoading.innerHTML = '<span>该种子暂时无法连接，请稍后再试</span>';
                 return;
               }
               modalLoading.innerHTML = '<span>正在连接 Peers... (' + (s.peers || 0) + ') | 已等待 ' + elapsed + 's</span>';
-              setTimeout(checkReady, 2000);
+              setTimeout(checkReady, 1500);
               return;
             }
 
-            // metadata 就绪，设置视频源
-            modalVideo.src = '/torrent/stream/' + hash;
-
-            if(s.cached){
-              // 已缓存：直接本地读取，不需要显示 peers
-              modalLoading.innerHTML = '<span>正在加载本地文件...</span>';
-            } else if(s.peers < 3){
-              modalLoading.innerHTML = '<span>Peers 较少 (' + s.peers + ')，缓冲可能较慢...</span>';
-            } else {
-              modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + '</span>';
-            }
-
-            // 未缓存时轮询 peers/speed；已缓存时不需要
-            if(!s.cached){
-              progressInterval = setInterval(function(){
-                fetch('/torrent/status/' + hash)
-                .then(function(r){ return r.json(); })
-                .then(function(status){
-                  if(status.ready && !status.cached){
-                    var speed = (status.speed / 1024 / 1024).toFixed(1);
-                    modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + speed + ' MB/s</span>';
-                  }
-                })
-                .catch(function(err){});
-              }, 1000);
-            }
-
-            // loadedmetadata：浏览器已读取视频元数据，可以准备播放了
-            modalVideo.addEventListener('loadedmetadata', function(){
-              if(s.cached){
-                modalLoading.style.display = 'none';
-                modalVideo.play().catch(function(err){
-                  console.error('Play error:', err);
-                });
-              }
-            }, { once: true });
-
-            // canplay：有足够数据开始播放
-            modalVideo.addEventListener('canplay', function(){
-              if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
-              modalLoading.style.display = 'none';
-              modalVideo.play().catch(function(err){
-                console.error('Play error:', err);
-              });
-            }, { once: true });
-
-            // 视频需要缓冲时显示 loading
-            modalVideo.addEventListener('waiting', function(){
-              modalLoading.style.display = 'flex';
-            });
-
-            // 错误处理
-            modalVideo.addEventListener('error', function(){
-              if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
-              modalLoading.innerHTML = '<span>播放失败，请重试</span>';
-            }, { once: true });
+            // metadata 就绪，等待头部数据下载
+            modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + ' | 准备数据中...</span>';
+            
+            // 轮询进度，等待头部数据就绪
+            var bufferWait = setInterval(function(){
+              fetch('/torrent/status/' + hash)
+              .then(function(r){ return r.json(); })
+              .then(function(status){
+                if(!status.ready) return;
+                var speed = (status.download_rate / 1024 / 1024).toFixed(1);
+                var pct = status.progress.toFixed(1);
+                modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + status.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
+                
+                // 进度超过 0.5% 认为头部数据已就绪（约 30MB）
+                if(status.progress > 0.5){
+                  clearInterval(bufferWait);
+                  modalVideo.src = '/torrent/stream/' + hash;
+                  
+                  // canplay：有足够数据开始播放
+                  modalVideo.addEventListener('canplay', function(){
+                    if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
+                    modalLoading.style.display = 'none';
+                    modalVideo.play().catch(function(err){
+                      console.error('Play error:', err);
+                    });
+                  }, { once: true });
+                  
+                  // 视频需要缓冲时显示 loading
+                  modalVideo.addEventListener('waiting', function(){
+                    modalLoading.style.display = 'flex';
+                  });
+                  
+                  // 错误处理
+                  modalVideo.addEventListener('error', function(){
+                    if(progressInterval){ clearInterval(progressInterval); progressInterval = null; }
+                    modalLoading.innerHTML = '<span>播放失败，请重试</span>';
+                  }, { once: true });
+                }
+              })
+              .catch(function(err){});
+            }, 1000);
+            
+            // 30 秒超时
+            setTimeout(function(){
+              clearInterval(bufferWait);
+            }, 30000);
           })
           .catch(function(err){
             console.error('Status check error:', err);
-            setTimeout(checkReady, 2500);
+            setTimeout(checkReady, 2000);
           });
         };
 
