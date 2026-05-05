@@ -181,6 +181,66 @@ add_torrent(magnet)
      └─ 真实浏览器无法播放 → MP4 格式问题（moov 不在头部）
      └─ headless 浏览器无法播放 → 正常，headless 不支持 H.264
 
+### canplay 竞态条件
+
+```
+错误顺序（事件丢失）:
+  video.src = '/stream/hash'   ← 浏览器立即开始加载
+       │
+       ▼  <-- canplay 在这里触发！
+  video.addEventListener('canplay', ...)  ← 监听器还没绑定！
+       │
+       ▼
+  永远等不到 canplay → 超时 ❌
+
+正确顺序（先绑定后设 src）:
+  video.addEventListener('canplay', ...)  ← 先绑定
+  video.src = '/stream/hash'              ← 再设 src
+  video.load()                            ← 强制重新加载
+       │
+       ▼
+  canplay 触发 → 监听器捕获 → 播放 ✅
+```
+
+### moov 完整检测
+
+```
+旧 head_ready（导致假阳性）:
+  读取 512KB → 找到 ftyp → 认为就绪
+       │
+       ▼
+  moov 实际 12MB，不在 512KB 内
+  浏览器解析到不完整 moov → 卡住 ❌
+
+新 head_ready（扫描 box 结构）:
+  读取 16MB → 扫描 MP4 box
+       │
+       ▼
+  找到 moov → 计算 moov_end
+       │
+       ▼
+  确认 moov_end 附近 1KB 非 0
+       │
+       ▼
+  moov 完整 → 浏览器可解析 ✅
+```
+
+### moov 位置分布
+
+```
+faststart MP4（约 50%）:
+  [ftyp 32B][moov 9-12MB][mdat 5GB]
+       │
+       └── head_ready 可检测
+
+非 faststart MP4（约 50%）:
+  [ftyp 32B][mdat 5GB][moov 9-12MB]
+       │
+       └── 需要完整下载才能播放
+       └── head_ready 永远 false
+       └── 前端提示"需完整下载"
+```
+
 问题: 无脑下载整部视频，磁盘瞬间爆满
 
 排查链:
