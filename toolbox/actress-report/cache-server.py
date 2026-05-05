@@ -1,159 +1,370 @@
 #!/usr/bin/env python3
 """
-cache-server.py — 本地视频缓存文件管理服务器
+cache-server.py — 一体化 BitTorrent 缓存服务器（本地文件直接播放版）
 
-功能：
-1. 扫描 cache/video/<hash>/ 目录，发现本地 MP4 缓存文件
-2. 提供 HTTP 流式播放（Range 请求，直接从本地文件读取）
-3. 精细缓存管理：显示每个文件大小、删除按钮
-4. 静态文件服务（HTML、图片）
+架构：
+  1. libtorrent 下载引擎 → cache/torrent/<hash>/
+  2. HTTP 直接读取本地文件 → /stream/<hash>（Range 支持）
+  3. 播放时优先本地缓存，无缓存则启动 torrent 下载
 
-用法：
+启动：
   cd toolbox/actress-report && python3 cache-server.py
-
-然后浏览器访问：http://localhost:8765/
 """
 
-import os, sys, json, re, shutil, time
+import os, sys, json, re, time, threading, math, argparse, signal, shutil
 from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import socketserver
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "video")
-REPORT_DIR = os.path.dirname(os.path.abspath(__file__))
+import libtorrent as lt
+
+# ── 配置 ──────────────────────────────────────────────
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(SCRIPT_DIR, "cache", "torrent")
+REPORT_DIR = SCRIPT_DIR
 WORKSPACE_DIR = os.path.dirname(os.path.dirname(REPORT_DIR))
+
+MAX_CACHE_SIZE_GB = 20
+PREFETCH_COUNT = 13
+PREFETCH_PERCENT = 0.02
+VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
+SPAM_PATTERNS = [re.compile(p, re.I) for p in [
+    r"游戏大全", r"996gg", r"hhd800", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
+]]
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def find_video_file(hash_str):
-    """查找某个 hash 对应的本地视频文件"""
+def find_local_video(hash_str):
+    """在 torrent 下载目录中查找已下载的视频文件"""
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
-        return None
-    
-    # 查找最大的视频文件
-    video_exts = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".m4v", ".webm"}
+        return None, 0
     best = None
     best_size = 0
-    
-    for f in os.listdir(dir_path):
-        ext = os.path.splitext(f)[1].lower()
-        if ext not in video_exts:
-            continue
-        fp = os.path.join(dir_path, f)
-        try:
-            size = os.path.getsize(fp)
-            if size > best_size:
-                best_size = size
-                best = fp
-        except OSError:
-            pass
-    
-    return best
-
-
-def get_all_cache_items():
-    """获取所有缓存文件信息"""
-    items = []
-    if not os.path.exists(CACHE_DIR):
-        return items
-    
-    for hash_str in os.listdir(CACHE_DIR):
-        dir_path = os.path.join(CACHE_DIR, hash_str)
-        if not os.path.isdir(dir_path):
-            continue
-        
-        video_path = find_video_file(hash_str)
-        if not video_path:
-            continue
-        
-        stat = os.stat(video_path)
-        items.append({
-            "hash": hash_str,
-            "name": os.path.basename(video_path),
-            "size": stat.st_size,
-            "disk_usage": stat.st_blocks * 512,  # 实际磁盘使用（稀疏文件）
-            "mtime": stat.st_mtime,
-            "path": video_path,
-        })
-    
-    # 按修改时间降序
-    items.sort(key=lambda x: x["mtime"], reverse=True)
-    return items
-
-
-def get_cache_size():
-    """计算缓存目录实际磁盘使用（考虑稀疏文件）"""
-    total = 0
-    if not os.path.exists(CACHE_DIR):
-        return 0
-    for dirpath, dirnames, filenames in os.walk(CACHE_DIR):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
+    for root, dirs, files in os.walk(dir_path):
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in VIDEO_EXTS:
+                continue
+            fp = os.path.join(root, f)
             try:
                 st = os.stat(fp)
-                total += st.st_blocks * 512
+                # 检查实际磁盘使用（稀疏文件可能逻辑大小很大但实际只有部分下载）
+                real_size = st.st_blocks * 512
+                if real_size > best_size:
+                    best_size = real_size
+                    best = fp
             except OSError:
                 pass
-    return total
+    return best, best_size
 
 
+def format_size(b):
+    if b == 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = math.floor(math.log(b) / math.log(1024))
+    return f"{b / math.pow(1024, i):.1f} {units[i]}"
+
+
+# ── BitTorrent 引擎 ───────────────────────────────────
+class TorrentEngine:
+    def __init__(self, cache_dir, max_size_gb):
+        self.cache_dir = cache_dir
+        self.max_size_bytes = max_size_gb * 1024 * 1024 * 1024
+        self.session = lt.session()
+
+        settings = self.session.get_settings()
+        settings["alert_mask"] = int(lt.alert.category_t.status_notification)
+        settings["connections_limit"] = 200
+        settings["download_rate_limit"] = 0
+        settings["upload_rate_limit"] = 0
+        self.session.apply_settings(settings)
+
+        # hash -> { handle, magnet, added_at, last_access, video_idx, video_path, video_size }
+        self.torrents = {}
+        self.lock = threading.Lock()
+
+        self._stop = False
+        self._alert_thread = threading.Thread(target=self._process_alerts, daemon=True)
+        self._alert_thread.start()
+
+    def _pick_video_file(self, ti):
+        fs = ti.files()
+        candidates = []
+        for idx in range(fs.num_files()):
+            name = fs.file_path(idx)
+            size = fs.file_size(idx)
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in VIDEO_EXTS:
+                continue
+            if any(p.search(name) for p in SPAM_PATTERNS):
+                continue
+            candidates.append((size, idx, name))
+        if not candidates:
+            for idx in range(fs.num_files()):
+                candidates.append((fs.file_size(idx), idx, fs.file_path(idx)))
+        candidates.sort(reverse=True)
+        return candidates[0] if candidates else (0, 0, "")
+
+    def _calc_prefetch_pieces(self, ti, video_idx):
+        fs = ti.files()
+        file_offset = fs.file_offset(video_idx)
+        file_size = fs.file_size(video_idx)
+        piece_length = ti.piece_length()
+        prefetch_bytes = int(file_size * PREFETCH_PERCENT)
+        start_piece = file_offset // piece_length
+        end_piece = (file_offset + prefetch_bytes) // piece_length
+        return start_piece, end_piece
+
+    def add_torrent(self, magnet, prefetch=False):
+        hash_str = self._extract_hash(magnet)
+        if not hash_str:
+            return None
+
+        with self.lock:
+            if hash_str in self.torrents:
+                info = self.torrents[hash_str]
+                info["last_access"] = time.time()
+                return info
+
+            save_path = os.path.join(self.cache_dir, hash_str)
+            os.makedirs(save_path, exist_ok=True)
+
+            params = lt.parse_magnet_uri(magnet)
+            params.save_path = save_path
+
+            handle = self.session.add_torrent(params)
+            info = {
+                "handle": handle,
+                "magnet": magnet,
+                "hash": hash_str,
+                "added_at": time.time(),
+                "last_access": time.time(),
+                "video_idx": None,
+                "video_path": None,
+                "video_size": 0,
+                "ready": False,
+                "prefetch": prefetch,
+            }
+            self.torrents[hash_str] = info
+            return info
+
+    def _extract_hash(self, magnet):
+        m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
+        return m.group(1).lower() if m else None
+
+    def _process_alerts(self):
+        while not self._stop:
+            for alert in self.session.pop_alerts():
+                self._handle_alert(alert)
+            time.sleep(0.5)
+
+    def _handle_alert(self, alert):
+        if isinstance(alert, lt.metadata_received_alert):
+            self._on_metadata(alert.handle)
+        elif isinstance(alert, lt.torrent_finished_alert):
+            h = alert.handle
+            hash_str = str(h.info_hash())
+            with self.lock:
+                if hash_str in self.torrents:
+                    self.torrents[hash_str]["ready"] = True
+
+    def _on_metadata(self, handle):
+        hash_str = str(handle.info_hash())
+        with self.lock:
+            if hash_str not in self.torrents:
+                return
+            info = self.torrents[hash_str]
+
+        ti = handle.torrent_file()
+        fs = ti.files()
+
+        size, idx, name = self._pick_video_file(ti)
+        info["video_idx"] = idx
+        info["video_path"] = os.path.join(info["handle"].status().save_path, name)
+        info["video_size"] = size
+
+        # 只下载视频文件
+        file_prios = [0] * fs.num_files()
+        file_prios[idx] = 7
+        handle.prioritize_files(file_prios)
+
+        num_pieces = ti.num_pieces()
+        if info.get("prefetch"):
+            start, end = self._calc_prefetch_pieces(ti, idx)
+            piece_prios = [0] * num_pieces
+            for p in range(start, min(end + 1, num_pieces)):
+                piece_prios[p] = 4
+            handle.prioritize_pieces(piece_prios)
+            print(f"[torrent] prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
+        else:
+            piece_prios = [0] * num_pieces
+            handle.prioritize_pieces(piece_prios)
+            print(f"[torrent] added: {name} ({format_size(size)})")
+
+        info["ready"] = True
+
+    def set_full_priority(self, hash_str):
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return False
+        h = info["handle"]
+        if not h.status().has_metadata:
+            return False
+
+        ti = h.torrent_file()
+        fs = ti.files()
+        idx = info["video_idx"]
+
+        file_prios = [0] * fs.num_files()
+        file_prios[idx] = 7
+        h.prioritize_files(file_prios)
+
+        num_pieces = ti.num_pieces()
+        piece_prios = [7] * num_pieces
+        h.prioritize_pieces(piece_prios)
+
+        piece_length = ti.piece_length()
+        file_offset = fs.file_offset(idx)
+        head_pieces = min(10, num_pieces)
+        start_piece = file_offset // piece_length
+        for p in range(start_piece, min(start_piece + head_pieces, num_pieces)):
+            h.set_piece_deadline(p, 0)
+
+        info["last_access"] = time.time()
+        print(f"[torrent] full speed: {hash_str[:12]}... (head pieces urgent)")
+        return True
+
+    def get_status(self, hash_str):
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return None
+
+        h = info["handle"]
+        s = h.status()
+
+        # 本地文件实际大小（已下载部分）
+        local_path, local_size = find_local_video(hash_str)
+
+        return {
+            "hash": hash_str,
+            "name": s.name,
+            "ready": info["ready"] and s.has_metadata,
+            "cached": local_size > 1024 * 1024,  # > 1MB 认为有缓存
+            "peers": s.num_peers,
+            "progress": s.progress * 100,
+            "download_rate": s.download_rate,
+            "upload_rate": s.upload_rate,
+            "video_file": os.path.basename(info["video_path"]) if info["video_path"] else None,
+            "video_size": info["video_size"],
+            "local_size": local_size,
+            "state": str(s.state),
+        }
+
+    def get_all_status(self):
+        with self.lock:
+            hashes = list(self.torrents.keys())
+        return [self.get_status(h) for h in hashes]
+
+    def remove_torrent(self, hash_str):
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return False
+
+        self.session.remove_torrent(info["handle"])
+        save_path = os.path.join(self.cache_dir, hash_str)
+        try:
+            shutil.rmtree(save_path, ignore_errors=True)
+        except Exception as e:
+            print(f"[remove] error: {e}")
+
+        with self.lock:
+            if hash_str in self.torrents:
+                del self.torrents[hash_str]
+        return True
+
+    def _get_cache_size(self):
+        total = 0
+        if not os.path.exists(self.cache_dir):
+            return 0
+        for dirpath, dirnames, filenames in os.walk(self.cache_dir):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                try:
+                    st = os.stat(fp)
+                    total += st.st_blocks * 512
+                except OSError:
+                    pass
+        return total
+
+    def shutdown(self):
+        self._stop = True
+        self._alert_thread.join(timeout=5)
+
+
+# ── HTTP 处理器 ───────────────────────────────────────
 class CacheHandler(SimpleHTTPRequestHandler):
-    """自定义 HTTP 请求处理器"""
-    
+    def __init__(self, *args, engine=None, **kwargs):
+        self.engine = engine
+        super().__init__(*args, **kwargs)
+
     def log_message(self, format, *args):
         msg = format % args
         if ".ts" in msg or ".m3u8" in msg or ".jpg" in msg or "stream" in msg:
             print(f"[serve] {msg.strip()}")
-    
+
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
         super().end_headers()
-    
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.end_headers()
-    
+
     def translate_path(self, path):
         path = unquote(path)
         if path.startswith("/cache/"):
             return os.path.join(CACHE_DIR, path[7:])
         if path.startswith("/images/"):
             return os.path.join(REPORT_DIR, path[1:])
-        if path == "/" or path == "/actresses-report.html":
+        if path == "/actresses-report.html":
             return os.path.join(WORKSPACE_DIR, "actresses-report.html")
         ws_path = os.path.join(WORKSPACE_DIR, path.lstrip("/"))
         if os.path.exists(ws_path):
             return ws_path
         return super().translate_path(path)
-    
+
     def _serve_video(self, hash_str):
-        """直接从本地文件提供视频流"""
-        video_path = find_video_file(hash_str)
-        if not video_path:
-            self.send_error(404, "Video not cached. Download the magnet and place the file in cache/video/<hash>/")
+        """直接从本地文件提供视频流（支持 Range）"""
+        path, real_size = find_local_video(hash_str)
+        if not path or real_size < 1024:
+            self.send_error(404, "Video not cached yet")
             return
-        
-        total_size = os.path.getsize(video_path)
+
+        total_size = os.path.getsize(path)  # 逻辑大小（稀疏文件可能很大）
         range_hdr = self.headers.get("Range")
-        
+
         if range_hdr:
             parts = range_hdr.replace("bytes=", "").split("-")
             start = int(parts[0])
             end = int(parts[1]) if parts[1] else total_size - 1
             chunk_size = (end - start) + 1
-            
+
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {start}-{end}/{total_size}")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", chunk_size)
             self.send_header("Content-Type", "video/mp4")
             self.end_headers()
-            
-            with open(video_path, "rb") as f:
+
+            with open(path, "rb") as f:
                 f.seek(start)
                 remaining = chunk_size
                 while remaining > 0:
@@ -168,55 +379,70 @@ class CacheHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", total_size)
             self.send_header("Content-Type", "video/mp4")
             self.end_headers()
-            
-            with open(video_path, "rb") as f:
+
+            with open(path, "rb") as f:
                 while True:
                     buf = f.read(65536)
                     if not buf:
                         break
                     self.wfile.write(buf)
-    
+
     def do_GET(self):
         path = unquote(self.path)
-        
-        # 视频流
+
+        # 视频流（直接从本地文件读取）
         stream_match = re.match(r"^/stream/([a-f0-9]{40})$", path, re.I)
         if stream_match:
             self._serve_video(stream_match.group(1).lower())
             return
-        
-        # 缓存状态 API
-        if path == "/api/cache":
-            items = get_all_cache_items()
-            total_disk = get_cache_size()
+
+        # torrent 状态查询
+        status_match = re.match(r"^/torrent/status/([a-f0-9]{40})$", path, re.I)
+        if status_match:
+            hash_str = status_match.group(1).lower()
+            status = self.engine.get_status(hash_str)
+            if not status:
+                self.send_error(404, "Not found")
+                return
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({
-                "totalSize": total_disk,
-                "itemCount": len(items),
-                "items": items,
-            }).encode())
+            self.wfile.write(json.dumps(status).encode())
             return
-        
-        # 检查某个 hash 是否有缓存
+
+        # 缓存检查（只看本地文件）
         check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
         if check_match:
             hash_str = check_match.group(1).lower()
-            video_path = find_video_file(hash_str)
-            exists = video_path is not None and os.path.getsize(video_path) > 1024 * 1024
+            local_path, local_size = find_local_video(hash_str)
+            exists = local_path is not None and local_size > 1024 * 1024
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "hash": hash_str,
                 "cached": exists,
-                "path": video_path,
-                "size": os.path.getsize(video_path) if video_path else 0,
+                "path": local_path,
+                "size": local_size,
             }).encode())
             return
-        
-        # 根路径返回 HTML 报告
+
+        # 所有缓存状态
+        if path == "/api/cache":
+            items = self.engine.get_all_status()
+            total_disk = self.engine._get_cache_size()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "totalSize": total_disk,
+                "maxSize": self.engine.max_size_bytes,
+                "itemCount": len(items),
+                "items": items,
+            }).encode())
+            return
+
+        # 根路径返回 HTML
         if path == "/":
             report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
             if os.path.exists(report_path):
@@ -226,37 +452,71 @@ class CacheHandler(SimpleHTTPRequestHandler):
                 with open(report_path, "rb") as f:
                     self.wfile.write(f.read())
             else:
-                self.send_response(404)
-                self.send_header("Content-Type", "text/plain")
-                self.end_headers()
-                self.wfile.write(b"actresses-report.html not found")
+                self.send_error(404, "actresses-report.html not found")
             return
-        
+
         super().do_GET()
-    
+
+    def do_POST(self):
+        path = unquote(self.path)
+
+        if path == "/torrent/add":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode()
+            try:
+                data = json.loads(body)
+                magnet = data.get("magnet")
+                if not magnet:
+                    self.send_error(400, "Missing magnet")
+                    return
+
+                prefetch = data.get("prefetch", False)
+                info = self.engine.add_torrent(magnet, prefetch=prefetch)
+                if not info:
+                    self.send_error(400, "Invalid magnet")
+                    return
+
+                hash_str = info["hash"]
+
+                if not prefetch:
+                    self.engine.set_full_priority(hash_str)
+
+                h = info["handle"]
+                for _ in range(20):
+                    if h.status().has_metadata:
+                        break
+                    time.sleep(0.5)
+
+                status = self.engine.get_status(hash_str)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "hash": hash_str,
+                    "status": "added",
+                    "ready": status["ready"] if status else False,
+                    "peers": status["peers"] if status else 0,
+                    "progress": status["progress"] if status else 0,
+                }).encode())
+            except Exception as e:
+                self.send_error(400, str(e))
+            return
+
+        self.send_error(405, "Method not allowed")
+
     def do_DELETE(self):
         path = unquote(self.path)
-        
-        # 删除某个缓存
+
         cache_match = re.match(r"^/api/cache/([a-f0-9]{40})$", path, re.I)
         if cache_match:
             hash_str = cache_match.group(1).lower()
-            dir_path = os.path.join(CACHE_DIR, hash_str)
-            if os.path.exists(dir_path):
-                try:
-                    shutil.rmtree(dir_path)
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"deleted": True}).encode())
-                    return
-                except Exception as e:
-                    self.send_error(500, str(e))
-                    return
-            else:
-                self.send_error(404, "Not found")
-                return
-        
+            success = self.engine.remove_torrent(hash_str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"deleted": success}).encode())
+            return
+
         self.send_error(405, "Method not allowed")
 
 
@@ -266,32 +526,38 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="本地视频缓存文件管理服务器")
+    parser = argparse.ArgumentParser(description="一体化 BitTorrent 缓存服务器")
     parser.add_argument("--port", type=int, default=8765, help="监听端口 (默认: 8765)")
+    parser.add_argument("--max-size", type=int, default=20, help="最大缓存大小 GB (默认: 20)")
     args = parser.parse_args()
-    
+
+    engine = TorrentEngine(CACHE_DIR, args.max_size)
+
+    def signal_handler(sig, frame):
+        print("\n[shutdown] Stopping server...")
+        engine.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     os.chdir(WORKSPACE_DIR)
-    server = ThreadedHTTPServer(("0.0.0.0", args.port), CacheHandler)
-    
-    items = get_all_cache_items()
-    total = get_cache_size()
-    
+
+    def handler_factory(*args, **kwargs):
+        return CacheHandler(*args, engine=engine, **kwargs)
+
+    server = ThreadedHTTPServer(("0.0.0.0", args.port), handler_factory)
+
     print("=" * 60)
     print(f"Cache Server started at http://localhost:{args.port}/")
     print(f"Cache directory: {CACHE_DIR}")
-    print(f"Cached videos: {len(items)}")
-    print(f"Total disk usage: {total / 1024 / 1024:.1f}MB")
+    print(f"Max cache size: {args.max_size}GB")
+    print(f"Engine: libtorrent {lt.version}")
     print("=" * 60)
-    print(f"Open http://localhost:{args.port}/ in your browser")
     print("Press Ctrl+C to stop")
     print("=" * 60)
-    
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[server] Shutting down...")
-        server.shutdown()
+
+    server.serve_forever()
 
 
 if __name__ == "__main__":
