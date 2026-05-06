@@ -5,7 +5,7 @@
 ```
 用户浏览器
      |
-     |  HTTPS :8443
+     |  HTTPS :443
      v
 +-----------------------------+
 |  Caddy (reverse proxy)      |
@@ -23,12 +23,12 @@
 |  - API /api/*                |
 +-----------------------------+
 
-s-ui (:443) ──→ 独立运行，与 Web 服务无交集
+s-ui (:8444) ──→ 独立运行，与 Web 服务无交集
 ```
 
-**为什么 HTTPS 在 8443 而不是 443？**
+**历史：为什么曾经走 8443？**
 
-443 端口已被 `s-ui`（代理面板）占用，且其 TLS 证书为 `images.apple.com` 伪装证书。Caddy 无法在 443 上监听，因此 HTTPS 服务部署在 **8443** 端口。
+最初 443 端口被 `s-ui`（代理面板）占用，Caddy 无法监听 443，因此 HTTPS 临时部署在 **8443**。后续已将 s-ui 的 443 入站迁移到 **8444**，Caddy 接管 443。
 
 ---
 
@@ -45,7 +45,7 @@ s-ui (:443) ──→ 独立运行，与 Web 服务无交集
 **Caddyfile 内容：**
 
 ```
-rn.guohuasun.com:8443 {
+rn.guohuasun.com {
     reverse_proxy localhost:8765
     log {
         output file logs/caddy-access.log {
@@ -60,7 +60,7 @@ rn.guohuasun.com:8443 {
 }
 ```
 
-- `:8443` 提供 HTTPS，反向代理到 `localhost:8765`
+- `rn.guohuasun.com` 默认监听 443，提供 HTTPS，反向代理到 `localhost:8765`
 - `:80` 仅用于 Let's Encrypt HTTP-01 挑战验证（必须保持开放）
 
 ### 2.2 cache-server.py
@@ -82,8 +82,8 @@ rn.guohuasun.com:8443 {
 | 端口 | 协议 | 服务 | 外部可访问 | 说明 |
 |------|------|------|-----------|------|
 | 80 | TCP | Caddy | ✅ | Let's Encrypt 验证，不可关闭 |
-| 443 | TCP | s-ui | ✅ | 代理服务，勿动 |
-| 8443 | TCP | Caddy | ✅ | **HTTPS 入口** |
+| 443 | TCP | Caddy | ✅ | **HTTPS 入口** |
+| 8444 | TCP | s-ui | ✅ | 代理服务（原 443，已迁移） |
 | 8765 | TCP | cache-server | ✅ (本地) | 仅 localhost + Caddy 访问即可 |
 
 ---
@@ -221,15 +221,16 @@ curl -I http://rn.guohuasun.com/health
 journalctl -u caddy-claw --no-pager | tail -50
 ```
 
-### 6.4 s-ui 与 Caddy 冲突
+### 6.4 s-ui 与 Caddy 端口冲突
 
-443 端口冲突时 Caddy 不会报错（因为我们显式指定了 `:8443`），但如果未来尝试让 Caddy 监听 443：
+如果 s-ui 重新占用了 443，Caddy 会启动失败。检查占用者：
 
 ```bash
-# 检查 443 占用者
 ss -tlnp | grep :443
 lsof -i :443
 ```
+
+解决：将 s-ui 的 443 入站迁移到其他端口（如 8444），然后重启 Caddy。
 
 ---
 
@@ -267,6 +268,6 @@ Caddy 此时仍监听 `:8443`，但用户访问 `https://rn.guohuasun.com/`（�
 | 重启 Caddy | `systemctl restart caddy-claw` |
 | 查看 cache-server | `ps aux \| grep cache-server` |
 | 重启 cache-server | `pkill -f cache-server.py && cd toolbox/actress-report && nohup python3 cache-server.py --port 8765 &` |
-| 测试 HTTPS | `curl -s https://rn.guohuasun.com:8443/ \| head` |
-| 检查证书 | `echo \| openssl s_client -connect rn.guohuasun.com:8443` |
+| 测试 HTTPS | `curl -s https://rn.guohuasun.com/ \| head` |
+| 检查证书 | `echo \| openssl s_client -connect rn.guohuasun.com:443` |
 | 查看访问日志 | `tail -f logs/caddy-access.log` |
