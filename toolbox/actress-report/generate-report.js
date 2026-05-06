@@ -569,8 +569,8 @@ body{
   border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.6;
 }
 
-.card-media{position:relative;aspect-ratio:3/4;overflow:hidden}
-.card-media img{width:100%;height:100%;object-fit:cover;transition:transform .4s ease}
+.card-media{position:relative;overflow:hidden;background:#111}
+.card-media img{width:100%;height:auto;display:block;transition:transform .4s ease}
 .av-card:hover .card-media img{transform:scale(1.1)}
 
 .card-overlay{
