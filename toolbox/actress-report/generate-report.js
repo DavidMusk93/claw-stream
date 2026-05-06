@@ -282,11 +282,11 @@ actressData.forEach(function(data) {
            + `    <span class="nav-label">${esc(a.name)}</span>`
            + `  </a>`;
 
-  // work cards
-  let cardsHtml = '';
+  // work showcase
   const actressWorksDir = path.join(worksDir, id);
   fs.mkdirSync(actressWorksDir, { recursive: true });
 
+  const workData = [];
   works.forEach(function(w) {
     let coverRel = heroRel;
     let hasWorkCover = false;
@@ -320,36 +320,67 @@ actressData.forEach(function(data) {
     const hashAttr = w.magnet ? extractHashAttr(w.magnet) : '';
     const globalId = globalIdMap[w.code.toUpperCase()] || 0;
     const isPrefetchTarget = (globalId % 3 === 1);
-    const prefetchClass = isPrefetchTarget ? 'prefetch-target' : '';
-    const cacheBadge = hashAttr ? `<span class="cache-badge pending ${prefetchClass}" data-hash="${hashAttr}" data-id="${globalId}" title="Not cached"></span>` : '';
 
-    const res = w.resolution || '';
+    workData.push({
+      code: w.code,
+      title: w.title || '',
+      date: w.date || '',
+      resolution: w.resolution || '',
+      magnet: w.magnet || '',
+      coverRel: coverRel,
+      hashAttr: hashAttr,
+      globalId: globalId,
+      isPrefetchTarget: isPrefetchTarget,
+    });
+  });
+
+  let showcaseHtml = '';
+  let tabsHtml = '';
+  let rowPrefetchClass = '';
+
+  if (workData.length > 0) {
+    const first = workData[0];
+    if (first.isPrefetchTarget) rowPrefetchClass = 'prefetch-target';
+
+    const res = first.resolution;
+    const resBadge = res ? `<span class="res-badge">${esc(res)}</span>` : '';
+    const hashAttr = first.hashAttr;
+    const globalId = first.globalId;
+    const cacheBadge = hashAttr ? `<span class="cache-badge pending ${first.isPrefetchTarget ? 'prefetch-target' : ''}" data-hash="${hashAttr}" data-id="${globalId}" title="Not cached"></span>` : '';
+
     let btnPlay = '', btnMagnet = '', btnCopy = '';
-    if (w.magnet) {
-      btnPlay = `<button class="btn-action btn-play" data-magnet="${esc(w.magnet)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span></button>`;
-      btnMagnet = `<a class="btn-action btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg><span>Magnet</span></a>`;
-      btnCopy = `<button class="btn-action btn-copy" data-magnet="${esc(w.magnet)}" title="Copy magnet link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
+    if (first.magnet) {
+      btnPlay = `<button class="btn-action btn-play" data-magnet="${esc(first.magnet)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span></button>`;
+      btnMagnet = `<a class="btn-action btn-magnet" href="${esc(first.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg><span>Magnet</span></a>`;
+      btnCopy = `<button class="btn-action btn-copy" data-magnet="${esc(first.magnet)}" title="Copy magnet link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
     }
 
-    const dateStr = w.date ? `<span class="card-date">${esc(w.date)}</span>` : '';
-    const descStr = w.title ? `<p class="card-desc">${esc(w.title)}</p>` : '';
-    const resBadge = res ? `<span class="res-badge">${esc(res)}</span>` : '';
+    const dateStr = first.date ? `<span class="featured-date">${esc(first.date)}</span>` : '';
+    const descStr = first.title ? `<p class="featured-desc">${esc(first.title)}</p>` : '';
 
-    cardsHtml += `<article class="av-card ${prefetchClass}" data-id="${globalId}" data-hash="${hashAttr}" data-magnet="${esc(w.magnet || '')}">`
-               + `  <div class="card-media">`
-               + `    <img src="${esc(coverRel)}" alt="${esc(w.title || w.code)}" loading="lazy" decoding="async">`
-               + `    <div class="card-overlay">`
-               + `      <div class="card-gradient"></div>`
-               + `      <div class="card-top">${cacheBadge}<span class="card-id">#${globalId}</span>${resBadge}</div>`
-               + `      <div class="card-bottom">`
-               + `        <div class="card-actions">${btnPlay}${btnMagnet}${btnCopy}</div>`
-               + `        ${dateStr}`
-               + `      </div>`
-               + `    </div>`
-               + `  </div>`
-               + `  <div class="card-info">${descStr}</div>`
-               + `</article>`;
-  });
+    showcaseHtml = `<div class="featured-showcase">`
+                 + `  <div class="featured-media">`
+                 + `    <img src="${esc(first.coverRel)}" alt="${esc(first.title || first.code)}" loading="lazy" decoding="async">`
+                 + `  </div>`
+                 + `  <div class="featured-info">`
+                 + `    <h3 class="featured-title">${esc(first.title || first.code)}</h3>`
+                 + `    <div class="featured-meta">`
+                 + `      ${dateStr}`
+                 + `      <div class="featured-badges">${cacheBadge}<span class="id-badge">#${globalId}</span>${resBadge}</div>`
+                 + `    </div>`
+                 + `    <div class="featured-actions">${btnPlay}${btnMagnet}${btnCopy}</div>`
+                 + `    ${descStr}`
+                 + `  </div>`
+                 + `</div>`;
+
+    tabsHtml = `<div class="work-tabs">`
+             + workData.map(function(w, idx){
+                 return `<button class="work-tab ${idx === 0 ? 'active' : ''}" data-index="${idx}">`
+                      + `  <img src="${esc(w.coverRel)}" alt="${esc(w.title || w.code)}" loading="lazy" decoding="async">`
+                      + `</button>`;
+               }).join('')
+             + `</div>`;
+  }
 
   // Hero banner (first actress with cover)
   if (!heroBannerHtml && hasHero) {
@@ -385,14 +416,15 @@ actressData.forEach(function(data) {
     socialHtml += `  </div></div>`;
   }
 
-  rowsHtml += `<section class="actor-row" id="${id}" data-name="${esc(a.name)} ${esc(a.jp)} ${a.code}">`
+  rowsHtml += `<section class="actor-row ${rowPrefetchClass}" id="${id}" data-name="${esc(a.name)} ${esc(a.jp)} ${a.code}" data-works="${esc(JSON.stringify(workData))}">`
             + `  <h2 class="actor-title">`
             + `    <span class="actor-name">${esc(a.name)}</span>`
             + `    <span class="actor-jp">${esc(a.jp)}</span>`
             + `    <span class="actor-code">${a.code}</span>`
             + `  </h2>`
             + socialHtml
-            + `  <div class="scroll-track">${cardsHtml}</div>`
+            + showcaseHtml
+            + tabsHtml
             + `</section>`;
 });
 
@@ -527,29 +559,20 @@ body{
 .social-post:hover{background:var(--surface-hover);border-color:var(--border-light);color:var(--text-primary);transform:translateY(-1px);box-shadow:var(--shadow)}
 .social-post{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
-/* Scroll Track */
-.scroll-track{display:flex;gap:24px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:24px;padding-top:8px}
-.scroll-track::-webkit-scrollbar{display:none}
+/* Featured Showcase */
+.featured-showcase{display:grid;grid-template-columns:minmax(0, 1fr) minmax(0, 380px);gap:28px;align-items:start;max-width:1000px}
+.featured-media{height:auto;border-radius:var(--radius-lg);overflow:hidden;background:var(--surface);border:1px solid var(--border)}
+.featured-media img{width:100%;height:auto;display:block;border-radius:var(--radius-lg)}
+.actor-row.prefetch-target .featured-showcase{position:relative}
+.actor-row.prefetch-target .featured-showcase::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.5}
 
-/* AV Card */
-.av-card{flex-shrink:0;width:340px;position:relative;border-radius:var(--radius-lg);overflow:hidden;background:var(--surface);transition:transform 0.45s cubic-bezier(0.4,0,0.2,1), box-shadow 0.45s cubic-bezier(0.4,0,0.2,1);scroll-snap-align:start;cursor:pointer;box-shadow:var(--shadow);border:1px solid var(--border)}
-.av-card:hover{transform:translateY(-8px) scale(1.02);box-shadow:var(--shadow-xl)}
-.av-card.prefetch-target::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.5}
-
-.card-media{position:relative;overflow:hidden;background:#111;aspect-ratio:3/4}
-.card-media img{width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.6s cubic-bezier(0.4,0,0.2,1)}
-.av-card:hover .card-media img{transform:scale(1.08)}
-
-.card-overlay{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;opacity:0;transition:opacity 0.4s ease}
-.av-card:hover .card-overlay{opacity:1}
-.card-gradient{position:absolute;inset:0;background:linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 40%, transparent 70%)}
-
-.card-top{position:relative;z-index:2;display:flex;align-items:center;gap:10px;padding:16px;justify-content:flex-end}
-.card-id{font-size:0.8rem;font-weight:700;color:#fff;background:rgba(0,0,0,0.45);padding:4px 10px;border-radius:6px;backdrop-filter:blur(4px)}
-.res-badge{font-size:0.7rem;font-weight:700;color:#fff;background:rgba(59,130,246,0.8);padding:3px 8px;border-radius:4px;letter-spacing:0.3px}
-
-.card-bottom{position:relative;z-index:2;padding:18px}
-.card-actions{display:flex;gap:10px;margin-bottom:12px}
+.featured-info{display:flex;flex-direction:column;gap:14px;padding:8px 4px}
+.featured-title{font-size:1.15rem;font-weight:700;color:var(--text-primary);line-height:1.35;letter-spacing:-0.3px}
+.featured-meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.featured-date{font-size:0.85rem;color:var(--text-secondary);font-weight:500}
+.featured-badges{display:flex;align-items:center;gap:8px}
+.id-badge{font-size:0.75rem;font-weight:700;color:#fff;background:rgba(0,0,0,0.45);padding:4px 10px;border-radius:6px;backdrop-filter:blur(4px)}
+.featured-actions{display:flex;gap:10px;flex-wrap:wrap}
 .btn-action{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:100px;font-size:0.82rem;font-weight:600;border:none;cursor:pointer;text-decoration:none;transition:transform .2s, box-shadow .2s, opacity .2s}
 .btn-action:hover{transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.2)}
 .btn-play{background:var(--accent);color:#fff}
@@ -557,10 +580,20 @@ body{
 .btn-magnet:hover{background:rgba(255,255,255,0.22)}
 .btn-copy{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);padding:8px 12px}
 .btn-copy:hover{background:rgba(255,255,255,0.2);color:#fff}
-.card-date{font-size:0.8rem;color:rgba(255,255,255,0.7)}
+.featured-actions .btn-magnet{background:var(--surface-hover);color:var(--text-primary);border:1px solid var(--border);backdrop-filter:none}
+.featured-actions .btn-magnet:hover{background:var(--border-light)}
+.featured-actions .btn-copy{background:var(--surface-hover);color:var(--text-secondary);border:1px solid var(--border);backdrop-filter:none}
+.featured-actions .btn-copy:hover{background:var(--border-light);color:var(--text-primary)}
+.res-badge{font-size:0.7rem;font-weight:700;color:#fff;background:rgba(59,130,246,0.8);padding:3px 8px;border-radius:4px;letter-spacing:0.3px}
+.featured-desc{font-size:0.9rem;color:var(--text-secondary);line-height:1.6;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;margin-top:4px}
 
-.card-info{padding:18px;min-height:60px}
-.card-desc{font-size:0.88rem;color:var(--text-secondary);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:500}
+/* Work Tabs */
+.work-tabs{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+.work-tab{background:none;border:2px solid transparent;border-radius:var(--radius);padding:3px;cursor:pointer;transition:transform .2s, border-color .2s, box-shadow .2s}
+.work-tab img{width:80px;height:auto;display:block;border-radius:6px}
+.work-tab:hover{transform:translateY(-2px)}
+.work-tab.active{border-color:var(--accent);box-shadow:0 4px 12px rgba(196,30,58,0.15)}
+[data-theme="dark"] .work-tab.active{box-shadow:0 4px 12px rgba(255,71,87,0.15)}
 
 /* Cache Badge */
 .cache-badge{width:10px;height:10px;border-radius:50%;display:inline-block;transition:box-shadow .3s}
@@ -638,7 +671,9 @@ body{
 @media(max-width:768px){
   .hero-title{font-size:2.2rem}
   .hero-banner{height:55vh;min-height:380px}
-  .av-card{width:260px}
+  .featured-showcase{grid-template-columns:1fr}
+  .featured-info{padding:4px 0}
+  .work-tab img{width:64px}
   .top-nav{padding:0 14px;height:56px}
   .actor-row{padding:48px 16px}
   .hero-content{padding:0 16px 48px}
@@ -1039,21 +1074,75 @@ ${heroBannerHtml}
     return m ? m[1].toLowerCase() : '';
   }
 
-  // Copy Magnet
-  document.querySelectorAll('.btn-copy').forEach(function(btn){
-    btn.addEventListener('click', function(e){
-      e.preventDefault(); e.stopPropagation();
-      var magnet = this.getAttribute('data-magnet');
-      if(!magnet) return;
-      if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(magnet).then(function(){ showToast('Magnet copied'); }).catch(function(){ showToast('Copy failed'); });
-      } else {
-        var ta = document.createElement('textarea'); ta.value = magnet; ta.style.cssText = 'position:fixed;opacity:0';
-        document.body.appendChild(ta); ta.select();
-        try{ document.execCommand('copy'); showToast('Magnet copied'); } catch(err){ showToast('Copy failed'); }
-        document.body.removeChild(ta);
-      }
-    });
+  // Copy Magnet (delegated for dynamic content)
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest('.btn-copy');
+    if(!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    var magnet = btn.getAttribute('data-magnet');
+    if(!magnet) return;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(magnet).then(function(){ showToast('Magnet copied'); }).catch(function(){ showToast('Copy failed'); });
+    } else {
+      var ta = document.createElement('textarea'); ta.value = magnet; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); showToast('Magnet copied'); } catch(err){ showToast('Copy failed'); }
+      document.body.removeChild(ta);
+    }
+  });
+
+  // ===== Work Tab Switching =====
+  document.addEventListener('click', function(e){
+    var tab = e.target.closest('.work-tab');
+    if(!tab) return;
+    var row = tab.closest('.actor-row');
+    if(!row) return;
+    var worksStr = row.getAttribute('data-works');
+    if(!worksStr) return;
+    var works;
+    try { works = JSON.parse(worksStr); } catch(err){ return; }
+    var idx = parseInt(tab.getAttribute('data-index'), 10);
+    if(isNaN(idx) || idx < 0 || idx >= works.length) return;
+    var w = works[idx];
+    if(!w) return;
+
+    var mediaImg = row.querySelector('.featured-media img');
+    if(mediaImg){ mediaImg.src = w.coverRel; mediaImg.alt = w.title || w.code; }
+
+    var titleEl = row.querySelector('.featured-title');
+    if(titleEl) titleEl.textContent = w.title || w.code;
+
+    var dateEl = row.querySelector('.featured-date');
+    if(dateEl){ dateEl.textContent = w.date || ''; dateEl.style.display = w.date ? '' : 'none'; }
+
+    var idBadge = row.querySelector('.id-badge');
+    if(idBadge) idBadge.textContent = '#' + w.globalId;
+
+    var resBadge = row.querySelector('.res-badge');
+    if(resBadge){ resBadge.textContent = w.resolution || ''; resBadge.style.display = w.resolution ? '' : 'none'; }
+
+    var cacheBadge = row.querySelector('.cache-badge');
+    if(cacheBadge){
+      cacheBadge.setAttribute('data-hash', w.hashAttr);
+      cacheBadge.setAttribute('data-id', w.globalId);
+      cacheBadge.className = 'cache-badge pending ' + (w.isPrefetchTarget ? 'prefetch-target' : '');
+      cacheBadge.title = 'Not cached';
+    }
+
+    var btnPlay = row.querySelector('.btn-play');
+    if(btnPlay){ btnPlay.setAttribute('data-magnet', w.magnet || ''); btnPlay.style.display = w.magnet ? '' : 'none'; }
+
+    var btnMagnet = row.querySelector('.btn-magnet');
+    if(btnMagnet){ btnMagnet.href = w.magnet || ''; btnMagnet.style.display = w.magnet ? '' : 'none'; }
+
+    var btnCopy = row.querySelector('.btn-copy');
+    if(btnCopy){ btnCopy.setAttribute('data-magnet', w.magnet || ''); btnCopy.style.display = w.magnet ? '' : 'none'; }
+
+    var descEl = row.querySelector('.featured-desc');
+    if(descEl){ descEl.textContent = w.title || ''; descEl.style.display = w.title ? '' : 'none'; }
+
+    row.querySelectorAll('.work-tab').forEach(function(t){ t.classList.remove('active'); });
+    tab.classList.add('active');
   });
 
   // ===== Unified Play Logic =====
@@ -1102,14 +1191,14 @@ ${heroBannerHtml}
       }).catch(function(err){ modalLoading.innerHTML = '<span>Cannot connect to cache server</span>'; });
   }
 
-  // Play Button (cards & hero)
-  document.querySelectorAll('.btn-play').forEach(function(btn){
-    btn.addEventListener('click', function(e){
-      e.preventDefault(); e.stopPropagation();
-      var magnet = this.getAttribute('data-magnet');
-      if(!magnet) return;
-      playByMagnet(magnet);
-    });
+  // Play Button (delegated for dynamic content)
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest('.btn-play');
+    if(!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    var magnet = btn.getAttribute('data-magnet');
+    if(!magnet) return;
+    playByMagnet(magnet);
   });
 
   // ===== Magnet Player Modal =====
