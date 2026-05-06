@@ -73,6 +73,12 @@ body{
   transition:background .2s,transform .3s
 }
 .nav-theme-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary);transform:rotate(30deg)}
+.nav-magnet-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.08);
+  color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .2s,transform .2s
+}
+.nav-magnet-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary);transform:scale(1.1)}
 
 /* Search Bar */
 .search-bar{
@@ -280,6 +286,47 @@ body{
   font-size:0.9rem;z-index:5;
 }
 
+/* Magnet Modal */
+.magnet-modal-overlay{
+  position:fixed;inset:0;z-index:310;background:rgba(0,0,0,0.6);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .3s ease;
+}
+.magnet-modal-overlay.active{opacity:1;pointer-events:auto}
+.magnet-modal-box{
+  position:relative;width:90vw;max-width:560px;
+  background:var(--surface);border-radius:var(--radius-lg);
+  border:1px solid var(--border);box-shadow:var(--shadow);
+  padding:32px;
+}
+.magnet-modal-close{
+  position:absolute;top:12px;right:12px;width:36px;height:36px;
+  border-radius:50%;border:none;background:transparent;
+  color:var(--text-secondary);font-size:1.5rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:background .2s,color .2s;
+}
+.magnet-modal-close:hover{background:var(--surface-hover);color:var(--text-primary)}
+.magnet-modal-title{font-size:1.25rem;font-weight:700;margin-bottom:8px;color:var(--text-primary)}
+.magnet-modal-desc{font-size:0.85rem;color:var(--text-secondary);margin-bottom:20px}
+.magnet-input{
+  width:100%;background:var(--surface-hover);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 16px;color:var(--text-primary);
+  font-size:0.85rem;font-family:inherit;resize:vertical;outline:none;
+  transition:border-color .2s;
+}
+.magnet-input:focus{border-color:var(--accent)}
+.magnet-input::placeholder{color:var(--text-tertiary)}
+.magnet-modal-actions{display:flex;gap:12px;margin-top:16px}
+.magnet-play-btn{
+  display:inline-flex;align-items:center;gap:8px;padding:10px 24px;
+  border-radius:var(--radius);font-size:0.9rem;font-weight:600;
+  border:none;cursor:pointer;background:var(--accent);color:#fff;
+  transition:opacity .2s,transform .2s;
+}
+.magnet-play-btn:hover{opacity:0.9;transform:scale(1.03)}
+.magnet-modal-hint{margin-top:16px;font-size:0.75rem;color:var(--text-tertiary);line-height:1.5}
+
 /* Back to Top */
 .back-to-top{
   position:fixed;bottom:80px;right:24px;z-index:90;
@@ -321,6 +368,9 @@ body{
   <div class="nav-scroll" id="siteNav">  <a class="nav-item" href="#ipzz-802" data-target="ipzz-802" aria-label="楓カレン">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/ipzz-802.jpg" alt="楓カレン" loading="lazy" decoding="async"></div>    <span class="nav-label">楓カレン</span>  </a>  <a class="nav-item" href="#dldss-314" data-target="dldss-314" aria-label="美ノ瀬すずめ">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/dldss-314.jpg" alt="美ノ瀬すずめ" loading="lazy" decoding="async"></div>    <span class="nav-label">美ノ瀬すずめ</span>  </a>  <a class="nav-item" href="#vema-258" data-target="vema-258" aria-label="天宮響">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/vema-258.jpg" alt="天宮響" loading="lazy" decoding="async"></div>    <span class="nav-label">天宮響</span>  </a>  <a class="nav-item" href="#abf-340" data-target="abf-340" aria-label="瀧本雫葉">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/abf-340.jpg" alt="瀧本雫葉" loading="lazy" decoding="async"></div>    <span class="nav-label">瀧本雫葉</span>  </a>  <a class="nav-item" href="#abf-338" data-target="abf-338" aria-label="涼森れむ">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/abf-338.jpg" alt="涼森れむ" loading="lazy" decoding="async"></div>    <span class="nav-label">涼森れむ</span>  </a>  <a class="nav-item" href="#snos-177" data-target="snos-177" aria-label="miru">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/snos-177.jpg" alt="miru" loading="lazy" decoding="async"></div>    <span class="nav-label">miru</span>  </a>  <a class="nav-item" href="#snos-148" data-target="snos-148" aria-label="金松季歩">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/snos-148.jpg" alt="金松季歩" loading="lazy" decoding="async"></div>    <span class="nav-label">金松季歩</span>  </a>  <a class="nav-item" href="#start-542" data-target="start-542" aria-label="神木玲">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/start-542.jpg" alt="神木玲" loading="lazy" decoding="async"></div>    <span class="nav-label">神木玲</span>  </a>  <a class="nav-item" href="#snos-131" data-target="snos-131" aria-label="瀬戸環奈">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/snos-131.jpg" alt="瀬戸環奈" loading="lazy" decoding="async"></div>    <span class="nav-label">瀬戸環奈</span>  </a>  <a class="nav-item" href="#mfyd-115" data-target="mfyd-115" aria-label="夢実かなえ">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/mfyd-115.jpg" alt="夢実かなえ" loading="lazy" decoding="async"></div>    <span class="nav-label">夢実かなえ</span>  </a>  <a class="nav-item" href="#ebwh-322" data-target="ebwh-322" aria-label="柏木ふみか">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/ebwh-322.jpg" alt="柏木ふみか" loading="lazy" decoding="async"></div>    <span class="nav-label">柏木ふみか</span>  </a>  <a class="nav-item" href="#mikr-089" data-target="mikr-089" aria-label="森日菜子">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/mikr-089.jpg" alt="森日菜子" loading="lazy" decoding="async"></div>    <span class="nav-label">森日菜子</span>  </a>  <a class="nav-item" href="#same-234" data-target="same-234" aria-label="白峰ミウ">    <div class="nav-avatar"><img src="toolbox/actress-report/images/heroes/same-234.jpg" alt="白峰ミウ" loading="lazy" decoding="async"></div>    <span class="nav-label">白峰ミウ</span>  </a></div>
   <button class="nav-search-btn" id="searchToggle" aria-label="搜索">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+  </button>
+  <button class="nav-magnet-btn" id="magnetToggle" aria-label="Magnet 播放器">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
   </button>
   <button class="nav-theme-btn" id="themeToggle" aria-label="切换主题">
     <svg class="theme-icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
@@ -367,6 +417,27 @@ body{
     <video id="modalVideo" controls playsinline></video>
     <div class="video-modal-loading" id="modalLoading" style="display:none">
       <span>正在加载视频...</span>
+    </div>
+  </div>
+</div>
+
+<!-- Magnet Player Modal -->
+<div class="magnet-modal-overlay" id="magnetModal">
+  <div class="magnet-modal-box">
+    <button class="magnet-modal-close" id="magnetModalClose" aria-label="关闭">&times;</button>
+    <div class="magnet-modal-content">
+      <h2 class="magnet-modal-title">🧲 Magnet 播放器</h2>
+      <p class="magnet-modal-desc">粘贴任意磁力链接，利用本地缓存实时播放预览。</p>
+      <textarea class="magnet-input" id="magnetInput" placeholder="magnet:?xt=urn:btih:..." rows="3"></textarea>
+      <div class="magnet-modal-actions">
+        <button class="magnet-play-btn" id="magnetPlayBtn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <span>立即播放</span>
+        </button>
+      </div>
+      <div class="magnet-modal-hint">
+        <span>💡 提示：如果该视频已在缓存中，会立即播放；否则需要等待头部下载（约 30-60 秒）</span>
+      </div>
     </div>
   </div>
 </div>
@@ -672,47 +743,80 @@ body{
     });
   });
 
-  // Play Button
+  // ===== Unified Play Logic =====
+  function playByMagnet(magnet){
+    var hash = extractHash(magnet);
+    if(!hash){ showToast('无效的磁力链接'); return; }
+
+    modalLoading.style.display = 'flex';
+    modalOverlay.classList.add('active');
+    if(progressTimer){ clearInterval(progressTimer); progressTimer = null; }
+
+    fetch('/api/check/' + hash)
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if(data.head_ready){ startPlayback(hash); return; }
+        modalLoading.innerHTML = '<span>正在连接种子...</span>';
+        fetch('/torrent/add', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ magnet: magnet })
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+          if(data.error){ modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>'; return; }
+          var startTime = Date.now();
+          progressTimer = setInterval(function(){
+            fetch('/torrent/status/' + hash)
+              .then(function(r){ return r.json(); })
+              .then(function(s){
+                var elapsed = Math.round((Date.now() - startTime) / 1000);
+                var speed = (s.download_rate / 1024 / 1024).toFixed(1);
+                var pct = s.progress.toFixed(1);
+                if(s.head_ready){ clearInterval(progressTimer); progressTimer = null; startPlayback(hash); return; }
+                if(elapsed > 60){ clearInterval(progressTimer); progressTimer = null; modalLoading.innerHTML = '<span>下载超时，请稍后再试</span>'; return; }
+                modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
+              }).catch(function(err){});
+          }, 1500);
+        }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接下载服务器</span>'; });
+      }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接缓存服务器</span>'; });
+  }
+
+  // Play Button (cards & hero)
   document.querySelectorAll('.btn-play').forEach(function(btn){
     btn.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
       var magnet = this.getAttribute('data-magnet');
       if(!magnet) return;
-      var hash = extractHash(magnet);
-      if(!hash) return;
-
-      modalLoading.style.display = 'flex';
-      modalOverlay.classList.add('active');
-      if(progressTimer){ clearInterval(progressTimer); progressTimer = null; }
-
-      fetch('/api/check/' + hash)
-        .then(function(r){ return r.json(); })
-        .then(function(data){
-          if(data.head_ready){ startPlayback(hash); return; }
-          modalLoading.innerHTML = '<span>正在连接种子...</span>';
-          fetch('/torrent/add', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ magnet: magnet })
-          })
-          .then(function(r){ return r.json(); })
-          .then(function(data){
-            if(data.error){ modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>'; return; }
-            var startTime = Date.now();
-            progressTimer = setInterval(function(){
-              fetch('/torrent/status/' + hash)
-                .then(function(r){ return r.json(); })
-                .then(function(s){
-                  var elapsed = Math.round((Date.now() - startTime) / 1000);
-                  var speed = (s.download_rate / 1024 / 1024).toFixed(1);
-                  var pct = s.progress.toFixed(1);
-                  if(s.head_ready){ clearInterval(progressTimer); progressTimer = null; startPlayback(hash); return; }
-                  if(elapsed > 60){ clearInterval(progressTimer); progressTimer = null; modalLoading.innerHTML = '<span>下载超时，请稍后再试</span>'; return; }
-                  modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
-                }).catch(function(err){});
-            }, 1500);
-          }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接下载服务器</span>'; });
-        }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接缓存服务器</span>'; });
+      playByMagnet(magnet);
     });
+  });
+
+  // ===== Magnet Player Modal =====
+  var magnetModal = document.getElementById('magnetModal');
+  var magnetInput = document.getElementById('magnetInput');
+  var magnetPlayBtn = document.getElementById('magnetPlayBtn');
+
+  document.getElementById('magnetToggle').addEventListener('click', function(){
+    magnetModal.classList.add('active');
+    magnetInput.focus();
+  });
+  document.getElementById('magnetModalClose').addEventListener('click', function(){
+    magnetModal.classList.remove('active');
+  });
+  magnetModal.addEventListener('click', function(e){ if(e.target === this) magnetModal.classList.remove('active'); });
+
+  magnetPlayBtn.addEventListener('click', function(){
+    var magnet = magnetInput.value.trim();
+    if(!magnet){ showToast('请输入磁力链接'); return; }
+    magnetModal.classList.remove('active');
+    playByMagnet(magnet);
+  });
+
+  magnetInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      magnetPlayBtn.click();
+    }
   });
 
   function startPlayback(hash){
