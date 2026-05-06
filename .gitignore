@@ -35,3 +35,4 @@ test-*.js
 # OS
 .DS_Store
 __pycache__/
+toolbox/actress-report/logs/

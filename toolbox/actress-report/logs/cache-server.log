@@ -1,9 +1,0 @@
-02:45:00.331 [cache-server] INFO ============================================================
-02:45:00.331 [cache-server] INFO Cache Server started at http://localhost:8765/
-02:45:00.331 [cache-server] INFO Cache directory: /root/.openclaw/workspace/toolbox/actress-report/cache/torrent
-02:45:00.332 [cache-server] INFO Log directory: /root/.openclaw/workspace/toolbox/actress-report/logs
-02:45:00.332 [cache-server] INFO Max cache size: 20GB
-02:45:00.332 [cache-server] INFO Engine: libtorrent 2.0.8.0
-02:45:00.332 [cache-server] INFO ============================================================
-02:45:00.332 [cache-server] INFO Press Ctrl+C to stop
-02:45:00.332 [cache-server] INFO ============================================================
