@@ -11,7 +11,7 @@ cache-server.py — 一体化 BitTorrent 缓存服务器（本地文件直接播
   cd toolbox/actress-report && python3 cache-server.py
 """
 
-import os, sys, json, re, time, threading, math, argparse, signal, shutil, subprocess, ipaddress, glob
+import os, sys, json, re, time, threading, math, argparse, signal, shutil, subprocess, ipaddress, glob, datetime
 from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import socketserver
@@ -394,6 +394,66 @@ class CacheHandler(SimpleHTTPRequestHandler):
         self.engine = engine
         super().__init__(*args, **kwargs)
 
+    def _today_password(self):
+        """动态密码: rnYYmmdd{day%2}  例: rn2605060"""
+        d = datetime.datetime.now()
+        return f"rn{d.strftime('%y%m%d')}{d.day % 2}"
+
+    def _has_auth_cookie(self):
+        cookie = self.headers.get("Cookie", "")
+        return "claw_auth=ok" in cookie
+
+    def _send_auth_page(self, msg=""):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        html = b'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Authentication Required</title>
+<style>
+body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0a;color:#fff;font-family:system-ui,-apple-system,sans-serif}
+.box{text-align:center;padding:24px}
+input{padding:12px 20px;font-size:1rem;border-radius:8px;border:none;outline:none;width:220px;text-align:center;background:rgba(255,255,255,0.1);color:#fff}
+input::placeholder{color:rgba(255,255,255,0.4)}
+button{margin-top:16px;padding:10px 28px;border-radius:8px;border:none;background:#f97316;color:#fff;font-size:1rem;cursor:pointer;transition:background .2s}
+button:hover{background:#ea580c}
+#error{color:#ef4444;margin-top:10px;font-size:0.85rem;min-height:1.2em}
+.hint{color:rgba(255,255,255,0.35);margin-top:16px;font-size:0.75rem}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>&#128274; \u8bf7\u8f93\u5165\u5bc6\u7801</h2>
+<input type="password" id="pwd" placeholder="\u5bc6\u7801" onkeydown="if(event.key==='Enter')check()" autofocus>
+<div id="error"></div>
+<button onclick="check()">\u8fdb\u5165</button>
+<div class="hint">\u683c\u5f0f: rn + \u5e74\u6708\u65e5 + \u5947\u5076 (1/0)</div>
+</div>
+<script>
+function getPwd(){
+  var d=new Date();
+  var yy=(d.getFullYear()%100).toString().padStart(2,'0');
+  var mm=(d.getMonth()+1).toString().padStart(2,'0');
+  var dd=d.getDate().toString().padStart(2,'0');
+  return 'rn'+yy+mm+dd+(d.getDate()%2);
+}
+function check(){
+  var input=document.getElementById('pwd').value.trim();
+  if(input===getPwd()){
+    document.cookie='claw_auth=ok; path=/; max-age=86400';
+    location.href='/stream';
+  }else{
+    document.getElementById('error').textContent='\u5bc6\u7801\u9519\u8bef';
+  }
+}
+</script>
+</body>
+</html>'''
+        self.wfile.write(html)
+
     def log_message(self, format, *args):
         msg = format % args
         if ".ts" in msg or ".m3u8" in msg or ".jpg" in msg or "stream" in msg:
@@ -563,17 +623,73 @@ class CacheHandler(SimpleHTTPRequestHandler):
             }).encode())
             return
 
-        # 根路径返回 HTML
-        if path == "/":
-            report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
-            if os.path.exists(report_path):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                with open(report_path, "rb") as f:
-                    self.wfile.write(f.read())
+        # 认证入口: /stream 和 /
+        if path == "/stream" or path == "/":
+            if self._has_auth_cookie():
+                report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
+                if os.path.exists(report_path):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    with open(report_path, "rb") as f:
+                        self.wfile.write(f.read())
+                else:
+                    self.send_error(404, "actresses-report.html not found")
             else:
-                self.send_error(404, "actresses-report.html not found")
+                self._send_auth_page()
+            return
+
+        # 日志列表/查看
+        if path == "/api/logs" or path.startswith("/api/logs/"):
+            subpath = path[len("/api/logs"):].lstrip("/")
+            log_dir = _ensure_log_dir(os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs")))
+            target = os.path.normpath(os.path.join(log_dir, subpath))
+            if not target.startswith(os.path.normpath(log_dir)):
+                self.send_error(403, "Forbidden")
+                return
+            if os.path.isdir(target):
+                entries = []
+                for entry in sorted(os.listdir(target)):
+                    fp = os.path.join(target, entry)
+                    st = os.stat(fp)
+                    entries.append({
+                        "name": entry,
+                        "is_dir": os.path.isdir(fp),
+                        "size": st.st_size,
+                        "mtime": st.st_mtime,
+                    })
+                self._send_json({"path": subpath or "/", "entries": entries})
+                return
+            elif os.path.isfile(target):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                with open(target, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+            else:
+                self._send_json({"path": subpath or "/", "entries": []})
+                return
+
+        # 指标端点
+        if path == "/api/metrics":
+            items = self.engine.get_all_status()
+            total_disk = self.engine._get_cache_size()
+            completed = sum(1 for i in items if i.get("progress", 0) >= 99.9)
+            self._send_json({
+                "torrents": {
+                    "total": len(items),
+                    "completed": completed,
+                    "downloading": len(items) - completed,
+                },
+                "cache": {
+                    "used_bytes": total_disk,
+                    "used_human": format_size(total_disk),
+                    "max_bytes": self.engine.max_size_bytes,
+                    "max_human": format_size(self.engine.max_size_bytes),
+                },
+                "uptime": time.time() - getattr(self, "_server_start", time.time()),
+            })
             return
 
         super().do_GET()
@@ -687,131 +803,6 @@ class CacheHandler(SimpleHTTPRequestHandler):
             return
 
         self.send_error(405, "Method not allowed")
-
-    def do_GET(self):
-        path = unquote(self.path)
-
-        # 日志列表/查看
-        if path == "/api/logs" or path.startswith("/api/logs/"):
-            subpath = path[len("/api/logs"):].lstrip("/")
-            log_dir = _ensure_log_dir(os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs")))
-            target = os.path.normpath(os.path.join(log_dir, subpath))
-            # 安全检查：禁止跳出 log_dir
-            if not target.startswith(os.path.normpath(log_dir)):
-                self.send_error(403, "Forbidden")
-                return
-            if os.path.isdir(target):
-                entries = []
-                for entry in sorted(os.listdir(target)):
-                    fp = os.path.join(target, entry)
-                    st = os.stat(fp)
-                    entries.append({
-                        "name": entry,
-                        "is_dir": os.path.isdir(fp),
-                        "size": st.st_size,
-                        "mtime": st.st_mtime,
-                    })
-                self._send_json({"path": subpath or "/", "entries": entries})
-                return
-            elif os.path.isfile(target):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.end_headers()
-                with open(target, "rb") as f:
-                    self.wfile.write(f.read())
-                return
-            else:
-                self._send_json({"path": subpath or "/", "entries": []})
-                return
-
-        # 指标端点
-        if path == "/api/metrics":
-            items = self.engine.get_all_status()
-            total_disk = self.engine._get_cache_size()
-            # 计算缓存命中率近似值（已完整下载 / 总数）
-            completed = sum(1 for i in items if i.get("progress", 0) >= 99.9)
-            self._send_json({
-                "torrents": {
-                    "total": len(items),
-                    "completed": completed,
-                    "downloading": len(items) - completed,
-                },
-                "cache": {
-                    "used_bytes": total_disk,
-                    "used_human": format_size(total_disk),
-                    "max_bytes": self.engine.max_size_bytes,
-                    "max_human": format_size(self.engine.max_size_bytes),
-                },
-                "uptime": time.time() - getattr(self, "_server_start", time.time()),
-            })
-            return
-
-        # 视频流（直接从本地文件读取）
-        stream_match = re.match(r"^/stream/([a-f0-9]{40})$", path, re.I)
-        if stream_match:
-            self._serve_video(stream_match.group(1).lower())
-            return
-
-        # torrent 状态查询
-        status_match = re.match(r"^/torrent/status/([a-f0-9]{40})$", path, re.I)
-        if status_match:
-            hash_str = status_match.group(1).lower()
-            status = self.engine.get_status(hash_str)
-            if not status:
-                self.send_error(404, "Not found")
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(status).encode())
-            return
-
-        # 缓存检查（头部就绪才能播放）
-        check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
-        if check_match:
-            hash_str = check_match.group(1).lower()
-            local_path, local_size, head_ready = find_video_state(hash_str)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "hash": hash_str,
-                "cached": local_size > 1024 * 1024,
-                "head_ready": head_ready,
-                "path": local_path,
-                "size": local_size,
-            }).encode())
-            return
-
-        # 所有缓存状态
-        if path == "/api/cache":
-            items = self.engine.get_all_status()
-            total_disk = self.engine._get_cache_size()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "totalSize": total_disk,
-                "maxSize": self.engine.max_size_bytes,
-                "itemCount": len(items),
-                "items": items,
-            }).encode())
-            return
-
-        # 根路径返回 HTML
-        if path == "/":
-            report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
-            if os.path.exists(report_path):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                with open(report_path, "rb") as f:
-                    self.wfile.write(f.read())
-            else:
-                self.send_error(404, "actresses-report.html not found")
-            return
-
-        super().do_GET()
 
     def do_DELETE(self):
         path = unquote(self.path)
