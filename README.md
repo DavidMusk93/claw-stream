@@ -150,8 +150,9 @@ toolbox/actress-report/
 ## 未来演进点
 
 ### 近期（1-2 周）
+- [x] **DuckDB 持久化**：已完成。作品数据存入 DuckDB，增量抓取，避免重复下载封面
+- [x] **缓存回收策略**：已完成。LRU 自动清理，torrent 缓存硬上限 20GB
 - [ ] **定时自动刷新**：cron 或 systemd timer 每晚自动执行 `refresh.sh`
-- [ ] **缓存回收策略**：torrent 缓存 LRU 自动清理，避免 20GB 上限后死锁
 - [ ] **移动端适配**：Carousel 横向滚动在手机上体验差，需优化触控和布局
 - [ ] **播放器增强**：倍速播放、键盘快捷键（空格暂停、方向键快进）
 
@@ -163,7 +164,7 @@ toolbox/actress-report/
 
 ### 远期（3-6 月）
 - [ ] **PWA 离线访问**：Service Worker 缓存静态资源，支持离线浏览已抓取数据
-- [ ] **多端同步**：SQLite → PostgreSQL 或同步到 NAS，多设备共享进度
+- [ ] **多端同步**：DuckDB → PostgreSQL 或同步到 NAS，多设备共享进度
 - [ ] **AI 封面生成/修复**：缺失封面时自动从 DMM/JavBus 等多源补全
 - [ ] **订阅制 RSS**：自动监控 actress 新作品，发布即推送到前端
 

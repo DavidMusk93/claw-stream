@@ -261,73 +261,65 @@ def get_all_works_json():
     return {"actresses": list(actress_map.values())}
 
 
-def export_to_tmp():
-    """将 DuckDB 数据导出到 /tmp JSON，兼容旧 generate-report.js"""
-    data = get_all_works_json()
-    os.makedirs("/tmp/actress-news", exist_ok=True)
-    os.makedirs("/tmp/actress-jable", exist_ok=True)
+def export_report_json():
+    """导出为 generate-report.js 直接消费的 JSON（stdout）
 
-    for a in data["actresses"]:
-        code = a.get("code")
-        if not code:
-            continue
-        # actress-news JSON
-        news = {
-            "name": a["name"],
-            "target_name": a["name"],
-            "works": []
-        }
-        jable_works = []
-        for w in a["works"]:
-            news["works"].append({
-                "code": w["code"],
-                "title": w["title"],
-                "date": w["date"],
-                "views": w["views"],
-                "likes": w["likes"],
-                "cover_url": w["cover_url"],
-                "magnet": w["magnet"],
-                "resolution": w["resolution"],
-                "download_url": w["download_url"],
-                "cover_b64": w["cover_b64"],
+    格式: { "<actress_code>": { "name": "...", "works": [...] } }
+    每个 work 已合并 ijavtorrent + jable 数据。
+    """
+    conn = _conn()
+    result = conn.execute("""
+        SELECT
+            a.code as actress_code,
+            a.name,
+            w.code as work_code,
+            w.title,
+            w.release_date,
+            w.views,
+            w.likes,
+            w.resolution,
+            w.download_url,
+            w.cover_url,
+            w.cover_b64,
+            w.jable_m3u8,
+            w.jable_cover,
+            m.magnet
+        FROM actresses a
+        LEFT JOIN works w ON w.actress_id = a.id
+        LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
+        ORDER BY a.name, w.release_date DESC
+    """).fetchall()
+    conn.close()
+
+    data = {}
+    for row in result:
+        actress_code = row[0]
+        if actress_code not in data:
+            data[actress_code] = {"name": row[1], "works": []}
+        if row[2]:  # work_code
+            data[actress_code]["works"].append({
+                "code": row[2],
+                "title": row[3],
+                "date": row[4],
+                "views": str(row[5]) if row[5] else "",
+                "likes": str(row[6]) if row[6] else "",
+                "resolution": row[7] or "",
+                "download_url": row[8] or "",
+                "cover_url": row[9] or "",
+                "cover_b64": row[10] or "",
+                "m3u8_url": row[11] or "",
+                "jable_cover": row[12] or "",
+                "magnet": row[13] or "",
             })
-            if w["m3u8_url"]:
-                # 查找本地缓存的封面和 m3u8
-                cover_local = ""
-                covers_dir = f"/tmp/actress-jable/covers/{code.lower()}"
-                if os.path.isdir(covers_dir):
-                    base = w["code"].lower()
-                    for ext in [".jpg", ".png", ".webp"]:
-                        candidate = os.path.join(covers_dir, base + ext)
-                        if os.path.exists(candidate):
-                            cover_local = candidate
-                            break
 
-                m3u8_local = ""
-                cache_dir = os.path.join(SCRIPT_DIR, "cache", w["code"].lower())
-                m3u8_candidate = os.path.join(cache_dir, f"{w['code'].lower()}.m3u8")
-                if os.path.exists(m3u8_candidate):
-                    m3u8_local = m3u8_candidate
-
-                jable_works.append({
-                    "code": w["code"],
-                    "m3u8_url": w["m3u8_url"],
-                    "cover_local": cover_local,
-                    "m3u8_local": m3u8_local,
-                })
-
-        with open(f"/tmp/actress-news/{code}.json", "w", encoding="utf-8") as f:
-            json.dump(news, f, ensure_ascii=False, indent=2)
-
-        with open(f"/tmp/actress-jable/{code}.json", "w", encoding="utf-8") as f:
-            json.dump({"name": a["name"], "works": jable_works}, f, ensure_ascii=False, indent=2)
+    print(json.dumps(data, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
-        init_schema()
-        export_to_tmp()
-        print("[db] exported to /tmp")
+    if len(sys.argv) > 1 and sys.argv[1] == "export_report_json":
+        export_report_json()
+    elif len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
+        print("[db] export_to_tmp is deprecated, use export_report_json")
     else:
         init_schema()
         print(f"[db] initialized: {DB_PATH}")

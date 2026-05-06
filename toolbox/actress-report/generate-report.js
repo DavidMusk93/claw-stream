@@ -8,9 +8,18 @@ const { execSync } = require('child_process');
 const TOOLBOX = path.dirname(process.argv[1]);
 const CONFIG_PATH = process.argv[2] || path.join(TOOLBOX, 'config.json');
 const OUT_PATH = process.argv[3] || path.join(TOOLBOX, '..', '..', 'actresses-report.html');
-const B64_DIR = '/tmp/actress-b64';
-const NEWS_DIR = '/tmp/actress-news';
 const IMAGES_DIR = path.join(TOOLBOX, 'images');
+
+// ── 从 DuckDB 导出数据 ──
+let DB_DATA = {};
+try {
+  const dbPath = path.join(TOOLBOX, 'db.py');
+  const raw = execSync('python3 "' + dbPath + '" export_report_json', { cwd: TOOLBOX, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
+  DB_DATA = JSON.parse(raw);
+} catch (e) {
+  console.error('[db] failed to load data from DuckDB:', e.message);
+  process.exit(1);
+}
 
 // ── 日志双写（如果 LOG_DIR 环境变量设置）──
 const LOG_DIR = process.env.LOG_DIR;
@@ -63,19 +72,13 @@ function saveBase64(name, base64Str, outDir, fileBase) {
   }
 }
 
-function readCover(code) {
-  try { return fs.readFileSync(path.join(B64_DIR, 'cover_' + code + '.txt'), 'utf8').trim(); }
-  catch (e) { return ''; }
-}
-
 function readWorks(code) {
-  try { return JSON.parse(fs.readFileSync(path.join(NEWS_DIR, code + '.json'), 'utf8')).works || []; }
-  catch (e) { return []; }
+  var a = DB_DATA[code];
+  return a ? (a.works || []) : [];
 }
 
 function readJable(code) {
-  try { return JSON.parse(fs.readFileSync('/tmp/actress-jable/' + code + '.json', 'utf8')); }
-  catch (e) { return null; }
+  return null; // jable 数据已合并到 works
 }
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -106,26 +109,12 @@ try {
 
 const actressData = solo.map(function(a) {
   const id = a.code.toLowerCase();
-  const heroB64 = readCover(a.code);
   const ijavWorks = readWorks(a.code);
-  const jableData = readJable(a.code);
-  const jableWorks = jableData ? (jableData.works || []) : [];
+  var heroB64 = '';
+  if(ijavWorks.length > 0){
+    heroB64 = ijavWorks[0].cover_b64 || '';
+  }
 
-  // 构建 jable 映射（m3u8 + 封面）
-  const jableCoverMap = {};
-  const m3u8Map = {};
-  jableWorks.forEach(function(w) {
-    const codeUpper = w.code.toUpperCase();
-    jableCoverMap[codeUpper] = w.cover_local || '';
-    // 优先使用本地缓存的 m3u8
-    if (w.m3u8_local && fs.existsSync(w.m3u8_local)) {
-      m3u8Map[codeUpper] = rel(w.m3u8_local);
-    } else {
-      m3u8Map[codeUpper] = w.m3u8_url || '';
-    }
-  });
-
-  // 以 ijavtorrent 为主，补充 jable 的 m3u8 和封面
   let works = ijavWorks.map(function(w) {
     const codeUpper = w.code.toUpperCase();
     return {
@@ -135,9 +124,9 @@ const actressData = solo.map(function(a) {
       views: w.views || '',
       likes: w.likes || '',
       cover_b64: w.cover_b64 || '',
-      cover_local: jableCoverMap[codeUpper] || '',
+      cover_local: w.jable_cover || '',
       magnet: (w.magnet || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
-      m3u8_url: m3u8Map[codeUpper] || '',
+      m3u8_url: w.m3u8_url || '',
       resolution: w.resolution || '',
     };
   });

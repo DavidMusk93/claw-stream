@@ -5,8 +5,7 @@
 # 流程:
 #   1. search-news.py → DuckDB (ijavtorrent 抓取)
 #   2. fetch-jable.py → DuckDB (jable 封面+m3u8)
-#   3. db.py export_to_tmp → /tmp JSON (兼容桥梁)
-#   4. generate-report.js → ../../actresses-report.html
+#   3. generate-report.js → ../../actresses-report.html (直接从 DuckDB 读取)
 #
 # 日志:
 #   设置 LOG_DIR 环境变量后，各组件日志自动汇聚。
@@ -51,14 +50,8 @@ python3 fetch-jable.py "$CONFIG"
 echo "      ✓ DuckDB jable 已更新"
 echo ""
 
-# Step 3: 导出 DuckDB 到 /tmp JSON（兼容桥梁）
-echo "[3/4] 导出 DuckDB 到 /tmp JSON..."
-python3 db.py export_to_tmp
-echo "      ✓ /tmp JSON 已导出"
-echo ""
-
-# Step 4: 生成报告
-echo "[4/4] 生成 HTML 报告..."
+# Step 3: 生成报告
+echo "[3/3] 生成 HTML 报告..."
 export LOG_DIR  # 传递给 generate-report.js
 node generate-report.js "$CONFIG" "$REPORT_OUT"
 echo "      ✓ $REPORT_OUT 已生成"
