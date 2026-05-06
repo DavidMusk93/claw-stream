@@ -334,6 +334,12 @@ actressData.forEach(function(data) {
     });
   });
 
+  // Fallback: if a work has no cover, use the first work's cover or hero
+  var firstCover = '';
+  workData.forEach(function(w){ if(w.coverRel && !firstCover) firstCover = w.coverRel; });
+  if(!firstCover) firstCover = heroRel;
+  workData.forEach(function(w){ if(!w.coverRel) w.coverRel = firstCover; });
+
   let showcaseHtml = '';
   let tabsHtml = '';
   let rowPrefetchClass = '';
@@ -358,10 +364,19 @@ actressData.forEach(function(data) {
     const dateStr = first.date ? `<span class="featured-date">${esc(first.date)}</span>` : '';
     const descStr = first.title ? `<p class="featured-desc">${esc(first.title)}</p>` : '';
 
+    const tabsInner = workData.map(function(w, idx){
+      var thumbClass = idx === 0 ? 'work-tab active' : 'work-tab';
+      var thumbSrc = w.coverRel ? esc(w.coverRel) : esc(heroRel);
+      return `<button class="${thumbClass}" data-index="${idx}">`
+           + `  <img src="${thumbSrc}" alt="${esc(w.code)}" loading="lazy" decoding="async">`
+           + `</button>`;
+    }).join('');
+
     showcaseHtml = `<div class="featured-showcase">`
                  + `  <div class="featured-media">`
                  + `    <img src="${esc(first.coverRel)}" alt="${esc(first.title || first.code)}" loading="lazy" decoding="async">`
                  + `  </div>`
+                 + `  <div class="work-tabs">${tabsInner}</div>`
                  + `  <div class="featured-info">`
                  + `    <h3 class="featured-title">${esc(first.title || first.code)}</h3>`
                  + `    <div class="featured-meta">`
@@ -372,14 +387,6 @@ actressData.forEach(function(data) {
                  + `    ${descStr}`
                  + `  </div>`
                  + `</div>`;
-
-    tabsHtml = `<div class="work-tabs">`
-             + workData.map(function(w, idx){
-                 return `<button class="work-tab ${idx === 0 ? 'active' : ''}" data-index="${idx}">`
-                      + `  <img src="${esc(w.coverRel)}" alt="${esc(w.title || w.code)}" loading="lazy" decoding="async">`
-                      + `</button>`;
-               }).join('')
-             + `</div>`;
   }
 
   // Hero banner (first actress with cover)
@@ -560,40 +567,37 @@ body{
 .social-post{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
 /* Featured Showcase */
-.featured-showcase{display:grid;grid-template-columns:minmax(0, 1fr) minmax(0, 380px);gap:28px;align-items:start;max-width:1000px}
-.featured-media{height:auto;border-radius:var(--radius-lg);overflow:hidden;background:var(--surface);border:1px solid var(--border)}
-.featured-media img{width:100%;height:auto;display:block;border-radius:var(--radius-lg)}
-.actor-row.prefetch-target .featured-showcase{position:relative}
-.actor-row.prefetch-target .featured-showcase::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.5}
+/* Featured Showcase — Gallery Layout */
+.featured-showcase{display:flex;flex-direction:column;align-items:center;max-width:640px;margin:0 auto}
+.featured-media{width:100%;max-width:520px;border-radius:var(--radius-lg);overflow:hidden;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-lg)}
+.featured-media img{width:100%;height:auto;display:block}
+.actor-row.prefetch-target .featured-media{position:relative}
+.actor-row.prefetch-target .featured-media::before{content:'';position:absolute;inset:0;border-radius:var(--radius-lg);border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.5}
 
-.featured-info{display:flex;flex-direction:column;gap:14px;padding:8px 4px}
-.featured-title{font-size:1.15rem;font-weight:700;color:var(--text-primary);line-height:1.35;letter-spacing:-0.3px}
-.featured-meta{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.featured-info{display:flex;flex-direction:column;align-items:center;gap:16px;margin-top:32px;text-align:center;width:100%;max-width:520px}
+.featured-title{font-size:1.2rem;font-weight:700;color:var(--text-primary);line-height:1.4;letter-spacing:-0.3px;text-align:center}
+.featured-meta{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap}
 .featured-date{font-size:0.85rem;color:var(--text-secondary);font-weight:500}
 .featured-badges{display:flex;align-items:center;gap:8px}
-.id-badge{font-size:0.75rem;font-weight:700;color:#fff;background:rgba(0,0,0,0.45);padding:4px 10px;border-radius:6px;backdrop-filter:blur(4px)}
-.featured-actions{display:flex;gap:10px;flex-wrap:wrap}
-.btn-action{display:inline-flex;align-items:center;gap:6px;padding:10px 18px;border-radius:100px;font-size:0.82rem;font-weight:600;border:none;cursor:pointer;text-decoration:none;transition:transform .2s, box-shadow .2s, opacity .2s}
-.btn-action:hover{transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.2)}
+.id-badge{font-size:0.7rem;font-weight:700;color:#fff;background:rgba(0,0,0,0.45);padding:3px 8px;border-radius:6px;backdrop-filter:blur(4px)}
+.featured-actions{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+.btn-action{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:100px;font-size:0.85rem;font-weight:600;border:none;cursor:pointer;text-decoration:none;transition:transform .2s, box-shadow .2s, opacity .2s}
+.btn-action:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,0.15)}
 .btn-play{background:var(--accent);color:#fff}
-.btn-magnet{background:rgba(255,255,255,0.14);color:#fff;backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.1)}
-.btn-magnet:hover{background:rgba(255,255,255,0.22)}
-.btn-copy{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.85);padding:8px 12px}
-.btn-copy:hover{background:rgba(255,255,255,0.2);color:#fff}
-.featured-actions .btn-magnet{background:var(--surface-hover);color:var(--text-primary);border:1px solid var(--border);backdrop-filter:none}
-.featured-actions .btn-magnet:hover{background:var(--border-light)}
-.featured-actions .btn-copy{background:var(--surface-hover);color:var(--text-secondary);border:1px solid var(--border);backdrop-filter:none}
-.featured-actions .btn-copy:hover{background:var(--border-light);color:var(--text-primary)}
+.btn-magnet{background:var(--surface-hover);color:var(--text-primary);border:1px solid var(--border)}
+.btn-magnet:hover{background:var(--border-light)}
+.btn-copy{background:var(--surface-hover);color:var(--text-secondary);border:1px solid var(--border);padding:8px 14px}
+.btn-copy:hover{background:var(--border-light);color:var(--text-primary)}
 .res-badge{font-size:0.7rem;font-weight:700;color:#fff;background:rgba(59,130,246,0.8);padding:3px 8px;border-radius:4px;letter-spacing:0.3px}
-.featured-desc{font-size:0.9rem;color:var(--text-secondary);line-height:1.6;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;margin-top:4px}
+.featured-desc{font-size:0.9rem;color:var(--text-secondary);line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;font-weight:500;text-align:center;margin-top:4px}
 
 /* Work Tabs */
-.work-tabs{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
-.work-tab{background:none;border:2px solid transparent;border-radius:var(--radius);padding:3px;cursor:pointer;transition:transform .2s, border-color .2s, box-shadow .2s}
-.work-tab img{width:80px;height:auto;display:block;border-radius:6px}
-.work-tab:hover{transform:translateY(-2px)}
-.work-tab.active{border-color:var(--accent);box-shadow:0 4px 12px rgba(196,30,58,0.15)}
-[data-theme="dark"] .work-tab.active{box-shadow:0 4px 12px rgba(255,71,87,0.15)}
+.work-tabs{display:flex;gap:14px;margin-top:24px;justify-content:center;flex-wrap:wrap}
+.work-tab{background:none;border:2px solid transparent;border-radius:10px;padding:3px;cursor:pointer;transition:all .25s cubic-bezier(0.4,0,0.2,1);opacity:0.55}
+.work-tab img{width:72px;height:auto;display:block;border-radius:7px}
+.work-tab:hover{opacity:0.85;transform:translateY(-2px)}
+.work-tab.active{opacity:1;border-color:var(--accent);box-shadow:0 4px 16px rgba(196,30,58,0.18);transform:translateY(-2px)}
+[data-theme="dark"] .work-tab.active{box-shadow:0 4px 16px rgba(255,71,87,0.18)}
 
 /* Cache Badge */
 .cache-badge{width:10px;height:10px;border-radius:50%;display:inline-block;transition:box-shadow .3s}
