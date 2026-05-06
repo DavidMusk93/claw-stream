@@ -322,15 +322,24 @@ const html = `<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-/* ===== Netflix Dark Immersive ===== */
+/* ===== Theme System: Modular Light/Dark ===== */
+/* Default: Sunny & Open */
 :root{
+  --bg:#faf8f5;--surface:#ffffff;--surface-hover:#f5f0eb;
+  --text-primary:#2d2a26;--text-secondary:#6b6560;--text-tertiary:#a39e99;
+  --accent:#f97316;--accent-green:#22c55e;--accent-blue:#3b82f6;--accent-gold:#f59e0b;
+  --border:#e8e4df;--border-light:#f0ece7;
+  --shadow:0 8px 32px rgba(45,42,38,0.08);
+  --radius:8px;--radius-lg:12px;
+  --transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
+}
+/* Dark: Netflix Immersive */
+[data-theme="dark"]{
   --bg:#0a0a0a;--surface:#141414;--surface-hover:#1f1f1f;
   --text-primary:#ffffff;--text-secondary:#a3a3a3;--text-tertiary:#737373;
   --accent:#e50914;--accent-green:#22c55e;--accent-blue:#3b82f6;--accent-gold:#f59e0b;
   --border:#262626;--border-light:#333333;
   --shadow:0 8px 32px rgba(0,0,0,0.6);
-  --radius:8px;--radius-lg:12px;
-  --transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
@@ -341,8 +350,8 @@ body{
 }
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:#444}
+::-webkit-scrollbar-thumb{background:var(--text-tertiary);border-radius:3px;opacity:0.5}
+::-webkit-scrollbar-thumb:hover{background:var(--text-secondary);opacity:0.8}
 
 /* Top Nav */
 .top-nav{
@@ -372,6 +381,12 @@ body{
   transition:background .2s
 }
 .nav-search-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary)}
+.nav-theme-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.08);
+  color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .2s,transform .3s
+}
+.nav-theme-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary);transform:rotate(30deg)}
 
 /* Search Bar */
 .search-bar{
@@ -621,6 +636,10 @@ body{
   <button class="nav-search-btn" id="searchToggle" aria-label="搜索">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
   </button>
+  <button class="nav-theme-btn" id="themeToggle" aria-label="切换主题">
+    <svg class="theme-icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+    <svg class="theme-icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+  </button>
 </nav>
 
 <div class="search-bar" id="searchBar">
@@ -669,6 +688,30 @@ ${heroBannerHtml}
 <script>
 (function(){
   'use strict';
+
+  // ===== Theme Toggle =====
+  var themeToggle = document.getElementById('themeToggle');
+  var sunIcon = themeToggle.querySelector('.theme-icon-sun');
+  var moonIcon = themeToggle.querySelector('.theme-icon-moon');
+  var currentTheme = localStorage.getItem('theme') || 'light';
+
+  function applyTheme(theme){
+    document.documentElement.setAttribute('data-theme', theme);
+    if(theme === 'dark'){
+      sunIcon.style.display = 'none';
+      moonIcon.style.display = '';
+    } else {
+      sunIcon.style.display = '';
+      moonIcon.style.display = 'none';
+    }
+    localStorage.setItem('theme', theme);
+  }
+  applyTheme(currentTheme);
+
+  themeToggle.addEventListener('click', function(){
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+  });
 
   // ===== Search Toggle =====
   var searchToggle = document.getElementById('searchToggle');
