@@ -34,3 +34,4 @@ test-*.js
 
 # OS
 .DS_Store
+__pycache__/

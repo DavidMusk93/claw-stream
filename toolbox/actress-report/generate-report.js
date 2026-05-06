@@ -11,6 +11,20 @@ const B64_DIR = '/tmp/actress-b64';
 const NEWS_DIR = '/tmp/actress-news';
 const IMAGES_DIR = path.join(TOOLBOX, 'images');
 
+// ── 日志双写（如果 LOG_DIR 环境变量设置）──
+const LOG_DIR = process.env.LOG_DIR;
+if(LOG_DIR){
+  const day = new Date().toISOString().slice(0, 10);
+  const dir = path.join(LOG_DIR, day);
+  fs.mkdirSync(dir, {recursive: true});
+  const logFile = path.join(dir, 'generate-report.log');
+  const logStream = fs.createWriteStream(logFile, {flags: 'a'});
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = function(...args){ origLog.apply(console, args); logStream.write(args.join(' ') + '\n'); };
+  console.error = function(...args){ origErr.apply(console, args); logStream.write('[ERROR] ' + args.join(' ') + '\n'); };
+}
+
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const solo = config.actresses.filter(a => !a.type || a.type === 'solo');
 console.log('[filter] Solo: ' + solo.length + ' actresses');
@@ -727,7 +741,10 @@ ${heroBannerHtml}
   </div>
   <div class="cache-panel-body" id="cachePanelBody">
     <div class="cache-list" id="cacheList"></div>
-    <button class="cache-clear-btn" id="cacheClearBtn" style="display:none">清理全部缓存</button>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="cache-clear-btn" id="cacheClearBtn" style="display:none;flex:1">清理全部缓存</button>
+      <button class="cache-clear-btn" id="viewLogsBtn" style="flex:1;background:rgba(249,115,22,0.1);color:var(--accent)">📋 查看日志</button>
+    </div>
   </div>
 </div>
 
@@ -770,6 +787,22 @@ ${heroBannerHtml}
 <script>
 (function(){
   'use strict';
+
+  // ===== Global Error Reporter =====
+  function reportError(level, message, extra){
+    var payload = JSON.stringify({level: level, message: message, extra: extra || {}, url: location.href, ts: new Date().toISOString()});
+    if(navigator.sendBeacon){
+      navigator.sendBeacon('/api/log', new Blob([payload], {type: 'application/json'}));
+    }else{
+      fetch('/api/log', {method: 'POST', body: payload, headers: {'Content-Type': 'application/json'}}).catch(function(){});
+    }
+  }
+  window.addEventListener('error', function(e){
+    reportError('error', e.message, {filename: e.filename, lineno: e.lineno, colno: e.colno});
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    reportError('error', String(e.reason), {type: 'unhandledrejection'});
+  });
 
   // ===== Theme Toggle =====
   var themeToggle = document.getElementById('themeToggle');
@@ -989,6 +1022,10 @@ ${heroBannerHtml}
     var body = document.getElementById('cachePanelBody');
     body.classList.toggle('open');
     if(body.classList.contains('open')) pollCacheState();
+  });
+
+  document.getElementById('viewLogsBtn').addEventListener('click', function(){
+    window.open('/api/logs', '_blank');
   });
 
   document.getElementById('cacheClearBtn').addEventListener('click', function(){

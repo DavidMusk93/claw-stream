@@ -15,6 +15,11 @@ import sys, json, os, asyncio, re, random, base64, urllib.parse, html as htmlmod
 from playwright.async_api import async_playwright
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from logger import get_logger
+
+log = get_logger("search-news")
+
 OUTDIR = "/tmp/actress-news"
 
 SEARCH_TERMS = {
@@ -104,7 +109,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                 resp = await client.get(url, headers={"User-Agent": random.choice(USER_AGENTS)})
                 if resp.status_code == 200 and len(resp.content) > 1000:
                     b64 = base64.b64encode(resp.content).decode()
-                    print(f"    cover ✅ {code} ({len(resp.content)//1024}KB, {url.split('/')[-1][:30]})", file=sys.stderr)
+                    log.info(f"cover ok: {code} ({len(resp.content)//1024}KB, {url.split('/')[-1][:30]})")
                     return f"data:image/jpeg;base64,{b64}"
         except Exception:
             pass
@@ -119,13 +124,13 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                     resp = await client.get(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
                     if resp.status_code == 200 and len(resp.content) > 1000:
                         b64 = base64.b64encode(resp.content).decode()
-                        print(f"    cover ✅ {code} (DMM fallback, {len(resp.content)//1024}KB)", file=sys.stderr)
+                        log.info(f"cover ok: {code} (DMM fallback, {len(resp.content)//1024}KB)")
                         return f"data:image/jpeg;base64,{b64}"
             except Exception:
                 pass
 
     if cover_url:
-        print(f"    cover ⚠️ {code} (no cover)", file=sys.stderr)
+        log.warning(f"cover missing: {code}")
     return ""
 
 
@@ -218,7 +223,7 @@ async def fetch_actress(name: str, config_code: str, handle: str):
                 })
 
         except Exception as e:
-            print(f"  ⚠️ {name}: {type(e).__name__}", file=sys.stderr)
+            log.error(f"fetch failed: {name}: {type(e).__name__}", exc_info=True)
         finally:
             await browser.close()
 
@@ -233,7 +238,7 @@ async def fetch_actress(name: str, config_code: str, handle: str):
     works = unique[:3]
 
     # 下载封面（并行）
-    print(f"    downloading covers for {name}...", file=sys.stderr)
+    log.info(f"downloading covers for {name}...")
     tasks = [download_cover_b64(w.get("cover_url", ""), w["code"]) for w in works]
     b64_list = await asyncio.gather(*tasks)
     for w, b64 in zip(works, b64_list):
@@ -246,7 +251,7 @@ async def fetch_actress(name: str, config_code: str, handle: str):
         "count": len(works),
     }
     json.dump(data, open(outfile, "w"), ensure_ascii=False, indent=2)
-    print(f"  ✅ {name}: {len(works)} 作品, {sum(1 for w in works if w['cover_b64'])} 封面", file=sys.stderr)
+    log.info(f"done: {name}: {len(works)} works, {sum(1 for w in works if w['cover_b64'])} covers")
     return data
 
 
@@ -255,9 +260,9 @@ async def main():
     config = json.load(open(config_file))
     actresses = config.get("actresses", [])
 
-    print("[news] 获取作品数据...", file=sys.stderr)
+    log.info("fetching works data...")
     for a in actresses:
-        print(f"  → {a['name']}...", file=sys.stderr)
+        log.info(f"fetching: {a['name']}...")
         await fetch_actress(a["name"], a["code"], a["handle"])
         await random_delay(1.0, 2.5)
 
@@ -267,11 +272,11 @@ async def main():
         try:
             d = json.load(open(f))
             n = len(d.get("works", []))
-            print(f"  {a['name']}: {n} 条")
+            log.info(f"{a['name']}: {n} works")
             total += n
         except:
             pass
-    print(f"[news] 完成，共 {total} 个作品", file=sys.stderr)
+    log.info(f"done, total {total} works")
 
 
 if __name__ == "__main__":

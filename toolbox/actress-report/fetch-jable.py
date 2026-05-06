@@ -13,6 +13,11 @@
 import sys, json, os, re, asyncio
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from logger import get_logger
+
+log = get_logger("fetch-jable")
+
 OUTDIR = "/tmp/actress-jable"
 COVERS_DIR = os.path.join(OUTDIR, "covers")
 NEWS_DIR = "/tmp/actress-news"
@@ -153,10 +158,10 @@ async def cache_m3u8_segments(client: httpx.AsyncClient, m3u8_url: str, code: st
         with open(local_m3u8, "w", encoding="utf-8") as f:
             f.write("\n".join(output_lines) + "\n")
 
-        print(f"    cache ✅ {code}: {downloaded}/{seg_limit} segments")
+        log.info(f"cache ok: {code}: {downloaded}/{seg_limit} segments")
         return local_m3u8
     except Exception as e:
-        print(f"    cache ⚠️ {code}: {e}")
+        log.warning(f"cache warn: {code}: {e}")
     return ""
 
 
@@ -214,7 +219,7 @@ async def fetch_actress(name: str, code: str):
                     local = await download_cover(client, meta["cover_url"], out)
                     w["cover_local"] = local
                 if meta["m3u8_url"]:
-                    print(f"    m3u8 ✅ {c}")
+                    log.info(f"m3u8 ok: {c}")
                     local_m3u8 = await cache_m3u8_segments(client, meta["m3u8_url"], c)
                     if local_m3u8:
                         w["m3u8_local"] = local_m3u8
@@ -227,7 +232,7 @@ async def fetch_actress(name: str, code: str):
     outfile = os.path.join(OUTDIR, f"{code}.json")
     with open(outfile, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"  ✅ {name}: {len(works)}/{len(codes)} works with jable data")
+    log.info(f"done: {name}: {len(works)}/{len(codes)} works with jable data")
     return data
 
 
@@ -237,12 +242,12 @@ async def main():
         config = json.load(f)
 
     actresses = [a for a in config.get("actresses", []) if not a.get("type") or a.get("type") == "solo"]
-    print("[jable] 开始抓取...")
+    log.info("start fetching...")
     for a in actresses:
-        print(f"  → {a['name']}...")
+        log.info(f"fetching: {a['name']}...")
         await fetch_actress(a["name"], a["code"])
         await asyncio.sleep(0.5)
-    print("[jable] 完成")
+    log.info("done")
 
 
 if __name__ == "__main__":

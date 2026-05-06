@@ -11,12 +11,16 @@ cache-server.py — 一体化 BitTorrent 缓存服务器（本地文件直接播
   cd toolbox/actress-report && python3 cache-server.py
 """
 
-import os, sys, json, re, time, threading, math, argparse, signal, shutil, subprocess, ipaddress
+import os, sys, json, re, time, threading, math, argparse, signal, shutil, subprocess, ipaddress, glob
 from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import socketserver
 
 import libtorrent as lt
+
+from logger import get_logger, _ensure_day_dir
+
+log = get_logger("cache-server")
 
 # ── 配置 ──────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -253,12 +257,12 @@ class TorrentEngine:
             for p in range(start, min(end + 1, num_pieces)):
                 piece_prios[p] = 4
             handle.prioritize_pieces(piece_prios)
-            print(f"[torrent] prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
+            log.info(f"prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
         else:
             # 默认：所有 pieces 优先级 0（等播放时再设置头部 urgent）
             piece_prios = [0] * num_pieces
             handle.prioritize_pieces(piece_prios)
-            print(f"[torrent] added: {name} ({format_size(size)})")
+            log.info(f"added: {name} ({format_size(size)})")
 
         info["ready"] = True
 
@@ -292,7 +296,7 @@ class TorrentEngine:
         # 开启顺序下载，确保按顺序填充空洞
         h.set_sequential_download(True)
 
-        print(f"[torrent] play priority: {info['hash'][:12]}... head={head_count}pcs, seq=true")
+        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs, seq=true")
         return True
 
     def set_full_priority(self, hash_str):
@@ -349,7 +353,7 @@ class TorrentEngine:
         try:
             shutil.rmtree(save_path, ignore_errors=True)
         except Exception as e:
-            print(f"[remove] error: {e}")
+            log.error(f"remove error: {e}")
 
         with self.lock:
             if hash_str in self.torrents:
@@ -393,7 +397,7 @@ class CacheHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         msg = format % args
         if ".ts" in msg or ".m3u8" in msg or ".jpg" in msg or "stream" in msg:
-            print(f"[serve] {msg.strip()}")
+            log.debug(f"serve: {msg.strip()}")
 
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -574,8 +578,31 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
         super().do_GET()
 
+    def _send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
     def do_POST(self):
         path = unquote(self.path)
+
+        # ── 前端错误上报 ──
+        if path == "/api/log":
+            content_length = int(self.headers.get("Content-Level", 0))
+            if content_length > 0:
+                body = self.rfile.read(content_length).decode("utf-8", errors="replace")
+                try:
+                    data = json.loads(body)
+                    frontend_log = get_logger("frontend")
+                    level = data.get("level", "error")
+                    msg = data.get("message", "frontend error")
+                    extra = {k: v for k, v in data.items() if k not in ("level", "message")}
+                    getattr(frontend_log, level, frontend_log.error)(msg, extra=extra)
+                except Exception as e:
+                    log.error(f"frontend log parse error: {e}")
+            self._send_json({"ok": True})
+            return
 
         # ── 一键刷新：重新抓取数据并重排生成报告 ──
         if path == "/api/regenerate":
@@ -661,6 +688,132 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
         self.send_error(405, "Method not allowed")
 
+    def do_GET(self):
+        path = unquote(self.path)
+
+        # 日志列表/查看
+        logs_match = re.match(r"^/api/logs(/.*)?$", path)
+        if logs_match:
+            subpath = logs_match.group(1) or ""
+            log_dir = os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs"))
+            target = os.path.normpath(os.path.join(log_dir, subpath.lstrip("/")))
+            # 安全检查：禁止跳出 log_dir
+            if not target.startswith(os.path.normpath(log_dir)):
+                self.send_error(403, "Forbidden")
+                return
+            if os.path.isdir(target):
+                entries = []
+                for entry in sorted(os.listdir(target)):
+                    fp = os.path.join(target, entry)
+                    st = os.stat(fp)
+                    entries.append({
+                        "name": entry,
+                        "is_dir": os.path.isdir(fp),
+                        "size": st.st_size,
+                        "mtime": st.st_mtime,
+                    })
+                self._send_json({"path": subpath or "/", "entries": entries})
+                return
+            elif os.path.isfile(target):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                with open(target, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+            else:
+                self._send_json({"path": subpath or "/", "entries": []})
+                return
+
+        # 指标端点
+        if path == "/api/metrics":
+            items = self.engine.get_all_status()
+            total_disk = self.engine._get_cache_size()
+            # 计算缓存命中率近似值（已完整下载 / 总数）
+            completed = sum(1 for i in items if i.get("progress", 0) >= 99.9)
+            self._send_json({
+                "torrents": {
+                    "total": len(items),
+                    "completed": completed,
+                    "downloading": len(items) - completed,
+                },
+                "cache": {
+                    "used_bytes": total_disk,
+                    "used_human": format_size(total_disk),
+                    "max_bytes": self.engine.max_size_bytes,
+                    "max_human": format_size(self.engine.max_size_bytes),
+                },
+                "uptime": time.time() - getattr(self, "_server_start", time.time()),
+            })
+            return
+
+        # 视频流（直接从本地文件读取）
+        stream_match = re.match(r"^/stream/([a-f0-9]{40})$", path, re.I)
+        if stream_match:
+            self._serve_video(stream_match.group(1).lower())
+            return
+
+        # torrent 状态查询
+        status_match = re.match(r"^/torrent/status/([a-f0-9]{40})$", path, re.I)
+        if status_match:
+            hash_str = status_match.group(1).lower()
+            status = self.engine.get_status(hash_str)
+            if not status:
+                self.send_error(404, "Not found")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(status).encode())
+            return
+
+        # 缓存检查（头部就绪才能播放）
+        check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
+        if check_match:
+            hash_str = check_match.group(1).lower()
+            local_path, local_size, head_ready = find_video_state(hash_str)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "hash": hash_str,
+                "cached": local_size > 1024 * 1024,
+                "head_ready": head_ready,
+                "path": local_path,
+                "size": local_size,
+            }).encode())
+            return
+
+        # 所有缓存状态
+        if path == "/api/cache":
+            items = self.engine.get_all_status()
+            total_disk = self.engine._get_cache_size()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "totalSize": total_disk,
+                "maxSize": self.engine.max_size_bytes,
+                "itemCount": len(items),
+                "items": items,
+            }).encode())
+            return
+
+        # 根路径返回 HTML
+        if path == "/":
+            report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
+            if os.path.exists(report_path):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                with open(report_path, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_error(404, "actresses-report.html not found")
+            return
+
+        super().do_GET()
+
     def do_DELETE(self):
         path = unquote(self.path)
 
@@ -691,7 +844,7 @@ def main():
     engine = TorrentEngine(CACHE_DIR, args.max_size)
 
     def signal_handler(sig, frame):
-        print("\n[shutdown] Stopping server...")
+        log.info("shutdown: stopping server...")
         engine.shutdown()
         sys.exit(0)
 
@@ -701,18 +854,21 @@ def main():
     os.chdir(WORKSPACE_DIR)
 
     def handler_factory(*args, **kwargs):
-        return CacheHandler(*args, engine=engine, **kwargs)
+        h = CacheHandler(*args, engine=engine, **kwargs)
+        h._server_start = time.time()
+        return h
 
     server = ThreadedHTTPServer(("0.0.0.0", args.port), handler_factory)
 
-    print("=" * 60)
-    print(f"Cache Server started at http://localhost:{args.port}/")
-    print(f"Cache directory: {CACHE_DIR}")
-    print(f"Max cache size: {args.max_size}GB")
-    print(f"Engine: libtorrent {lt.version}")
-    print("=" * 60)
-    print("Press Ctrl+C to stop")
-    print("=" * 60)
+    log.info("=" * 60)
+    log.info(f"Cache Server started at http://localhost:{args.port}/")
+    log.info(f"Cache directory: {CACHE_DIR}")
+    log.info(f"Log directory: {os.environ.get('LOG_DIR', os.path.join(SCRIPT_DIR, 'logs'))}")
+    log.info(f"Max cache size: {args.max_size}GB")
+    log.info(f"Engine: libtorrent {lt.version}")
+    log.info("=" * 60)
+    log.info("Press Ctrl+C to stop")
+    log.info("=" * 60)
 
     server.serve_forever()
 
