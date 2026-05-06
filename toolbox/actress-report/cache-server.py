@@ -171,6 +171,36 @@ class TorrentEngine:
         end_piece = (file_offset + prefetch_bytes) // piece_length
         return start_piece, end_piece
 
+    def _enforce_cache_limit(self):
+        """LRU 缓存回收：超过上限 80% 时删除最久未访问的 torrent"""
+        total = self._get_cache_size()
+        threshold = int(self.max_size_bytes * 0.8)
+        if total <= threshold:
+            return
+
+        log.warning(f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}")
+
+        with self.lock:
+            # 按 last_access 升序排列（最旧的在前）
+            candidates = sorted(
+                self.torrents.items(),
+                key=lambda x: x[1]["last_access"]
+            )
+
+        freed = 0
+        for hash_str, info in candidates:
+            if total - freed <= threshold:
+                break
+            # 正在播放中的 torrent 保护 5 分钟
+            if time.time() - info["last_access"] < 300:
+                continue
+            log.info(f"evicting torrent {hash_str[:12]}... (last_access {int(time.time() - info['last_access'])}s ago)")
+            self.remove_torrent(hash_str)
+            # remove_torrent 已删除文件，重新计算
+            freed = total - self._get_cache_size()
+
+        log.info(f"cache eviction done: freed {format_size(freed)}, current {format_size(self._get_cache_size())}")
+
     def add_torrent(self, magnet, prefetch=False):
         hash_str = self._extract_hash(magnet)
         if not hash_str:
@@ -182,27 +212,31 @@ class TorrentEngine:
                 info["last_access"] = time.time()
                 return info
 
-            save_path = os.path.join(self.cache_dir, hash_str)
-            os.makedirs(save_path, exist_ok=True)
+        # 添加前检查缓存上限
+        self._enforce_cache_limit()
 
-            params = lt.parse_magnet_uri(magnet)
-            params.save_path = save_path
+        save_path = os.path.join(self.cache_dir, hash_str)
+        os.makedirs(save_path, exist_ok=True)
 
-            handle = self.session.add_torrent(params)
-            info = {
-                "handle": handle,
-                "magnet": magnet,
-                "hash": hash_str,
-                "added_at": time.time(),
-                "last_access": time.time(),
-                "video_idx": None,
-                "video_path": None,
-                "video_size": 0,
-                "ready": False,
-                "prefetch": prefetch,
-            }
+        params = lt.parse_magnet_uri(magnet)
+        params.save_path = save_path
+
+        handle = self.session.add_torrent(params)
+        info = {
+            "handle": handle,
+            "magnet": magnet,
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": None,
+            "video_path": None,
+            "video_size": 0,
+            "ready": False,
+            "prefetch": prefetch,
+        }
+        with self.lock:
             self.torrents[hash_str] = info
-            return info
+        return info
 
     def _extract_hash(self, magnet):
         m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
