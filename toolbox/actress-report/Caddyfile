@@ -1,0 +1,18 @@
+# Caddy 反向代理配置
+# 80 端口仅用于 Let's Encrypt HTTP-01 证书验证
+# HTTPS 服务在 8443（因为 443 被 s-ui 占用）
+
+rn.guohuasun.com:8443 {
+    reverse_proxy localhost:8765
+    log {
+        output file /root/.openclaw/workspace/toolbox/actress-report/logs/caddy-access.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+    }
+}
+
+# 自动处理 Let's Encrypt HTTP-01 挑战
+:80 {
+    respond /health "OK" 200
+}
