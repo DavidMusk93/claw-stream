@@ -71,26 +71,35 @@
                         │
         ┌───────────────┼───────────────┐
         ▼               ▼               ▼
-  cache/torrent/   /tmp/actress-    /tmp/actress-
-  <hash>/          news/<code>.json jable/<code>.json
-  (稀疏文件)       (search-news.py) (fetch-jable.py)
-                        ▲               ▲
+  cache/torrent/   ┌─────────┐     ┌─────────┐
+  <hash>/          │ijavtorrent│     │jable.tv │
+  (稀疏文件)       └────┬────┘     └────┬────┘
                         │               │
-                   ┌────┴────┐     ┌────┴────┐
-                   │ijavtorrent│     │jable.tv │
-                   └─────────┘     └─────────┘
+                        ▼               ▼
+                   search-news.py   fetch-jable.py
+                        │               │
+                        └───────┬───────┘
+                                ▼
+                           DuckDB (data/claw.duckdb)
+                                │
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+              db.py export_to_tmp    generate-report.js
+              /tmp JSON (bridge)     actresses-report.html
 ```
 
 ### 数据流
 
 ```
-config.json ──→ search-news.py ──→ /tmp/actress-news/
+config.json ──→ search-news.py ──→ DuckDB
        │
-       └──────→ fetch-jable.py ──→ /tmp/actress-jable/
+       └──────→ fetch-jable.py ──→ DuckDB
+       │
+       └──────→ db.py export_to_tmp ──→ /tmp JSON (bridge)
        │
        └──────→ generate-report.js ──→ actresses-report.html
 
-refresh.sh (一键串联以上三步)
+refresh.sh (一键串联以上步骤)
 ```
 
 ## 技术栈
@@ -100,7 +109,7 @@ refresh.sh (一键串联以上三步)
 | 前端 | Vanilla JS, CSS Variables, 无框架 |
 | 后端 | Python 3.11, libtorrent 2.0.8 |
 | 代理 | Caddy v2.11 (自动 HTTPS) |
-| 数据 | SQLite (s-ui), JSON 文件 |
+| 数据 | DuckDB |
 | 抓取 | Playwright, httpx |
 
 ## 快速开始
@@ -130,6 +139,7 @@ toolbox/actress-report/
 ├── generate-report.js     # HTML 报告生成器
 ├── search-news.py         # ijavtorrent 抓取
 ├── fetch-jable.py         # jable.tv 抓取
+├── db.py                  # DuckDB 持久化层
 ├── refresh.sh             # 一键刷新脚本
 ├── logger.py              # 统一日志模块
 ├── Caddyfile              # HTTPS 反向代理配置

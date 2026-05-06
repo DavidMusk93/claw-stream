@@ -17,10 +17,9 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logger import get_logger
+import db
 
 log = get_logger("search-news")
-
-OUTDIR = "/tmp/actress-news"
 
 SEARCH_TERMS = {
     "白峰ミウ": "miu+shiromine",
@@ -60,6 +59,22 @@ USER_AGENTS = [
 ]
 
 
+def _parse_count(s: str) -> int | None:
+    """将 '1.2K' / '3M' 等字符串转为整数"""
+    if not s:
+        return None
+    s = s.lower().replace(",", "").strip()
+    try:
+        if s.endswith("k"):
+            return int(float(s[:-1]) * 1000)
+        elif s.endswith("m"):
+            return int(float(s[:-1]) * 1000000)
+        else:
+            return int(float(s))
+    except ValueError:
+        return None
+
+
 async def random_delay(min_s=1.0, max_s=2.5):
     await asyncio.sleep(random.uniform(min_s, max_s))
 
@@ -68,7 +83,6 @@ def extract_resolution(magnet_url: str) -> str:
     """从 magnet dn 参数中提取清晰度（含 HTML entity 解码）"""
     if not magnet_url:
         return ""
-    # 解码 HTML entities（magnet URL 经过双重 &amp; 转义）
     decoded_url = htmlmod.unescape(magnet_url)
     parsed = urllib.parse.urlparse(decoded_url)
     params = urllib.parse.parse_qs(parsed.query)
@@ -114,7 +128,6 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
         except Exception:
             pass
 
-    # DMM CDN fallback
     if code:
         c = code.lower().replace("-", "")
         dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
@@ -135,15 +148,8 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
 
 
 async def fetch_actress(name: str, config_code: str, handle: str):
-    """获取单个女优的作品数据"""
-    os.makedirs(OUTDIR, exist_ok=True)
-    outfile = os.path.join(OUTDIR, f"{config_code}.json")
-
-    if os.path.exists(outfile):
-        mtime = os.path.getmtime(outfile)
-        if __import__("time").time() - mtime < 3600:
-            with open(outfile) as f:
-                return json.load(f)
+    """获取单个女优的作品数据，写入 DuckDB"""
+    actress_id = db.upsert_actress(name=name, handle=handle, code=config_code)
 
     search_term = SEARCH_TERMS.get(name, handle.replace("_", "+"))
     target_name = KNOWN_NAMES.get(name, name)
@@ -163,7 +169,6 @@ async def fetch_actress(name: str, config_code: str, handle: str):
             body = await page.inner_text("body")
             stripped = [l.strip() for l in body.split("\n")]
 
-            # 解析 movies
             movies = {}
             for m in re.finditer(r"sendEvent\('Cover Click','Main List Movie','(\d+)'\).*?data-link=\"(https?://[^\"]+)\"", html, re.DOTALL):
                 mid = m.group(1)
@@ -177,7 +182,6 @@ async def fetch_actress(name: str, config_code: str, handle: str):
                 if mid in movies:
                     movies[mid]["downloads"].append("https://ijavtorrent.com" + m.group(2))
 
-            # 文本扫描
             code_re = re.compile(r"\b([A-Z]{2,8}-\d+)\b", re.I)
             text_entries = []
             for i, line in enumerate(stripped):
@@ -194,13 +198,14 @@ async def fetch_actress(name: str, config_code: str, handle: str):
                     if dm:
                         parts = nl.split("|")
                         date_str = parts[0].strip()
-                        if len(parts) > 1: views = parts[1].strip()
-                        if len(parts) > 2: likes = parts[2].strip()
+                        if len(parts) > 1:
+                            views = parts[1].strip()
+                        if len(parts) > 2:
+                            likes = parts[2].strip()
                     if target_parts and all(p in nl.lower() for p in target_parts):
                         name_line = nl
                 text_entries.append({"code": c, "title": title[:200], "date": date_str, "views": views, "likes": likes, "name_line": name_line})
 
-            # 合并：搜索词已过滤，name_line 仅用于 is_solo_work 检查；如果 name_line 为空也保留（避免拼写差异漏掉）
             movie_ids = list(movies.keys())
             for idx, entry in enumerate(text_entries):
                 if entry["name_line"] and not is_solo_work(entry["name_line"]):
@@ -237,25 +242,60 @@ async def fetch_actress(name: str, config_code: str, handle: str):
     unique.sort(key=lambda w: (w["date"].split("/")[2] + w["date"].split("/")[1] + w["date"].split("/")[0]) if w["date"] else "00000000", reverse=True)
     works = unique[:3]
 
-    # 下载封面（并行）
-    log.info(f"downloading covers for {name}...")
-    tasks = [download_cover_b64(w.get("cover_url", ""), w["code"]) for w in works]
-    b64_list = await asyncio.gather(*tasks)
-    for w, b64 in zip(works, b64_list):
-        w["cover_b64"] = b64
+    # 写入 DuckDB
+    for w in works:
+        code = w["code"]
+        views_int = _parse_count(w["views"])
+        likes_int = _parse_count(w["likes"])
 
-    data = {
-        "name": name,
-        "target_name": target_name,
-        "works": works,
-        "count": len(works),
-    }
-    json.dump(data, open(outfile, "w"), ensure_ascii=False, indent=2)
-    log.info(f"done: {name}: {len(works)} works, {sum(1 for w in works if w['cover_b64'])} covers")
-    return data
+        if db.work_exists(actress_id, code):
+            # 仅更新元数据，保留已有封面
+            conn = db._conn()
+            row = conn.execute(
+                "SELECT id, cover_b64 FROM works WHERE actress_id = ? AND code = ?",
+                (actress_id, code),
+            ).fetchone()
+            work_id, existing_cover_b64 = row if row else (None, None)
+            conn.close()
+            db.upsert_work(
+                actress_id=actress_id,
+                code=code,
+                title=w["title"],
+                release_date=w["date"],
+                views=views_int,
+                likes=likes_int,
+                resolution=w["resolution"],
+                download_url=w["download_url"],
+                cover_url=w["cover_url"],
+                cover_b64=existing_cover_b64,
+            )
+            if w["magnet"] and work_id:
+                db.upsert_magnet(work_id, w["magnet"])
+            continue
+
+        # 新作品：下载封面后写入
+        cover_b64 = await download_cover_b64(w.get("cover_url", ""), code)
+        work_id = db.upsert_work(
+            actress_id=actress_id,
+            code=code,
+            title=w["title"],
+            release_date=w["date"],
+            views=views_int,
+            likes=likes_int,
+            resolution=w["resolution"],
+            download_url=w["download_url"],
+            cover_url=w["cover_url"],
+            cover_b64=cover_b64,
+        )
+        if w["magnet"]:
+            db.upsert_magnet(work_id, w["magnet"])
+
+    log.info(f"done: {name}: {len(works)} works")
+    return {"name": name, "target_name": target_name, "works": works, "count": len(works)}
 
 
 async def main():
+    db.init_schema()
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.json"
     config = json.load(open(config_file))
     actresses = config.get("actresses", [])
@@ -266,16 +306,17 @@ async def main():
         await fetch_actress(a["name"], a["code"], a["handle"])
         await random_delay(1.0, 2.5)
 
+    # 统计
     total = 0
     for a in actresses:
-        f = os.path.join(OUTDIR, f"{a['code']}.json")
-        try:
-            d = json.load(open(f))
-            n = len(d.get("works", []))
-            log.info(f"{a['name']}: {n} works")
-            total += n
-        except:
-            pass
+        conn = db._conn()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM works w JOIN actresses act ON w.actress_id = act.id WHERE act.code = ?",
+            (a["code"],),
+        ).fetchone()[0]
+        conn.close()
+        log.info(f"{a['name']}: {count} works")
+        total += count
     log.info(f"done, total {total} works")
 
 

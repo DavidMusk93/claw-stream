@@ -4,10 +4,10 @@
 用法: python3 fetch-jable.py <config.json>
 
 数据流：
-  1. 读取 /tmp/actress-news/<code>.json 获取作品番号
+  1. 从 DuckDB 查询缺少 jable 数据的作品
   2. 对每个番号访问 https://en.jable.tv/videos/<code>/
   3. 提取 m3u8_url + 高清封面(preview.jpg)
-  4. 输出 /tmp/actress-jable/<code>.json
+  4. 更新 DuckDB，同时缓存封面和 m3u8 片段到本地
 """
 
 import sys, json, os, re, asyncio
@@ -15,17 +15,17 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logger import get_logger
+import db
 
 log = get_logger("fetch-jable")
 
 OUTDIR = "/tmp/actress-jable"
 COVERS_DIR = os.path.join(OUTDIR, "covers")
-NEWS_DIR = "/tmp/actress-news"
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
 # 视频片段缓存配置
 CACHE_SEGMENTS = os.environ.get("CACHE_SEGMENTS", "1") == "1"
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-MAX_SEGMENTS = int(os.environ.get("MAX_SEGMENTS", "12"))  # 默认缓存前 12 个片段 (~60-90秒)
+MAX_SEGMENTS = int(os.environ.get("MAX_SEGMENTS", "12"))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0",
@@ -59,7 +59,6 @@ async def download_cover(client: httpx.AsyncClient, url: str, out_path: str) -> 
 
 
 def resolve_url(base: str, rel: str) -> str:
-    """解析 m3u8 中的相对 URL"""
     from urllib.parse import urljoin
     return urljoin(base, rel.strip())
 
@@ -77,7 +76,6 @@ async def cache_m3u8_segments(client: httpx.AsyncClient, m3u8_url: str, code: st
         base_url = m3u8_url.rsplit("/", 1)[0] + "/"
         lines = m3u8_content.splitlines()
 
-        # 收集片段和 key
         segments = []
         key_url = None
         i = 0
@@ -99,7 +97,6 @@ async def cache_m3u8_segments(client: httpx.AsyncClient, m3u8_url: str, code: st
         cache_subdir = os.path.join(CACHE_DIR, code.lower())
         os.makedirs(cache_subdir, exist_ok=True)
 
-        # 下载 AES key
         if key_url:
             try:
                 kresp = await client.get(key_url, headers=HEADERS, timeout=15, follow_redirects=True)
@@ -109,7 +106,6 @@ async def cache_m3u8_segments(client: httpx.AsyncClient, m3u8_url: str, code: st
             except Exception:
                 pass
 
-        # 下载前 N 个片段
         seg_limit = min(MAX_SEGMENTS, len(segments))
         downloaded = 0
         for idx, (seg_url, seg_name_raw) in enumerate(segments[:seg_limit]):
@@ -130,24 +126,20 @@ async def cache_m3u8_segments(client: httpx.AsyncClient, m3u8_url: str, code: st
         if downloaded == 0:
             return ""
 
-        # 重写 m3u8：只保留已缓存的片段，URL 改为本地相对路径
         output_lines = []
         kept = 0
         for line in lines:
             if line.startswith("#EXT-X-KEY:") and key_url:
-                # 替换 URI="..." 为 URI="key.key"（无论原始值是完整 URL 还是相对路径）
                 output_lines.append(re.sub(r'URI="[^"]+"', 'URI="key.key"', line))
             elif line.startswith("#EXTINF:"):
                 if kept < seg_limit:
                     output_lines.append(line)
                 kept += 1
             elif not line.startswith("#") and line.strip():
-                # 这是片段 URL 行
                 if kept <= seg_limit:
                     seg_name = line.strip().rsplit("/", 1)[-1]
                     output_lines.append(seg_name)
             elif line.startswith("#EXT-X-ENDLIST"):
-                # 在已缓存的片段后添加 ENDLIST
                 break
             else:
                 output_lines.append(line)
@@ -171,12 +163,10 @@ async def fetch_video_meta(client: httpx.AsyncClient, code: str) -> dict:
         url = f"https://en.jable.tv/videos/{code.lower()}/"
         resp = await client.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
         html = resp.text
-        result = {"m3u8_url": "", "cover_url": "", "cover_local": ""}
-        # m3u8
+        result = {"m3u8_url": "", "cover_url": ""}
         m3u8_list = re.findall(r'https://[^"\'\s]+\.m3u8', html)
         if m3u8_list:
             result["m3u8_url"] = m3u8_list[0]
-        # cover preview from og:image or video poster
         m = re.search(r'<meta property="og:image" content="(https://assets-cdn\.jable\.tv/[^"]+)"', html)
         if m:
             result["cover_url"] = m.group(1)
@@ -187,65 +177,65 @@ async def fetch_video_meta(client: httpx.AsyncClient, code: str) -> dict:
         return result
     except Exception:
         pass
-    return {"m3u8_url": "", "cover_url": "", "cover_local": ""}
+    return {"m3u8_url": "", "cover_url": ""}
 
 
-async def fetch_actress(name: str, code: str):
+async def fetch_actress(name: str, code: str, works: list):
+    """为指定女优的待补充作品抓取 jable 数据"""
     os.makedirs(OUTDIR, exist_ok=True)
     os.makedirs(os.path.join(COVERS_DIR, code.lower()), exist_ok=True)
 
-    # 读取 ijavtorrent 数据获取番号列表
-    codes = []
-    try:
-        with open(os.path.join(NEWS_DIR, f"{code}.json")) as f:
-            news_data = json.load(f)
-        codes = [w["code"].upper() for w in news_data.get("works", [])]
-    except Exception:
-        pass
-
-    if not codes:
+    if not works:
         return
 
-    works = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         sem = asyncio.Semaphore(3)
 
-        async def fetch_one(c: str):
+        async def fetch_one(work: dict):
+            work_id = work["id"]
+            c = work["code"].upper()
             async with sem:
                 meta = await fetch_video_meta(client, c)
-                w = {"code": c, **meta}
+                if meta["m3u8_url"] or meta["cover_url"]:
+                    db.update_jable(work_id, meta["m3u8_url"], meta["cover_url"])
                 if meta["cover_url"]:
                     out = os.path.join(COVERS_DIR, code.lower(), f"{c.lower()}.jpg")
-                    local = await download_cover(client, meta["cover_url"], out)
-                    w["cover_local"] = local
+                    await download_cover(client, meta["cover_url"], out)
                 if meta["m3u8_url"]:
                     log.info(f"m3u8 ok: {c}")
-                    local_m3u8 = await cache_m3u8_segments(client, meta["m3u8_url"], c)
-                    if local_m3u8:
-                        w["m3u8_local"] = local_m3u8
-                return w
+                    await cache_m3u8_segments(client, meta["m3u8_url"], c)
+                return {"code": c, **meta}
 
-        results = await asyncio.gather(*[fetch_one(c) for c in codes])
-        works = [w for w in results if w.get("m3u8_url") or w.get("cover_local")]
+        results = await asyncio.gather(*[fetch_one(w) for w in works])
+        successful = [w for w in results if w.get("m3u8_url") or w.get("cover_url")]
 
-    data = {"name": name, "works": works, "count": len(works)}
-    outfile = os.path.join(OUTDIR, f"{code}.json")
-    with open(outfile, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    log.info(f"done: {name}: {len(works)}/{len(codes)} works with jable data")
-    return data
+    log.info(f"done: {name}: {len(successful)}/{len(works)} works with jable data")
 
 
 async def main():
+    db.init_schema()
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.json"
     with open(config_file) as f:
         config = json.load(f)
 
     actresses = [a for a in config.get("actresses", []) if not a.get("type") or a.get("type") == "solo"]
+
+    # 从 DuckDB 获取缺少 jable 数据的作品
+    works_without_jable = db.get_works_without_jable()
+    actress_works_map: dict[str, list] = {}
+    for work_id, code, title, actress_name in works_without_jable:
+        actress_works_map.setdefault(actress_name, []).append({"id": work_id, "code": code, "title": title})
+
     log.info("start fetching...")
     for a in actresses:
-        log.info(f"fetching: {a['name']}...")
-        await fetch_actress(a["name"], a["code"])
+        name = a["name"]
+        code = a["code"]
+        works = actress_works_map.get(name, [])
+        if not works:
+            log.info(f"skipping {name}: all works have jable data")
+            continue
+        log.info(f"fetching: {name} ({len(works)} works)...")
+        await fetch_actress(name, code, works)
         await asyncio.sleep(0.5)
     log.info("done")
 

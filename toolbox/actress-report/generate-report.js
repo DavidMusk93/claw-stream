@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const TOOLBOX = path.dirname(process.argv[1]);
 const CONFIG_PATH = process.argv[2] || path.join(TOOLBOX, 'config.json');
@@ -94,6 +95,15 @@ let navHtml = '';
 let cardsHtml = '';
 
 // 收集所有女优数据
+// 从 DuckDB 导出到 /tmp JSON（临时桥梁，后续改为直接查询 DuckDB）
+try {
+  const dbPath = path.join(TOOLBOX, 'db.py');
+  execSync('python3 "' + dbPath + '" export_to_tmp', { cwd: TOOLBOX, stdio: 'inherit' });
+} catch (e) {
+  console.error('[export] failed to export from DuckDB:', e.message);
+  process.exit(1);
+}
+
 const actressData = solo.map(function(a) {
   const id = a.code.toLowerCase();
   const heroB64 = readCover(a.code);
