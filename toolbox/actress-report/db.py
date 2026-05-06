@@ -21,9 +21,10 @@ def _conn():
 def init_schema():
     """初始化表结构（幂等）"""
     conn = _conn()
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_actress_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS actresses (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_actress_id'),
             name TEXT NOT NULL UNIQUE,
             jp_name TEXT,
             handle TEXT,
@@ -34,9 +35,10 @@ def init_schema():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_work_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS works (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_work_id'),
             actress_id INTEGER NOT NULL,
             code TEXT NOT NULL,
             title TEXT,
@@ -56,9 +58,10 @@ def init_schema():
             UNIQUE(actress_id, code)
         )
     """)
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_magnet_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS magnets (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_magnet_id'),
             work_id INTEGER NOT NULL,
             magnet TEXT NOT NULL,
             hash TEXT,
@@ -68,9 +71,24 @@ def init_schema():
             UNIQUE(work_id, hash)
         )
     """)
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_social_id START 1")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS social_posts (
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_social_id'),
+            actress_id INTEGER NOT NULL,
+            platform TEXT NOT NULL DEFAULT 'x',
+            content TEXT NOT NULL,
+            post_url TEXT,
+            posted_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (actress_id) REFERENCES actresses(id),
+            UNIQUE(actress_id, platform, content)
+        )
+    """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_works_actress ON works(actress_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_works_code ON works(code)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_works_date ON works(release_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_social_actress ON social_posts(actress_id)")
     conn.commit()
     conn.close()
 
@@ -83,16 +101,24 @@ def _extract_hash(magnet):
 def upsert_actress(name, jp_name=None, handle=None, code=None, type=None, note=None):
     """插入或更新演员信息，返回 id"""
     conn = _conn()
+    row = conn.execute("SELECT id FROM actresses WHERE name = ?", (name,)).fetchone()
+    if row:
+        conn.execute("""
+            UPDATE actresses SET
+                jp_name = ?,
+                handle = ?,
+                code = ?,
+                type = ?,
+                note = ?,
+                updated_at = now()
+            WHERE id = ?
+        """, (jp_name, handle, code, type, note, row[0]))
+        conn.commit()
+        conn.close()
+        return row[0]
     conn.execute("""
         INSERT INTO actresses (name, jp_name, handle, code, type, note)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT (name) DO UPDATE SET
-            jp_name = excluded.jp_name,
-            handle = excluded.handle,
-            code = excluded.code,
-            type = excluded.type,
-            note = excluded.note,
-            updated_at = CURRENT_TIMESTAMP
     """, (name, jp_name, handle, code, type, note))
     row = conn.execute("SELECT id FROM actresses WHERE name = ?", (name,)).fetchone()
     conn.commit()
@@ -116,21 +142,37 @@ def upsert_work(actress_id, code, title=None, release_date=None, views=None,
                 cover_b64=None, cover_path=None):
     """插入或更新作品信息"""
     conn = _conn()
+    row = conn.execute(
+        "SELECT id, cover_b64 FROM works WHERE actress_id = ? AND code = ?",
+        (actress_id, code)
+    ).fetchone()
+    if row:
+        work_id, existing_cover = row[0], row[1]
+        # 保留已有 cover_b64（增量刷新时不覆盖）
+        if existing_cover and cover_b64 is None:
+            cover_b64 = existing_cover
+        conn.execute("""
+            UPDATE works SET
+                title = ?,
+                release_date = ?,
+                views = ?,
+                likes = ?,
+                resolution = ?,
+                download_url = ?,
+                cover_url = ?,
+                cover_b64 = ?,
+                cover_path = ?,
+                updated_at = now()
+            WHERE id = ?
+        """, (title, release_date, views, likes, resolution,
+              download_url, cover_url, cover_b64, cover_path, work_id))
+        conn.commit()
+        conn.close()
+        return work_id
     conn.execute("""
         INSERT INTO works (actress_id, code, title, release_date, views, likes,
                            resolution, download_url, cover_url, cover_b64, cover_path)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (actress_id, code) DO UPDATE SET
-            title = excluded.title,
-            release_date = excluded.release_date,
-            views = excluded.views,
-            likes = excluded.likes,
-            resolution = excluded.resolution,
-            download_url = excluded.download_url,
-            cover_url = excluded.cover_url,
-            cover_b64 = excluded.cover_b64,
-            cover_path = excluded.cover_path,
-            updated_at = CURRENT_TIMESTAMP
     """, (actress_id, code, title, release_date, views, likes,
           resolution, download_url, cover_url, cover_b64, cover_path))
     row = conn.execute(
@@ -148,13 +190,20 @@ def upsert_magnet(work_id, magnet, is_primary=True):
     if not h:
         return
     conn = _conn()
-    conn.execute("""
-        INSERT INTO magnets (work_id, magnet, hash, is_primary)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT (work_id, hash) DO UPDATE SET
-            magnet = excluded.magnet,
-            is_primary = excluded.is_primary
-    """, (work_id, magnet, h, is_primary))
+    row = conn.execute(
+        "SELECT 1 FROM magnets WHERE work_id = ? AND hash = ?",
+        (work_id, h)
+    ).fetchone()
+    if row:
+        conn.execute("""
+            UPDATE magnets SET magnet = ?, is_primary = ?
+            WHERE work_id = ? AND hash = ?
+        """, (magnet, is_primary, work_id, h))
+    else:
+        conn.execute("""
+            INSERT INTO magnets (work_id, magnet, hash, is_primary)
+            VALUES (?, ?, ?, ?)
+        """, (work_id, magnet, h, is_primary))
     conn.commit()
     conn.close()
 
@@ -168,6 +217,48 @@ def update_jable(work_id, m3u8_url=None, cover_url=None):
     """, (m3u8_url, cover_url, work_id))
     conn.commit()
     conn.close()
+
+
+def upsert_social_post(actress_id, platform, content, post_url=None, posted_at=None):
+    """插入或更新社交动态"""
+    conn = _conn()
+    row = conn.execute(
+        "SELECT id FROM social_posts WHERE actress_id = ? AND platform = ? AND content = ?",
+        (actress_id, platform, content)
+    ).fetchone()
+    if row:
+        conn.execute("""
+            UPDATE social_posts SET post_url = ?, posted_at = ?
+            WHERE id = ?
+        """, (post_url, posted_at, row[0]))
+        conn.commit()
+        conn.close()
+        return row[0]
+    conn.execute("""
+        INSERT INTO social_posts (actress_id, platform, content, post_url, posted_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (actress_id, platform, content, post_url, posted_at))
+    row = conn.execute(
+        "SELECT id FROM social_posts WHERE actress_id = ? AND platform = ? AND content = ?",
+        (actress_id, platform, content)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return row[0]
+
+
+def get_social_posts(actress_id, limit=3):
+    """获取女演员最近动态"""
+    conn = _conn()
+    rows = conn.execute("""
+        SELECT platform, content, post_url, posted_at
+        FROM social_posts
+        WHERE actress_id = ?
+        ORDER BY COALESCE(posted_at, created_at) DESC
+        LIMIT ?
+    """, (actress_id, limit)).fetchall()
+    conn.close()
+    return rows
 
 
 def get_works_without_jable(actress_name=None):

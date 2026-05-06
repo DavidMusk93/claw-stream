@@ -5,7 +5,8 @@
 # 流程:
 #   1. search-news.py → DuckDB (ijavtorrent 抓取)
 #   2. fetch-jable.py → DuckDB (jable 封面+m3u8)
-#   3. generate-report.js → ../../actresses-report.html (直接从 DuckDB 读取)
+#   3. fetch-social.py → DuckDB (X/Twitter 最新动态)
+#   4. generate-report.js → ../../actresses-report.html (直接从 DuckDB 读取)
 #
 # 日志:
 #   设置 LOG_DIR 环境变量后，各组件日志自动汇聚。
@@ -50,8 +51,18 @@ python3 fetch-jable.py "$CONFIG"
 echo "      ✓ DuckDB jable 已更新"
 echo ""
 
-# Step 3: 生成报告
-echo "[3/3] 生成 HTML 报告..."
+# Step 3: 抓取社交动态 → DuckDB
+echo "[3/4] 抓取 X/Twitter 动态..."
+if command -v uv >/dev/null 2>&1; then
+    uv run fetch-social.py "$CONFIG"
+else
+    python3 fetch-social.py "$CONFIG"
+fi
+echo "      ✓ DuckDB social 已更新"
+echo ""
+
+# Step 4: 生成报告
+echo "[4/4] 生成 HTML 报告..."
 export LOG_DIR  # 传递给 generate-report.js
 node generate-report.js "$CONFIG" "$REPORT_OUT"
 echo "      ✓ $REPORT_OUT 已生成"
@@ -64,6 +75,8 @@ echo "========================================"
 # 统计 DuckDB 中的数据
 WORKS_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM works').fetchone()[0]; c.close(); print(n)")
 JABLE_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM works WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
+SOCIAL_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM social_posts').fetchone()[0]; c.close(); print(n)")
 echo "作品总数 : $WORKS_COUNT"
 echo "Jable 条 : $JABLE_COUNT"
+echo "动态条数 : $SOCIAL_COUNT"
 echo "日志文件 : $REFRESH_LOG"

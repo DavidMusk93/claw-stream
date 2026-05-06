@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-cache-server.py — 一体化 BitTorrent 缓存服务器（本地文件直接播放版）
+cache-server.py — Unified BitTorrent cache server (local file direct play)
 
-架构：
-  1. libtorrent 下载引擎 → cache/torrent/<hash>/
-  2. HTTP 直接读取本地文件 → /stream/<hash>（Range 支持）
-  3. 播放时优先本地缓存，无缓存则启动 torrent 下载
+Architecture:
+  1. libtorrent download engine → cache/torrent/<hash>/
+  2. HTTP direct read local file → /stream/<hash> (Range supported)
+  3. Prefer local cache when playing, start torrent download if no cache
 
-启动：
+Start:
   cd toolbox/actress-report && python3 cache-server.py
 """
 
@@ -22,7 +22,7 @@ from logger import get_logger, _ensure_log_dir
 
 log = get_logger("cache-server")
 
-# ── 配置 ──────────────────────────────────────────────
+# ── Config ──────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, "cache", "torrent")
 REPORT_DIR = SCRIPT_DIR
@@ -33,14 +33,14 @@ PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
-    r"游戏大全", r"996gg", r"hhd800", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
+    r"game pack", r"996gg", r"hhd800", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
 ]]
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def _scan_mp4_moov(path, max_read=16 * 1024 * 1024):
-    """扫描 MP4 文件，找到 moov box 的结束位置"""
+    """Scan MP4 file, find moov box end position"""
     try:
         with open(path, "rb") as f:
             data = f.read(max_read)
@@ -59,7 +59,7 @@ def _scan_mp4_moov(path, max_read=16 * 1024 * 1024):
 
 
 def find_video_state(hash_str):
-    """查找视频文件并检查 moov 是否完整下载"""
+    """Find video file and check if moov is fully downloaded"""
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
         return None, 0, False
@@ -84,23 +84,23 @@ def find_video_state(hash_str):
     if not best or best_size < 1024 * 1024:
         return best, best_size, False
 
-    # 扫描 moov 位置
+    # Scan moov position
     moov_end = _scan_mp4_moov(best)
     if moov_end == 0:
-        # moov 不在头部，尝试在尾部查找
+        # moov not in head, try find in tail
         try:
             with open(best, "rb") as f:
                 f.seek(max(0, best_logic - 1024 * 1024))
                 tail = f.read()
                 if b"moov" in tail:
-                    # moov 在尾部，需要完整下载才能播放
+                    # moov in tail, need full download to play
                     moov_end = best_logic
                 else:
                     return best, best_size, False
         except Exception:
             return best, best_size, False
 
-    # 确认 moov_end 在已下载区域（非 0）
+    # Confirm moov_end in downloaded area (non-zero)
     head_ready = False
     try:
         with open(best, "rb") as f:
@@ -121,7 +121,7 @@ def format_size(b):
     return f"{b / math.pow(1024, i):.1f} {units[i]}"
 
 
-# ── BitTorrent 引擎 ───────────────────────────────────
+# ── BitTorrent engine ───────────────────────────────────
 class TorrentEngine:
     def __init__(self, cache_dir, max_size_gb):
         self.cache_dir = cache_dir
@@ -172,7 +172,7 @@ class TorrentEngine:
         return start_piece, end_piece
 
     def _enforce_cache_limit(self):
-        """LRU 缓存回收：超过上限 80% 时删除最久未访问的 torrent"""
+        """LRU cache eviction: delete oldest torrent when exceeding 80% limit"""
         total = self._get_cache_size()
         threshold = int(self.max_size_bytes * 0.8)
         if total <= threshold:
@@ -181,7 +181,7 @@ class TorrentEngine:
         log.warning(f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}")
 
         with self.lock:
-            # 按 last_access 升序排列（最旧的在前）
+            # Sort by last_access ascending (oldest first)
             candidates = sorted(
                 self.torrents.items(),
                 key=lambda x: x[1]["last_access"]
@@ -191,12 +191,12 @@ class TorrentEngine:
         for hash_str, info in candidates:
             if total - freed <= threshold:
                 break
-            # 正在播放中的 torrent 保护 5 分钟
+            # Protect torrents playing within 5 minutes
             if time.time() - info["last_access"] < 300:
                 continue
             log.info(f"evicting torrent {hash_str[:12]}... (last_access {int(time.time() - info['last_access'])}s ago)")
             self.remove_torrent(hash_str)
-            # remove_torrent 已删除文件，重新计算
+            # remove_torrent deleted files, recalculate
             freed = total - self._get_cache_size()
 
         log.info(f"cache eviction done: freed {format_size(freed)}, current {format_size(self._get_cache_size())}")
@@ -212,7 +212,7 @@ class TorrentEngine:
                 info["last_access"] = time.time()
                 return info
 
-        # 添加前检查缓存上限
+        # Check cache limit before adding
         self._enforce_cache_limit()
 
         save_path = os.path.join(self.cache_dir, hash_str)
@@ -252,13 +252,13 @@ class TorrentEngine:
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
-            # 文件校验完成后，重新应用播放优先级
+            # After file verification, reapply play priority
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
                 if hash_str in self.torrents:
                     info = self.torrents[hash_str]
-                    # 如果是播放模式（非预缓存），重新设置头部 urgent
+                    # If play mode (not prefetch), reset head urgent
                     if not info.get("prefetch"):
                         self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
@@ -285,7 +285,7 @@ class TorrentEngine:
 
         num_pieces = ti.num_pieces()
         if info.get("prefetch"):
-            # 预加载模式：前 2% pieces 优先级 4，其余 0
+            # Prefetch mode: first 2% pieces priority 4, rest 0
             start, end = self._calc_prefetch_pieces(ti, idx)
             piece_prios = [0] * num_pieces
             for p in range(start, min(end + 1, num_pieces)):
@@ -293,7 +293,7 @@ class TorrentEngine:
             handle.prioritize_pieces(piece_prios)
             log.info(f"prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
         else:
-            # 默认：所有 pieces 优先级 0（等播放时再设置头部 urgent）
+            # Default: all pieces priority 0 (set head urgent when playing)
             piece_prios = [0] * num_pieces
             handle.prioritize_pieces(piece_prios)
             log.info(f"added: {name} ({format_size(size)})")
@@ -301,7 +301,7 @@ class TorrentEngine:
         info["ready"] = True
 
     def _apply_play_priority(self, h, info):
-        """应用播放优先级：头部 urgent，其余慢速（边下边播）"""
+        """Apply play priority: head urgent, rest slow (stream while download)"""
         if not h.status().has_metadata:
             return False
         ti = h.torrent_file()
@@ -314,27 +314,27 @@ class TorrentEngine:
         file_offset = fs.file_offset(idx)
         start_piece = file_offset // piece_length
 
-        # 头部 pieces: urgent deadline + 优先级 7
-        # moov 最大可达 12MB，需要至少 6 pieces，保险起见下载 30pcs (~60MB)
+        # Head pieces: urgent deadline + priority 7
+        # moov max 12MB, need at least 6 pieces, safely download 30pcs (~60MB)
         head_count = min(30, num_pieces)
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             h.set_piece_deadline(p, 0)
 
-        # 头部 pieces: 优先级 7
-        # 其余 pieces: 优先级 1（慢速下载，边下边播不卡顿）
+        # Head pieces: priority 7
+        # Rest pieces: priority 1 (slow download, smooth streaming)
         piece_prios = [1] * num_pieces
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             piece_prios[p] = 7
         h.prioritize_pieces(piece_prios)
 
-        # 开启顺序下载，确保按顺序填充空洞
+        # Enable sequential download, fill holes in order
         h.set_sequential_download(True)
 
         log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs, seq=true")
         return True
 
     def set_full_priority(self, hash_str):
-        """播放模式：头部 urgent，其余暂停——确保头部先就绪"""
+        """Play mode: head urgent, rest paused — ensure head ready first"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -413,9 +413,9 @@ class TorrentEngine:
         self._alert_thread.join(timeout=5)
 
 
-# ── HTTP 处理器 ───────────────────────────────────────
+# ── HTTP handler ───────────────────────────────────────
 def _is_local_client(address):
-    """只允许本地回环和私有 IP 访问管理端点"""
+    """Only allow localhost and private IP to access admin endpoints"""
     try:
         ip = ipaddress.ip_address(address)
         return ip.is_loopback or ip.is_private
@@ -429,7 +429,7 @@ class CacheHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def _today_password(self):
-        """动态密码: rnYYmmdd{day%2}  例: rn2605060"""
+        """Daily rotating password"""
         d = datetime.datetime.now()
         return f"rn{d.strftime('%y%m%d')}{d.day % 2}"
 
@@ -441,8 +441,8 @@ class CacheHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        html = b'''<!DOCTYPE html>
-<html lang="zh-CN">
+        html = '''<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -455,38 +455,33 @@ input::placeholder{color:rgba(255,255,255,0.4)}
 button{margin-top:16px;padding:10px 28px;border-radius:8px;border:none;background:#f97316;color:#fff;font-size:1rem;cursor:pointer;transition:background .2s}
 button:hover{background:#ea580c}
 #error{color:#ef4444;margin-top:10px;font-size:0.85rem;min-height:1.2em}
-.hint{color:rgba(255,255,255,0.35);margin-top:16px;font-size:0.75rem}
 </style>
 </head>
 <body>
 <div class="box">
-<h2>&#128274; \u8bf7\u8f93\u5165\u5bc6\u7801</h2>
-<input type="password" id="pwd" placeholder="\u5bc6\u7801" onkeydown="if(event.key==='Enter')check()" autofocus>
+<h2>&#128274; Enter password</h2>
+<input type="password" id="pwd" placeholder="Password" onkeydown="if(event.key==='Enter')check()" autofocus>
 <div id="error"></div>
-<button onclick="check()">\u8fdb\u5165</button>
-<div class="hint">\u683c\u5f0f: rn + \u5e74\u6708\u65e5 + \u5947\u5076 (1/0)</div>
+<button onclick="check()">Enter</button>
 </div>
 <script>
-function getPwd(){
-  var d=new Date();
-  var yy=(d.getFullYear()%100).toString().padStart(2,'0');
-  var mm=(d.getMonth()+1).toString().padStart(2,'0');
-  var dd=d.getDate().toString().padStart(2,'0');
-  return 'rn'+yy+mm+dd+(d.getDate()%2);
-}
 function check(){
   var input=document.getElementById('pwd').value.trim();
-  if(input===getPwd()){
-    document.cookie='claw_auth=ok; path=/; max-age=86400';
-    location.href='/stream';
-  }else{
-    document.getElementById('error').textContent='\u5bc6\u7801\u9519\u8bef';
-  }
+  fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:input})})
+  .then(function(r){return r.json();})
+  .then(function(data){
+    if(data.ok){
+      location.href='/stream';
+    }else{
+      document.getElementById('error').textContent='Incorrect password';
+    }
+  })
+  .catch(function(){document.getElementById('error').textContent='Incorrect password';});
 }
 </script>
 </body>
 </html>'''
-        self.wfile.write(html)
+        self.wfile.write(html.encode('utf-8'))
 
     def log_message(self, format, *args):
         msg = format % args
@@ -517,7 +512,7 @@ function check(){
         return super().translate_path(path)
 
     def _seek_priority(self, hash_str, start_byte, end_byte):
-        """根据 Range 请求设置对应 pieces 为 urgent（优先级提升 + 截止时间）"""
+        """Set corresponding pieces to urgent based on Range request (priority boost + deadline)"""
         with self.engine.lock:
             info = self.engine.torrents.get(hash_str)
         if not info:
@@ -534,12 +529,12 @@ function check(){
         file_offset = fs.file_offset(idx)
         num_pieces = ti.num_pieces()
 
-        # 计算 Range 对应的 piece 范围（加前后各 2 个 piece 缓冲）
+        # Calculate Range corresponding piece range (+-2 pieces buffer)
         start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
         end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
-        # seek 区域 pieces: 优先级提到 7 + urgent deadline
-        # 确保其余 pieces 至少为 1（边下边播不卡顿）
+        # Seek area pieces: priority 7 + urgent deadline
+        # Ensure rest pieces at least 1 (smooth streaming)
         prios = [1] * num_pieces
         for p in range(start_piece, end_piece + 1):
             prios[p] = 7
@@ -547,13 +542,13 @@ function check(){
         h.prioritize_pieces(prios)
 
     def _serve_video(self, hash_str):
-        """直接从本地文件提供视频流（支持 Range），seek 时触发 urgent 下载"""
+        """Serve video stream directly from local file (Range support), trigger urgent download on seek"""
         path, real_size, head_ready = find_video_state(hash_str)
         if not path or not head_ready:
             self.send_error(404, "Video head not ready yet")
             return
 
-        total_size = os.path.getsize(path)  # 逻辑大小（稀疏文件可能很大）
+        total_size = os.path.getsize(path)  # Logical size (sparse file may be large)
         range_hdr = self.headers.get("Range")
 
         if range_hdr:
@@ -562,7 +557,7 @@ function check(){
             end = int(parts[1]) if parts[1] else total_size - 1
             chunk_size = (end - start) + 1
 
-            # Seek 到未下载区域时，通知 libtorrent urgent 下载
+            # When seek to undownloaded area, notify libtorrent urgent download
             self._seek_priority(hash_str, start, end)
 
             self.send_response(206)
@@ -576,12 +571,12 @@ function check(){
                 f.seek(start)
                 remaining = chunk_size
                 while remaining > 0:
-                    # 小块读取，更容易检测空洞边界
+                    # Small chunk read, easier to detect hole boundary
                     buf = f.read(min(16384, remaining))
                     if not buf:
                         break
-                    # 空洞检测：全 0 说明该 piece 未下载
-                    # 发送 0 会导致浏览器解析失败、seek 卡住
+                    # Hole detection: all zeros means piece not downloaded
+                    # Sending 0 causes browser parse failure, seek stuck
                     if not any(buf):
                         break
                     self.wfile.write(buf)
@@ -605,13 +600,13 @@ function check(){
     def do_GET(self):
         path = unquote(self.path)
 
-        # 视频流（直接从本地文件读取）
+        # Video stream (direct read from local file)
         stream_match = re.match(r"^/stream/([a-f0-9]{40})$", path, re.I)
         if stream_match:
             self._serve_video(stream_match.group(1).lower())
             return
 
-        # torrent 状态查询
+        # Torrent status query
         status_match = re.match(r"^/torrent/status/([a-f0-9]{40})$", path, re.I)
         if status_match:
             hash_str = status_match.group(1).lower()
@@ -625,7 +620,7 @@ function check(){
             self.wfile.write(json.dumps(status).encode())
             return
 
-        # 缓存检查（头部就绪才能播放）
+        # Cache check (head ready required to play)
         check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
         if check_match:
             hash_str = check_match.group(1).lower()
@@ -642,7 +637,7 @@ function check(){
             }).encode())
             return
 
-        # 所有缓存状态
+        # All cache status
         if path == "/api/cache":
             items = self.engine.get_all_status()
             total_disk = self.engine._get_cache_size()
@@ -657,7 +652,7 @@ function check(){
             }).encode())
             return
 
-        # 认证入口: /stream 和 /
+        # Auth entry: /stream and /
         if path == "/stream" or path == "/":
             if self._has_auth_cookie():
                 report_path = os.path.join(WORKSPACE_DIR, "actresses-report.html")
@@ -673,7 +668,7 @@ function check(){
                 self._send_auth_page()
             return
 
-        # 日志列表/查看
+        # Log list/view
         if path == "/api/logs" or path.startswith("/api/logs/"):
             subpath = path[len("/api/logs"):].lstrip("/")
             log_dir = _ensure_log_dir(os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs")))
@@ -705,7 +700,7 @@ function check(){
                 self._send_json({"path": subpath or "/", "entries": []})
                 return
 
-        # 指标端点
+        # Metrics endpoint
         if path == "/api/metrics":
             items = self.engine.get_all_status()
             total_disk = self.engine._get_cache_size()
@@ -737,7 +732,7 @@ function check(){
     def do_POST(self):
         path = unquote(self.path)
 
-        # ── 前端错误上报 ──
+        # ── Frontend error reporting ──
         if path == "/api/log":
             content_length = int(self.headers.get("Content-Level", 0))
             if content_length > 0:
@@ -754,7 +749,7 @@ function check(){
             self._send_json({"ok": True})
             return
 
-        # ── 一键刷新：重新抓取数据并重排生成报告 ──
+        # ── One-click refresh: re-fetch data and regenerate report ──
         if path == "/api/regenerate":
             if not _is_local_client(self.client_address[0]):
                 self.send_error(403, "Forbidden: local access only")
@@ -769,8 +764,8 @@ function check(){
             self.send_header("Content-Type", "application/json")
             self.end_headers()
 
-            # 流式输出：先发送 running 状态
-            self.wfile.write(json.dumps({"status": "running", "message": "开始刷新..."}).encode())
+            # Stream output: send running status first
+            self.wfile.write(json.dumps({"status": "running", "message": "Refreshing..."}).encode())
             self.wfile.write(b"\n")
 
             try:
@@ -779,7 +774,7 @@ function check(){
                     cwd=SCRIPT_DIR,
                     capture_output=True,
                     text=True,
-                    timeout=600,  # 10 分钟超时
+                    timeout=600,  # 10 min timeout
                 )
                 result = {
                     "status": "done" if proc.returncode == 0 else "error",
@@ -789,7 +784,7 @@ function check(){
                 }
                 self.wfile.write(json.dumps(result).encode())
             except subprocess.TimeoutExpired:
-                self.wfile.write(json.dumps({"status": "error", "message": "刷新超时 (>10min)"}).encode())
+                self.wfile.write(json.dumps({"status": "error", "message": "Refresh timeout (>10min)"}).encode())
             except Exception as e:
                 self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
             return
@@ -860,9 +855,9 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="一体化 BitTorrent 缓存服务器")
-    parser.add_argument("--port", type=int, default=8765, help="监听端口 (默认: 8765)")
-    parser.add_argument("--max-size", type=int, default=20, help="最大缓存大小 GB (默认: 20)")
+    parser = argparse.ArgumentParser(description="Unified BitTorrent cache server")
+    parser.add_argument("--port", type=int, default=8765, help="Listen port (default: 8765)")
+    parser.add_argument("--max-size", type=int, default=20, help="Max cache size GB (default: 20)")
     args = parser.parse_args()
 
     engine = TorrentEngine(CACHE_DIR, args.max_size)

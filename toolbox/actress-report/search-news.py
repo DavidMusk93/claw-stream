@@ -1,7 +1,7 @@
 #!/usr/bin/env uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["playwright", "httpx"]
+# dependencies = ["playwright", "httpx", "duckdb"]
 # ///
 """search-news.py — 从 ijavtorrent.com 获取作品数据（含封面 base64、magnet、清晰度）
 

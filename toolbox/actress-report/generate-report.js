@@ -105,10 +105,10 @@ await new Promise(function(resolve, reject){
     LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
     ORDER BY a.name, w.release_date DESC
   `, function(err, rows){
-    if(err){ reject(err); return; }
+    if(err){ db.close(); reject(err); return; }
     rows.forEach(function(r){
       var code = r.actress_code;
-      if(!DB_DATA[code]) DB_DATA[code] = {name: r.name, works: []};
+      if(!DB_DATA[code]) DB_DATA[code] = {name: r.name, works: [], posts: []};
       if(r.work_code){
         DB_DATA[code].works.push({
           code: r.work_code,
@@ -126,7 +126,28 @@ await new Promise(function(resolve, reject){
         });
       }
     });
-    resolve();
+    // 查询社交动态
+    conn.all(`
+      SELECT a.code as actress_code, s.platform, s.content, s.post_url, s.posted_at
+      FROM social_posts s
+      JOIN actresses a ON s.actress_id = a.id
+      ORDER BY COALESCE(s.posted_at, s.created_at) DESC
+    `, function(err2, rows2){
+      if(err2){ db.close(); reject(err2); return; }
+      rows2.forEach(function(r){
+        var code = r.actress_code;
+        if(!DB_DATA[code]) DB_DATA[code] = {name: '', works: [], posts: []};
+        if(!DB_DATA[code].posts) DB_DATA[code].posts = [];
+        DB_DATA[code].posts.push({
+          platform: r.platform,
+          content: r.content,
+          url: r.post_url || '',
+          posted_at: r.posted_at || '',
+        });
+      });
+      db.close();
+      resolve();
+    });
   });
 });
 
@@ -165,11 +186,24 @@ const actressData = solo.map(function(a) {
   works = works.slice(0, 3);
   totalWorks += works.length;
 
+  // 社交动态（去重，最多3条）
+  const allPosts = DB_DATA[a.code] ? (DB_DATA[a.code].posts || []) : [];
+  const seen = new Set();
+  const posts = [];
+  for (const p of allPosts) {
+    if (!seen.has(p.content)) {
+      seen.add(p.content);
+      posts.push(p);
+      if (posts.length >= 3) break;
+    }
+  }
+
   return {
     a: a,
     id: id,
     heroB64: heroB64,
     works: works,
+    posts: posts,
   };
 });
 
@@ -335,12 +369,29 @@ actressData.forEach(function(data) {
                    + `</section>`;
   }
 
+  // 社交动态 HTML
+  let socialHtml = '';
+  if (data.posts.length > 0) {
+    socialHtml = `<div class="social-feed">`
+               + `  <div class="social-feed-header">`
+               + `    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`
+               + `    <span>最新动态</span>`
+               + `  </div>`
+               + `  <div class="social-posts">`;
+    data.posts.forEach(function(p) {
+      const url = p.url || `https://x.com/${a.handle}`;
+      socialHtml += `<a class="social-post" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(p.content)}</a>`;
+    });
+    socialHtml += `  </div></div>`;
+  }
+
   rowsHtml += `<section class="actor-row" id="${id}" data-name="${esc(a.name)} ${esc(a.jp)} ${a.code}">`
             + `  <h2 class="actor-title">`
             + `    <span class="actor-name">${esc(a.name)}</span>`
             + `    <span class="actor-jp">${esc(a.jp)}</span>`
             + `    <span class="actor-code">${a.code}</span>`
             + `  </h2>`
+            + socialHtml
             + `  <div class="scroll-track">${cardsHtml}</div>`
             + `</section>`;
 });
@@ -490,6 +541,15 @@ body{
 .actor-name{font-size:1.4rem;font-weight:800}
 .actor-jp{font-size:0.85rem;color:var(--text-secondary);font-weight:500}
 .actor-code{font-size:0.75rem;color:var(--text-tertiary);background:var(--surface);padding:2px 8px;border-radius:4px}
+
+/* Social Feed */
+.social-feed{margin-bottom:16px}
+.social-feed-header{display:flex;align-items:center;gap:6px;font-size:0.7rem;font-weight:700;color:var(--text-tertiary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px}
+.social-feed-header svg{color:var(--text-secondary)}
+.social-posts{display:flex;flex-direction:column;gap:6px}
+.social-post{display:block;font-size:0.8rem;color:var(--text-secondary);line-height:1.5;padding:10px 14px;background:var(--surface-hover);border-radius:var(--radius);border:1px solid var(--border-light);text-decoration:none;transition:background .2s,border-color .2s;max-width:600px}
+.social-post:hover{background:var(--surface);border-color:var(--border);color:var(--text-primary)}
+.social-post{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
 /* Scroll Track */
 .scroll-track{display:flex;gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:16px}
