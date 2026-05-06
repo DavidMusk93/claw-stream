@@ -3,23 +3,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const duckdb = require('duckdb');
 
 const TOOLBOX = path.dirname(process.argv[1]);
 const CONFIG_PATH = process.argv[2] || path.join(TOOLBOX, 'config.json');
 const OUT_PATH = process.argv[3] || path.join(TOOLBOX, '..', '..', 'actresses-report.html');
 const IMAGES_DIR = path.join(TOOLBOX, 'images');
-
-// ── 从 DuckDB 导出数据 ──
-let DB_DATA = {};
-try {
-  const dbPath = path.join(TOOLBOX, 'db.py');
-  const raw = execSync('python3 "' + dbPath + '" export_report_json', { cwd: TOOLBOX, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
-  DB_DATA = JSON.parse(raw);
-} catch (e) {
-  console.error('[db] failed to load data from DuckDB:', e.message);
-  process.exit(1);
-}
 
 // ── 日志双写（如果 LOG_DIR 环境变量设置）──
 const LOG_DIR = process.env.LOG_DIR;
@@ -72,15 +61,6 @@ function saveBase64(name, base64Str, outDir, fileBase) {
   }
 }
 
-function readWorks(code) {
-  var a = DB_DATA[code];
-  return a ? (a.works || []) : [];
-}
-
-function readJable(code) {
-  return null; // jable 数据已合并到 works
-}
-
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function extractHashAttr(magnet) {
   const decoded = magnet.replace(/&amp;/g, '&');
@@ -93,23 +73,66 @@ function rel(absPath) {
   return path.relative(outDir, absPath).replace(/\\/g, '/');
 }
 
+async function generate(){
 let totalWorks = 0;
 let navHtml = '';
 let cardsHtml = '';
 
-// 收集所有女优数据
-// 从 DuckDB 导出到 /tmp JSON（临时桥梁，后续改为直接查询 DuckDB）
-try {
-  const dbPath = path.join(TOOLBOX, 'db.py');
-  execSync('python3 "' + dbPath + '" export_to_tmp', { cwd: TOOLBOX, stdio: 'inherit' });
-} catch (e) {
-  console.error('[export] failed to export from DuckDB:', e.message);
-  process.exit(1);
-}
+// ── 从 DuckDB 直接读取数据 ──
+const duckdb = require('duckdb');
+const DB_DATA = {};
+await new Promise(function(resolve, reject){
+  const db = new duckdb.Database(path.join(TOOLBOX, 'data', 'claw.duckdb'));
+  const conn = db.connect();
+  conn.all(`
+    SELECT
+      a.code as actress_code,
+      a.name,
+      w.code as work_code,
+      w.title,
+      w.release_date,
+      w.views,
+      w.likes,
+      w.resolution,
+      w.download_url,
+      w.cover_url,
+      w.cover_b64,
+      w.jable_m3u8,
+      w.jable_cover,
+      m.magnet
+    FROM actresses a
+    LEFT JOIN works w ON w.actress_id = a.id
+    LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
+    ORDER BY a.name, w.release_date DESC
+  `, function(err, rows){
+    if(err){ reject(err); return; }
+    rows.forEach(function(r){
+      var code = r.actress_code;
+      if(!DB_DATA[code]) DB_DATA[code] = {name: r.name, works: []};
+      if(r.work_code){
+        DB_DATA[code].works.push({
+          code: r.work_code,
+          title: r.title,
+          date: r.release_date,
+          views: String(r.views || ''),
+          likes: String(r.likes || ''),
+          resolution: r.resolution || '',
+          download_url: r.download_url || '',
+          cover_url: r.cover_url || '',
+          cover_b64: r.cover_b64 || '',
+          m3u8_url: r.jable_m3u8 || '',
+          jable_cover: r.jable_cover || '',
+          magnet: r.magnet || '',
+        });
+      }
+    });
+    resolve();
+  });
+});
 
 const actressData = solo.map(function(a) {
   const id = a.code.toLowerCase();
-  const ijavWorks = readWorks(a.code);
+  const ijavWorks = DB_DATA[a.code] ? (DB_DATA[a.code].works || []) : [];
   var heroB64 = '';
   if(ijavWorks.length > 0){
     heroB64 = ijavWorks[0].cover_b64 || '';
@@ -1277,3 +1300,9 @@ fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
 fs.writeFileSync(OUT_PATH, html, 'utf8');
 const size = (Buffer.byteLength(html) / 1024).toFixed(1);
 console.log('[report] ✅ ' + OUT_PATH + ' (' + size + 'KB, ' + solo.length + ' actresses, ' + totalWorks + ' works)');
+}
+
+generate().catch(function(err){
+  console.error('[report] failed:', err);
+  process.exit(1);
+});

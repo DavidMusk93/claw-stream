@@ -316,10 +316,8 @@ def export_report_json():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "export_report_json":
-        export_report_json()
-    elif len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
-        print("[db] export_to_tmp is deprecated, use export_report_json")
+    if len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
+        print("[db] export_to_tmp removed; generate-report.js reads DuckDB directly via Node.js driver")
     else:
         init_schema()
         print(f"[db] initialized: {DB_PATH}")
