@@ -150,7 +150,19 @@ actressData.sort(function(ad, bd) {
   return da.localeCompare(db);
 });
 
-// 生成 HTML
+
+// 分配全局 id（从 1 开始）
+var globalIdMap = {};
+var gid = 1;
+actressData.forEach(function(data) {
+  data.works.forEach(function(w) {
+    globalIdMap[w.code.toUpperCase()] = gid++;
+  });
+});
+
+var heroBannerHtml = '';
+var rowsHtml = '';
+
 actressData.forEach(function(data) {
   const a = data.a;
   const id = data.id;
@@ -158,7 +170,7 @@ actressData.forEach(function(data) {
   const works = data.works;
   const initial = a.name.charAt(0);
 
-  // 保存女优封面：优先用 jable 第一个作品封面
+  // 保存女优封面
   let heroSaved = { success: false };
   if (works.length > 0 && works[0].cover_local && fs.existsSync(works[0].cover_local)) {
     const src = works[0].cover_local;
@@ -169,13 +181,9 @@ actressData.forEach(function(data) {
       heroSaved = { success: true, path: dst, ext: ext };
     } catch (e) {}
   }
-
-  // 回退到 ijavtorrent base64
   if (!heroSaved.success) {
     heroSaved = saveBase64(id, heroB64, heroesDir, id);
   }
-
-  // 质量检查：太小的封面删掉
   if (heroSaved.success) {
     try {
       if (fs.statSync(heroSaved.path).size < 10000) {
@@ -184,8 +192,6 @@ actressData.forEach(function(data) {
       }
     } catch (e) {}
   }
-
-  // 质量失败后再次回退到 jable 封面
   if (!heroSaved.success && works.length > 0 && works[0].cover_local && fs.existsSync(works[0].cover_local)) {
     const src = works[0].cover_local;
     const ext = path.extname(src) || '.jpg';
@@ -201,15 +207,15 @@ actressData.forEach(function(data) {
 
   // 导航项
   const navImg = hasHero
-    ? `<img src="${heroRel}" alt="${esc(a.name)}" loading="lazy" decoding="async">`
+    ? `<img src="${esc(heroRel)}" alt="${esc(a.name)}" loading="lazy" decoding="async">`
     : `<span class="nav-initial">${initial}</span>`;
-  navHtml += `    <a class="nav-item" href="#${id}" data-target="${id}" aria-label="${esc(a.name)}">\n`
-           + `      <div class="nav-avatar">${navImg}</div>\n`
-           + `      <span class="nav-label">${esc(a.name)}</span>\n`
-           + `    </a>\n`;
+  navHtml += `  <a class="nav-item" href="#${id}" data-target="${id}" aria-label="${esc(a.name)}">`
+           + `    <div class="nav-avatar">${navImg}</div>`
+           + `    <span class="nav-label">${esc(a.name)}</span>`
+           + `  </a>`;
 
-  // 作品
-  let worksHtml = '';
+  // 作品卡片
+  let cardsHtml = '';
   const actressWorksDir = path.join(worksDir, id);
   fs.mkdirSync(actressWorksDir, { recursive: true });
 
@@ -217,7 +223,6 @@ actressData.forEach(function(data) {
     let coverRel = heroRel;
     let hasWorkCover = false;
 
-    // 优先使用 jable 本地封面
     if (w.cover_local && fs.existsSync(w.cover_local)) {
       const src = w.cover_local;
       const ext = path.extname(src) || '.jpg';
@@ -228,15 +233,11 @@ actressData.forEach(function(data) {
         hasWorkCover = true;
       } catch (e) {}
     }
-
-    // 回退到 ijavtorrent base64
     if (!hasWorkCover && w.cover_b64) {
       const workSaved = saveBase64(w.code, w.cover_b64, actressWorksDir, w.code.toLowerCase());
       hasWorkCover = workSaved.success;
       if (hasWorkCover) coverRel = rel(workSaved.path);
     }
-
-    // 质量检查：太小的封面用 hero 替代
     if (hasWorkCover) {
       try {
         const absPath = path.resolve(path.dirname(path.resolve(OUT_PATH)), coverRel);
@@ -248,57 +249,66 @@ actressData.forEach(function(data) {
       } catch (e) {}
     }
 
-    let meta = '';
-    if (w.date) meta += `<span class="meta-item">${esc(w.date)}</span>`;
-    if (w.views) meta += `<span class="meta-item">${esc(w.views)} 次浏览</span>`;
+    const hashAttr = w.magnet ? extractHashAttr(w.magnet) : '';
+    const globalId = globalIdMap[w.code.toUpperCase()] || 0;
+    const isPrefetchTarget = (globalId % 3 === 1);
+    const prefetchClass = isPrefetchTarget ? 'prefetch-target' : '';
+    const cacheBadge = hashAttr ? `<span class="cache-badge pending ${prefetchClass}" data-hash="${hashAttr}" data-id="${globalId}" title="未缓存"></span>` : '';
+
     const res = w.resolution || '';
-    let btn = '';
+    let btnPlay = '', btnMagnet = '', btnCopy = '';
     if (w.magnet) {
-      btn += `<a class="btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>磁力${res ? ' ' + esc(res) : ''}</a>`;
-    }
-    if (w.magnet) {
-      btn += `<a class="btn-magnet btn-play" href="#" data-magnet="${esc(w.magnet)}" onclick="return false;" style="margin-left:6px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>播放</a>`;
-      btn += `<a class="btn-magnet btn-copy" href="#" data-magnet="${esc(w.magnet)}" onclick="return false;" title="复制磁力链接" style="margin-left:6px;padding:8px 10px"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></a>`;
+      btnPlay = `<button class="btn-action btn-play" data-magnet="${esc(w.magnet)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>播放</span></button>`;
+      btnMagnet = `<a class="btn-action btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg><span>磁力</span></a>`;
+      btnCopy = `<button class="btn-action btn-copy" data-magnet="${esc(w.magnet)}" title="复制磁力链接"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
     }
 
-    const hashAttr = w.magnet ? extractHashAttr(w.magnet) : '';
-    const cacheBadge = hashAttr ? `<span class="cache-badge pending" data-hash="${hashAttr}" title="未缓存"></span>` : '';
-    worksHtml += `      <div class="work-row" data-cover="${coverRel}" data-default="${heroRel}">\n`
-               + `        <div class="work-thumb"><img src="${coverRel}" alt="${esc(w.title)}" loading="lazy" decoding="async"></div>\n`
-               + `        <div class="work-info">\n`
-               + `          <div class="work-code">${cacheBadge}${esc(w.code)}${res ? `<span class="badge">${esc(res)}</span>` : ''}</div>\n`
-               + `          <div class="work-title">${esc(w.title)}</div>\n`
-               + `          <div class="work-meta">${meta}</div>\n`
-               + `        </div>\n`
-               + `        <div class="work-action">${btn}</div>\n`
-               + `      </div>\n`;
+    const dateStr = w.date ? `<span class="card-date">${esc(w.date)}</span>` : '';
+    const descStr = w.title ? `<p class="card-desc">${esc(w.title)}</p>` : '';
+    const resBadge = res ? `<span class="res-badge">${esc(res)}</span>` : '';
+
+    cardsHtml += `<article class="av-card ${prefetchClass}" data-id="${globalId}" data-hash="${hashAttr}" data-magnet="${esc(w.magnet || '')}">`
+               + `  <div class="card-media">`
+               + `    <img src="${esc(coverRel)}" alt="${esc(w.title || w.code)}" loading="lazy" decoding="async">`
+               + `    <div class="card-overlay">`
+               + `      <div class="card-gradient"></div>`
+               + `      <div class="card-top">${cacheBadge}<span class="card-id">#${globalId}</span>${resBadge}</div>`
+               + `      <div class="card-bottom">`
+               + `        <div class="card-actions">${btnPlay}${btnMagnet}${btnCopy}</div>`
+               + `        ${dateStr}`
+               + `      </div>`
+               + `    </div>`
+               + `  </div>`
+               + `  <div class="card-info">${descStr}</div>`
+               + `</article>`;
   });
 
-  // Hero
-  const heroImg = hasHero
-    ? `<img class="card-hero-img" id="hero-${id}" src="${heroRel}" alt="${esc(a.name)} 封面" fetchpriority="high" decoding="async">`
-    : `<div class="card-hero-fallback"><span>${initial}</span></div>`;
-
-  cardsHtml += `  <article class="card" id="${id}" data-name="${esc(a.name)} ${esc(a.jp)} ${a.code}">\n`
-             + `    <header class="card-header">${heroImg}</header>\n`
-             + `    <section class="card-body">\n`
-             + `      <div class="card-title-row">\n`
-             + `        <div class="card-title">\n`
-             + `          <h2>${esc(a.name)}</h2>\n`
-             + `          <span class="card-subtitle">${esc(a.jp)}</span>\n`
-             + `        </div>\n`
-             + `        <span class="code-badge">${a.code}</span>\n`
-             + `      </div>\n`;
-
-  if (works.length) {
-    cardsHtml += `      <div class="works-wrap">\n`
-               + `        <div class="works-header"><span>最新作品</span><span class="works-hint">点击切换封面</span></div>\n`
-               + `        <div class="works-list">\n${worksHtml}        </div>\n`
-               + `      </div>\n`;
+  // Hero banner（第一个有封面的 actress）
+  if (!heroBannerHtml && hasHero) {
+    const firstWork = works[0];
+    const firstMagnet = firstWork ? firstWork.magnet : '';
+    heroBannerHtml = `<section class="hero-banner" style="background-image:url('${esc(heroRel)}')">`
+                   + `  <div class="hero-gradient"></div>`
+                   + `  <div class="hero-content">`
+                   + `    <h1 class="hero-title">${esc(a.name)}</h1>`
+                   + `    <p class="hero-subtitle">${esc(a.jp)} · ${esc(a.code)}</p>`
+                   + `    <p class="hero-desc">${works.length} 部最新作品</p>`
+                   + `    <div class="hero-actions">`
+                   + `      <button class="hero-btn hero-btn-primary btn-play" data-magnet="${esc(firstMagnet)}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>立即播放</button>`
+                   + `      <a class="hero-btn hero-btn-secondary" href="${esc(firstMagnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>磁力链接</a>`
+                   + `    </div>`
+                   + `  </div>`
+                   + `</section>`;
   }
 
-  cardsHtml += `    </section>\n`
-             + `  </article>\n`;
+  rowsHtml += `<section class="actor-row" id="${id}" data-name="${esc(a.name)} ${esc(a.jp)} ${a.code}">`
+            + `  <h2 class="actor-title">`
+            + `    <span class="actor-name">${esc(a.name)}</span>`
+            + `    <span class="actor-jp">${esc(a.jp)}</span>`
+            + `    <span class="actor-code">${a.code}</span>`
+            + `  </h2>`
+            + `  <div class="scroll-track">${cardsHtml}</div>`
+            + `</section>`;
 });
 
 // 构建完整 HTML
@@ -307,208 +317,333 @@ const html = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="${esc(config.title)} — ${solo.length} 位女优，${totalWorks} 部作品">
-<meta property="og:title" content="${esc(config.title)}">
-<meta property="og:description" content="${solo.length} 位女优，${totalWorks} 部作品">
 <title>${esc(config.title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* ===== Netflix Dark Immersive ===== */
 :root{
-  --bg:#F5F5F7;--surface:#FFFFFF;--surface-2:#F5F5F7;
-  --text:#1D1D1F;--text-2:#515154;--text-3:#86868B;
-  --border:#E8E8ED;--border-2:#D2D2D7;--accent:#007AFF;--accent-2:#FF2D55;
-  --shadow:0 1px 3px rgba(0,0,0,0.04);--shadow-hover:0 8px 24px rgba(0,0,0,0.08);
-  --radius:20px;--radius-sm:12px;--nav-height:64px;
+  --bg:#0a0a0a;--surface:#141414;--surface-hover:#1f1f1f;
+  --text-primary:#ffffff;--text-secondary:#a3a3a3;--text-tertiary:#737373;
+  --accent:#e50914;--accent-green:#22c55e;--accent-blue:#3b82f6;--accent-gold:#f59e0b;
+  --border:#262626;--border-light:#333333;
+  --shadow:0 8px 32px rgba(0,0,0,0.6);
+  --radius:8px;--radius-lg:12px;
+  --transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
 }
-@media (prefers-color-scheme: dark){
-  :root{
-    --bg:#000000;--surface:#1C1C1E;--surface-2:#2C2C2E;
-    --text:#F5F5F7;--text-2:#A1A1A6;--text-3:#8E8E93;
-    --border:#38383A;--border-2:#48484A;--accent:#0A84FF;--accent-2:#FF375F;
-    --shadow:0 1px 3px rgba(0,0,0,0.3);--shadow-hover:0 8px 24px rgba(0,0,0,0.5);
-  }
-}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+*{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{font-family:Inter,"Noto Sans SC","SF Pro Display",-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);line-height:1.5;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-img{max-width:100%;height:auto;display:block}
-a{color:inherit;text-decoration:none}
+body{
+  font-family:'Inter','Noto Sans SC',-apple-system,BlinkMacSystemFont,sans-serif;
+  background:var(--bg);color:var(--text-primary);line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#444}
 
-/* Header */
-.site-header{text-align:center;padding:80px 24px 48px;background:var(--surface);border-bottom:1px solid var(--border)}
-.site-header h1{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;letter-spacing:-0.03em;margin-bottom:8px}
-.site-header p{color:var(--text-3);font-size:0.9rem}
-.stats{display:flex;justify-content:center;gap:48px;margin-top:24px}
-.stat{text-align:center}
-.stat-num{font-size:1.75rem;font-weight:700}
-.stat-label{font-size:0.7rem;color:var(--text-3);text-transform:uppercase;letter-spacing:0.08em;margin-top:4px;font-weight:600}
-
-/* Search */
-.search-wrap{max-width:560px;margin:0 auto;padding:24px 16px 0}
-.search-input{width:100%;padding:12px 20px;border:1px solid var(--border);border-radius:100px;background:var(--surface);color:var(--text);font-size:0.95rem;outline:none;transition:all .2s}
-.search-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,122,255,0.15)}
-.search-input::placeholder{color:var(--text-3)}
-
-/* Nav */
-.site-nav{position:sticky;top:0;z-index:100;background:rgba(245,245,247,0.85);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border-bottom:1px solid var(--border);padding:10px 16px;overflow-x:auto;display:flex;gap:6px;scrollbar-width:none;justify-content:center}
-.site-nav::-webkit-scrollbar{display:none}
-@media (prefers-color-scheme: dark){.site-nav{background:rgba(28,28,30,0.85)}}
-.nav-item{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 10px;border-radius:12px;transition:background .2s;position:relative}
-.nav-item:hover{background:rgba(0,0,0,0.05)}
-.nav-item.active::after{content:'';position:absolute;bottom:-10px;width:4px;height:4px;border-radius:50%;background:var(--accent)}
-@media (prefers-color-scheme: dark){.nav-item:hover{background:rgba(255,255,255,0.08)}}
-.nav-avatar{width:40px;height:40px;border-radius:50%;overflow:hidden;border:2px solid var(--border);background:var(--surface-2);transition:border-color .2s,transform .2s}
-.nav-item:hover .nav-avatar{border-color:var(--accent);transform:scale(1.05)}
+/* Top Nav */
+.top-nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  background:rgba(10,10,10,0.85);backdrop-filter:blur(20px) saturate(180%);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  border-bottom:1px solid rgba(255,255,255,0.05);
+  padding:0 4vw;height:64px;display:flex;align-items:center;gap:24px;
+}
+.nav-brand{font-size:1.25rem;font-weight:800;color:var(--accent);letter-spacing:-0.5px}
+.nav-scroll{flex:1;overflow-x:auto;display:flex;gap:8px;scrollbar-width:none;align-items:center}
+.nav-scroll::-webkit-scrollbar{display:none}
+.nav-item{
+  flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:6px 10px;border-radius:10px;transition:background .2s;text-decoration:none;color:inherit
+}
+.nav-item:hover{background:rgba(255,255,255,0.08)}
+.nav-item.active{background:rgba(229,9,20,0.15)}
+.nav-avatar{width:36px;height:36px;border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,0.1);background:var(--surface);transition:transform .2s,border-color .2s}
+.nav-item:hover .nav-avatar{border-color:var(--accent);transform:scale(1.08)}
 .nav-avatar img{width:100%;height:100%;object-fit:cover}
-.nav-initial{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.9rem;color:var(--text-2)}
-.nav-label{font-size:0.6rem;color:var(--text-3);font-weight:500;white-space:nowrap;max-width:60px;overflow:hidden;text-overflow:ellipsis}
-
-/* Main */
-.container{max-width:980px;margin:0 auto;padding:32px 16px 80px}
-
-/* Card */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:40px;box-shadow:var(--shadow);transition:transform .25s,box-shadow .25s,border-color .25s;scroll-margin-top:80px}
-.card:hover{box-shadow:var(--shadow-hover);border-color:var(--border-2);transform:translateY(-2px)}
-.card-header{background:var(--surface-2);position:relative;overflow:hidden;line-height:0}
-.card-hero-img{width:100%;height:auto;display:block;transition:opacity .3s}
-.card-hero-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#18181B,#27272A);color:var(--border-2);font-size:4rem;font-weight:900}
-.card-body{padding:28px}
-.card-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
-.card-title{min-width:0}
-.card-title h2{font-size:clamp(1.2rem,3vw,1.5rem);font-weight:700;line-height:1.2;display:inline}
-.card-subtitle{font-size:0.85rem;color:var(--text-3);font-weight:500;margin-left:8px}
-.code-badge{font-size:0.72rem;font-weight:600;color:var(--text-3);background:var(--surface-2);padding:4px 14px;border-radius:100px;border:1px solid var(--border);white-space:nowrap}
-
-/* Works */
-.works-wrap{margin-top:4px}
-.works-header{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:4px}
-.works-header span:first-child{font-size:0.75rem;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:0.06em}
-.works-hint{font-size:0.7rem;color:var(--text-3);font-weight:400;text-transform:none;letter-spacing:0}
-.work-row{display:flex;align-items:center;gap:16px;padding:12px 10px;border-bottom:1px solid var(--surface-2);cursor:pointer;border-radius:10px;transition:background .2s,transform .15s}
-.work-row:last-child{border-bottom:none}
-.work-row:hover{background:var(--surface-2);transform:translateX(4px)}
-.work-row.active{background:rgba(0,122,255,0.08);box-shadow:inset 3px 0 0 var(--accent)}
-.work-thumb{flex-shrink:0;width:80px;border-radius:8px;overflow:hidden;transition:transform .2s;line-height:0}
-.work-row:hover .work-thumb{transform:scale(1.05)}
-.work-thumb img{width:100%;height:auto;display:block;border-radius:8px}
-.work-info{flex:1;min-width:0}
-.work-code{font-size:0.8rem;font-weight:700;color:var(--accent-2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
-.badge{font-size:0.6rem;font-weight:600;color:var(--accent);background:rgba(0,122,255,0.08);padding:2px 8px;border-radius:6px;border:1px solid rgba(0,122,255,0.12)}
-.work-title{font-size:0.85rem;color:var(--text-2);line-height:1.5;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.work-meta{display:flex;gap:14px;margin-top:6px}
-.meta-item{font-size:0.7rem;color:var(--text-3);font-weight:500}
-.work-action{flex-shrink:0}
-.btn-magnet{display:inline-flex;align-items:center;gap:4px;font-size:0.7rem;font-weight:600;color:var(--accent);background:rgba(0,122,255,0.06);border:1px solid rgba(0,122,255,0.12);padding:8px 14px;border-radius:10px;transition:all .2s;white-space:nowrap}
-.btn-magnet:hover{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 4px 12px rgba(0,122,255,0.25)}
-.btn-magnet svg{flex-shrink:0}
-
-/* Footer */
-.site-footer{text-align:center;padding:40px 24px;color:var(--text-3);font-size:0.8rem;background:var(--surface);border-top:1px solid var(--border)}
-
-/* Back to top */
-.back-to-top{position:fixed;bottom:24px;right:24px;width:44px;height:44px;border-radius:50%;background:var(--surface);color:var(--text);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;visibility:hidden;transition:all .3s;box-shadow:var(--shadow-hover);z-index:90}
-.back-to-top.visible{opacity:1;visibility:visible}
-.back-to-top:hover{background:var(--accent);color:#fff;border-color:var(--accent);transform:translateY(-2px)}
-.back-to-top svg{width:20px;height:20px}
-
-/* Video Modal */
-.video-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);z-index:200;display:none;align-items:center;justify-content:center;padding:20px;opacity:0;transition:opacity .3s}
-.video-modal-overlay.active{display:flex;opacity:1}
-.video-modal-box{width:100%;max-width:1000px;background:#000;border-radius:16px;overflow:hidden;position:relative;box-shadow:0 24px 80px rgba(0,0,0,0.6);transform:scale(0.92);transition:transform .3s}
-.video-modal-overlay.active .video-modal-box{transform:scale(1)}
-.video-modal-close{position:absolute;top:12px;right:12px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,0.12);color:#fff;border:none;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center;font-size:1.4rem;line-height:1;transition:background .2s}
-.video-modal-close:hover{background:rgba(255,255,255,0.25)}
-.video-modal-box video{width:100%;height:auto;display:block;max-height:82vh}
-.video-modal-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.85rem;pointer-events:none}
-.video-modal-loading::after{content:'';width:32px;height:32px;border:3px solid rgba(255,255,255,0.15);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;margin-left:10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-@media (max-width:720px){.video-modal-box video{max-height:56vh}}
-
-/* Responsive */
-@media (max-width:720px){
-  .site-header{padding:56px 20px 32px}
-  .stats{gap:32px}
-  .container{padding:24px 12px 60px}
-  .card-body{padding:20px 16px}
-  .work-thumb{width:60px}
-  .work-thumb img{width:60px}
-  .work-row{gap:12px;padding:10px 6px}
-  .site-nav{justify-content:flex-start}
+.nav-initial{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.85rem;color:var(--text-secondary)}
+.nav-label{font-size:0.6rem;color:var(--text-tertiary);font-weight:500;white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
+.nav-search-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.08);
+  color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .2s
 }
-@media (max-width:420px){
-  .work-thumb{width:48px}
-  .work-thumb img{width:48px}
-  .btn-magnet{padding:6px 10px;font-size:0.65rem}
+.nav-search-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary)}
+
+/* Search Bar */
+.search-bar{
+  position:fixed;top:64px;left:0;right:0;z-index:99;
+  background:rgba(10,10,10,0.9);backdrop-filter:blur(20px);
+  padding:12px 4vw;border-bottom:1px solid rgba(255,255,255,0.05);
+  transform:translateY(-100%);transition:transform .3s ease;opacity:0;pointer-events:none
 }
-@media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{transition-duration:0.01ms!important;animation-duration:0.01ms!important}
+.search-bar.open{transform:translateY(0);opacity:1;pointer-events:auto}
+.search-input{
+  width:100%;max-width:600px;margin:0 auto;display:block;
+  background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);
+  border-radius:100px;padding:10px 20px;color:var(--text-primary);
+  font-size:0.9rem;outline:none;transition:border-color .2s,background .2s
 }
+.search-input:focus{border-color:var(--accent);background:rgba(255,255,255,0.12)}
+.search-input::placeholder{color:var(--text-tertiary)}
+
+/* Hero Banner */
+.hero-banner{
+  position:relative;height:70vh;min-height:500px;max-height:800px;
+  background-size:cover;background-position:center top;margin-top:0;
+  display:flex;align-items:flex-end;
+}
+.hero-gradient{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(10,10,10,1) 0%,rgba(10,10,10,0.7) 40%,rgba(10,10,10,0.2) 70%,transparent 100%);
+}
+.hero-content{
+  position:relative;z-index:2;padding:0 4vw 60px;width:100%;max-width:800px;
+}
+.hero-title{font-size:3rem;font-weight:800;margin-bottom:8px;letter-spacing:-1px;line-height:1.1}
+.hero-subtitle{font-size:1rem;color:var(--text-secondary);margin-bottom:8px}
+.hero-desc{font-size:0.9rem;color:var(--text-tertiary);margin-bottom:24px}
+.hero-actions{display:flex;gap:12px;flex-wrap:wrap}
+.hero-btn{
+  display:inline-flex;align-items:center;gap:8px;padding:12px 24px;
+  border-radius:var(--radius);font-size:0.95rem;font-weight:600;
+  text-decoration:none;border:none;cursor:pointer;transition:transform .2s,opacity .2s;
+}
+.hero-btn:hover{transform:scale(1.04)}
+.hero-btn-primary{background:var(--accent);color:#fff}
+.hero-btn-secondary{background:rgba(255,255,255,0.15);color:var(--text-primary);backdrop-filter:blur(10px)}
+.hero-btn-secondary:hover{background:rgba(255,255,255,0.25)}
+
+/* Actor Row */
+.actor-row{padding:0 4vw 40px;scroll-margin-top:80px}
+.actor-row.hidden{display:none}
+.actor-title{
+  display:flex;align-items:center;gap:12px;margin-bottom:16px;
+  font-size:1.25rem;font-weight:700;color:var(--text-primary)
+}
+.actor-name{font-size:1.4rem;font-weight:800}
+.actor-jp{font-size:0.85rem;color:var(--text-secondary);font-weight:500}
+.actor-code{font-size:0.75rem;color:var(--text-tertiary);background:var(--surface);padding:2px 8px;border-radius:4px}
+
+/* Scroll Track */
+.scroll-track{display:flex;gap:16px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding-bottom:16px}
+.scroll-track::-webkit-scrollbar{display:none}
+
+/* AV Card */
+.av-card{
+  flex-shrink:0;width:280px;position:relative;border-radius:var(--radius-lg);
+  overflow:hidden;background:var(--surface);transition:var(--transition);
+  scroll-snap-align:start;cursor:pointer;
+}
+.av-card:hover{
+  transform:scale(1.05);z-index:10;box-shadow:var(--shadow);
+}
+.av-card.prefetch-target::before{
+  content:'';position:absolute;inset:0;border-radius:var(--radius-lg);
+  border:2px solid var(--accent-gold);pointer-events:none;z-index:5;opacity:0.6;
+}
+
+.card-media{position:relative;aspect-ratio:3/4;overflow:hidden}
+.card-media img{width:100%;height:100%;object-fit:cover;transition:transform .4s ease}
+.av-card:hover .card-media img{transform:scale(1.1)}
+
+.card-overlay{
+  position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;
+  opacity:0;transition:opacity .3s ease;
+}
+.av-card:hover .card-overlay{opacity:1}
+
+.card-gradient{
+  position:absolute;inset:0;
+  background:linear-gradient(to top,rgba(0,0,0,0.9) 0%,rgba(0,0,0,0.4) 40%,transparent 70%);
+}
+
+.card-top{
+  position:relative;z-index:2;display:flex;align-items:center;gap:8px;
+  padding:12px;justify-content:flex-end;
+}
+.card-id{
+  font-size:0.75rem;font-weight:700;color:var(--text-primary);
+  background:rgba(0,0,0,0.6);padding:3px 8px;border-radius:4px;backdrop-filter:blur(4px)
+}
+.res-badge{
+  font-size:0.65rem;font-weight:600;color:var(--text-primary);
+  background:rgba(59,130,246,0.8);padding:2px 6px;border-radius:3px;
+}
+
+.card-bottom{
+  position:relative;z-index:2;padding:12px;
+}
+.card-actions{display:flex;gap:8px;margin-bottom:8px}
+.btn-action{
+  display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+  border-radius:var(--radius);font-size:0.8rem;font-weight:600;
+  border:none;cursor:pointer;text-decoration:none;transition:transform .2s,opacity .2s;
+}
+.btn-action:hover{transform:scale(1.05)}
+.btn-play{background:var(--accent);color:#fff}
+.btn-magnet{background:rgba(255,255,255,0.15);color:var(--text-primary);backdrop-filter:blur(10px)}
+.btn-magnet:hover{background:rgba(255,255,255,0.25)}
+.btn-copy{background:rgba(255,255,255,0.1);color:var(--text-secondary);padding:8px 10px}
+.btn-copy:hover{background:rgba(255,255,255,0.2);color:var(--text-primary)}
+
+.card-date{font-size:0.75rem;color:var(--text-secondary)}
+
+.card-info{padding:12px;min-height:48px}
+.card-desc{font-size:0.8rem;color:var(--text-secondary);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 
 /* Cache Badge */
-.cache-badge{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
-.cache-badge.cached{background:#34C759;box-shadow:0 0 0 2px rgba(52,199,89,0.2)}
-.cache-badge.downloading{background:#FF9500;animation:pulse 1.5s ease-in-out infinite}
-.cache-badge.pending{background:var(--text-3);opacity:0.4}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.cache-badge{
+  width:10px;height:10px;border-radius:50%;display:inline-block;
+  transition:box-shadow .3s;
+}
+.cache-badge.pending{background:var(--text-tertiary);box-shadow:0 0 0 0 transparent}
+.cache-badge.downloading{background:var(--accent-blue);box-shadow:0 0 8px var(--accent-blue);animation:pulse 1.5s infinite}
+.cache-badge.cached{background:var(--accent-green);box-shadow:0 0 8px var(--accent-green)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(59,130,246,0.4)}70%{box-shadow:0 0 0 6px rgba(59,130,246,0)}100%{box-shadow:0 0 0 0 rgba(59,130,246,0)}}
+
+/* Stats Bar */
+.stats-bar{
+  display:flex;gap:32px;padding:20px 4vw;border-bottom:1px solid var(--border);
+  background:var(--surface);
+}
+.stat{display:flex;align-items:center;gap:8px}
+.stat-num{font-size:1.5rem;font-weight:800;color:var(--accent)}
+.stat-label{font-size:0.8rem;color:var(--text-secondary)}
 
 /* Cache Panel */
-.cache-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin:20px auto;max-width:980px}
-.cache-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;padding:4px 0}
-.cache-panel-header h3{font-size:0.9rem;font-weight:700}
-.cache-panel-header .cache-summary{font-size:0.75rem;color:var(--text-3)}
-.cache-panel-body{display:none;margin-top:16px}
-.cache-panel-body.open{display:block}
-.cache-panel-toggle{width:28px;height:28px;border-radius:50%;background:var(--surface-2);display:flex;align-items:center;justify-content:center;transition:transform .2s}
-.cache-panel-header:hover .cache-panel-toggle{transform:rotate(90deg)}
-.cache-list{max-height:300px;overflow-y:auto}
-.cache-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
-.cache-item:last-child{border-bottom:none}
-.cache-item-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.cache-item-name{font-size:0.8rem;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cache-item-size{font-size:0.7rem;color:var(--text-3)}
-.cache-item-actions{display:flex;gap:6px;flex-shrink:0}
-.cache-item-del{font-size:0.65rem;font-weight:600;color:var(--accent-2);background:rgba(255,45,85,0.06);border:1px solid rgba(255,45,85,0.12);padding:4px 10px;border-radius:6px;cursor:pointer;transition:all .2s}
-.cache-item-del:hover{background:var(--accent-2);color:#fff}
-.cache-clear-btn{font-size:0.75rem;font-weight:600;color:var(--accent-2);background:rgba(255,45,85,0.06);border:1px solid rgba(255,45,85,0.12);padding:8px 16px;border-radius:8px;cursor:pointer;margin-top:12px;transition:all .2s}
-.cache-clear-btn:hover{background:var(--accent-2);color:#fff}
-</style>
+.cache-panel{
+  position:fixed;bottom:0;left:0;right:0;z-index:200;
+  background:rgba(20,20,20,0.95);backdrop-filter:blur(20px);
+  border-top:1px solid var(--border);transition:transform .3s ease;
+}
+.cache-panel-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 4vw;cursor:pointer;user-select:none;
+}
+.cache-panel-header:hover{background:rgba(255,255,255,0.02)}
+.cache-panel-body{
+  max-height:0;overflow:hidden;transition:max-height .3s ease;
+  padding:0 4vw;
+}
+.cache-panel-body.open{max-height:400px;padding-bottom:16px;overflow-y:auto}
+.cache-list{display:flex;flex-direction:column;gap:8px}
+.cache-item{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 14px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);
+}
+.cache-item-name{font-size:0.8rem;font-weight:600;color:var(--text-primary);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cache-item-meta{font-size:0.7rem;color:var(--text-tertiary)}
+.cache-item-bar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden;max-width:120px}
+.cache-item-bar-inner{height:100%;border-radius:2px;transition:width .3s}
+.cache-item-del{
+  font-size:0.7rem;padding:4px 10px;border-radius:4px;border:1px solid var(--border);
+  background:transparent;color:var(--text-secondary);cursor:pointer;transition:all .2s
+}
+.cache-item-del:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.cache-clear-btn{
+  font-size:0.8rem;padding:8px 16px;border-radius:var(--radius);border:none;
+  background:var(--accent);color:#fff;font-weight:600;cursor:pointer;margin-top:12px;
+  transition:opacity .2s;
+}
+.cache-clear-btn:hover{opacity:0.9}
 
+/* Video Modal */
+.video-modal-overlay{
+  position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.92);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .3s ease;
+}
+.video-modal-overlay.active{opacity:1;pointer-events:auto}
+.video-modal-box{
+  position:relative;width:90vw;max-width:1200px;aspect-ratio:16/9;
+  background:var(--surface);border-radius:var(--radius-lg);overflow:hidden;
+  box-shadow:0 24px 64px rgba(0,0,0,0.8);border:1px solid var(--border);
+}
+.video-modal-box video{width:100%;height:100%;object-fit:contain;background:#000}
+.video-modal-close{
+  position:absolute;top:16px;right:16px;z-index:10;
+  width:40px;height:40px;border-radius:50%;border:none;
+  background:rgba(0,0,0,0.6);color:#fff;font-size:1.5rem;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .2s;backdrop-filter:blur(10px)
+}
+.video-modal-close:hover{background:rgba(0,0,0,0.8)}
+.video-modal-loading{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;
+  background:rgba(0,0,0,0.85);color:var(--text-secondary);
+  font-size:0.9rem;z-index:5;
+}
+
+/* Back to Top */
+.back-to-top{
+  position:fixed;bottom:80px;right:24px;z-index:90;
+  width:44px;height:44px;border-radius:50%;border:none;
+  background:var(--surface);color:var(--text-primary);
+  border:1px solid var(--border);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;transform:translateY(20px);transition:var(--transition);
+  box-shadow:var(--shadow);
+}
+.back-to-top.visible{opacity:1;transform:translateY(0)}
+.back-to-top:hover{background:var(--surface-hover);border-color:var(--border-light)}
+
+/* Toast */
+#toast{
+  position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);
+  background:rgba(30,30,30,0.95);color:var(--text-primary);
+  padding:12px 24px;border-radius:100px;font-size:0.85rem;
+  z-index:9999;opacity:0;transition:all 0.3s ease;
+  pointer-events:none;white-space:nowrap;border:1px solid var(--border);
+  backdrop-filter:blur(10px);
+}
+
+/* Responsive */
+@media(max-width:768px){
+  .hero-title{font-size:2rem}
+  .hero-banner{height:50vh;min-height:350px}
+  .av-card{width:200px}
+  .top-nav{padding:0 16px}
+  .actor-row{padding:0 16px 32px}
+  .hero-content{padding:0 16px 40px}
+}
+</style>
 </head>
 <body>
 
-<header class="site-header">
-  <h1>${esc(config.title)}</h1>
-  <p>数据来源 ijavtorrent.com</p>
-  <div class="stats">
-    <div class="stat"><div class="stat-num">${solo.length}</div><div class="stat-label">女优</div></div>
-    <div class="stat"><div class="stat-num">${totalWorks}</div><div class="stat-label">作品</div></div>
-  </div>
-</header>
+<nav class="top-nav">
+  <div class="nav-brand">${esc(config.title)}</div>
+  <div class="nav-scroll" id="siteNav">${navHtml}</div>
+  <button class="nav-search-btn" id="searchToggle" aria-label="搜索">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+  </button>
+</nav>
 
-<div class="search-wrap">
-  <input type="search" class="search-input" id="search" placeholder="搜索女优、日文名或作品番号..." autocomplete="off">
+<div class="search-bar" id="searchBar">
+  <input type="search" class="search-input" id="searchInput" placeholder="搜索女优、日文名或作品番号..." autocomplete="off">
 </div>
 
-<nav class="site-nav" id="siteNav">
-${navHtml}</nav>
+${heroBannerHtml}
 
-<main class="container" id="main">
-${cardsHtml}</main>
+<div class="stats-bar">
+  <div class="stat"><div class="stat-num">${solo.length}</div><div class="stat-label">女优</div></div>
+  <div class="stat"><div class="stat-num">${totalWorks}</div><div class="stat-label">作品</div></div>
+</div>
 
-<footer class="site-footer">
-  <p>${esc(config.title)} · 数据来自 ijavtorrent.com</p>
-</footer>
+<main id="main">${rowsHtml}</main>
 
-<!-- Cache Management Panel -->
+<!-- Cache Panel -->
 <div class="cache-panel" id="cachePanel">
   <div class="cache-panel-header" id="cachePanelHeader">
-    <div style="display:flex;align-items:center;gap:10px">
-      <h3>📦 缓存管理</h3>
-      <span class="cache-summary" id="cacheSummary">加载中...</span>
+    <div style="display:flex;align-items:center;gap:12px">
+      <h3 style="font-size:0.95rem;font-weight:700">📦 缓存管理</h3>
+      <span class="cache-item-meta" id="cacheSummary">加载中...</span>
     </div>
-    <div class="cache-panel-toggle"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg></div>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
   </div>
   <div class="cache-panel-body" id="cachePanelBody">
     <div class="cache-list" id="cacheList"></div>
@@ -517,14 +652,17 @@ ${cardsHtml}</main>
 </div>
 
 <button class="back-to-top" id="backToTop" aria-label="回到顶部">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
 </button>
 
+<!-- Video Modal -->
 <div class="video-modal-overlay" id="videoModal">
   <div class="video-modal-box">
     <button class="video-modal-close" id="modalClose" aria-label="关闭">&times;</button>
     <video id="modalVideo" controls playsinline></video>
-    <div class="video-modal-loading" id="modalLoading" style="display:none"><span>正在加载...</span></div>
+    <div class="video-modal-loading" id="modalLoading" style="display:none">
+      <span>正在加载视频...</span>
+    </div>
   </div>
 </div>
 
@@ -532,31 +670,31 @@ ${cardsHtml}</main>
 (function(){
   'use strict';
 
-  // 封面切换（带动画）
-  document.querySelectorAll('.work-row').forEach(function(row){
-    row.addEventListener('click', function(e){
-      if(e.target.closest('.btn-magnet')) return;
-      var card = this.closest('.card');
-      var img = card.querySelector('.card-hero-img');
-      if(!img) return;
-      var cover = this.getAttribute('data-cover');
-      var def = this.getAttribute('data-default');
-      var target = cover || def;
-      if(!target || target === img.src) return;
+  // ===== Search Toggle =====
+  var searchToggle = document.getElementById('searchToggle');
+  var searchBar = document.getElementById('searchBar');
+  var searchInput = document.getElementById('searchInput');
+  searchToggle.addEventListener('click', function(){
+    searchBar.classList.toggle('open');
+    if(searchBar.classList.contains('open')) searchInput.focus();
+  });
 
-      img.style.opacity = '0.6';
-      setTimeout(function(){
-        img.src = target;
-        img.onload = function(){ img.style.opacity = '1'; };
-        img.onerror = function(){ img.style.opacity = '1'; };
-      }, 150);
-
-      card.querySelectorAll('.work-row').forEach(function(s){ s.classList.remove('active'); });
-      this.classList.add('active');
+  // ===== Search Filter =====
+  searchInput.addEventListener('input', function(){
+    var q = this.value.trim().toLowerCase();
+    document.querySelectorAll('.actor-row').forEach(function(row){
+      var name = (row.getAttribute('data-name') || '').toLowerCase();
+      var visible = !q || name.includes(q);
+      row.classList.toggle('hidden', !visible);
+    });
+    var visibleRows = document.querySelectorAll('.actor-row:not(.hidden)');
+    var visibleIds = new Set(Array.from(visibleRows).map(function(r){ return r.id; }));
+    document.querySelectorAll('.nav-item').forEach(function(n){
+      n.style.display = visibleIds.has(n.getAttribute('data-target')) ? '' : 'none';
     });
   });
 
-  // 导航高亮（Intersection Observer）
+  // ===== Nav Highlight =====
   var navItems = document.querySelectorAll('.nav-item');
   var observer = new IntersectionObserver(function(entries){
     entries.forEach(function(entry){
@@ -567,29 +705,12 @@ ${cardsHtml}</main>
         if(active) active.classList.add('active');
       }
     });
-  }, { rootMargin: '-45% 0px -45% 0px', threshold: 0 });
+  }, { rootMargin: '-40% 0px -40% 0px', threshold: 0 });
+  document.querySelectorAll('.actor-row').forEach(function(row){ observer.observe(row); });
 
-  document.querySelectorAll('.card').forEach(function(card){ observer.observe(card); });
-
-  // 搜索过滤
-  var searchInput = document.getElementById('search');
-  searchInput.addEventListener('input', function(){
-    var q = this.value.trim().toLowerCase();
-    document.querySelectorAll('.card').forEach(function(card){
-      var name = (card.getAttribute('data-name') || '').toLowerCase();
-      var visible = !q || name.includes(q);
-      card.style.display = visible ? '' : 'none';
-    });
-    var visibleCards = document.querySelectorAll('.card:not([style*="display: none"])');
-    var visibleIds = new Set(Array.from(visibleCards).map(function(c){ return c.id; }));
-    navItems.forEach(function(n){
-      n.style.display = visibleIds.has(n.getAttribute('data-target')) ? '' : 'none';
-    });
-  });
-
-  // ── 缓存状态管理（libtorrent 下载 + 本地文件播放）─────────────────
+  // ===== Cache Management =====
   function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  var cacheState = {};  // hash -> { cached, downloading, ready, progress, peers, size, name, hash }
+  var cacheState = {};
 
   function formatBytes(b){
     if(b === 0) return '0 B';
@@ -622,37 +743,33 @@ ${cardsHtml}</main>
     var summary = document.getElementById('cacheSummary');
     var clearBtn = document.getElementById('cacheClearBtn');
     if(!list) return;
-
     var items = Object.values(cacheState).filter(function(s){ return s.ready || s.downloading; });
     var cachedCount = items.filter(function(s){ return s.cached; }).length;
     var totalSize = items.reduce(function(sum, s){ return sum + (s.size || 0); }, 0);
-
     summary.textContent = cachedCount + ' 已缓存 / ' + items.length + ' 任务';
     clearBtn.style.display = items.length > 0 ? '' : 'none';
-
     if(items.length === 0){
-      list.innerHTML = '<div style="text-align:center;color:var(--text-3);font-size:0.8rem;padding:20px">暂无缓存任务</div>';
+      list.innerHTML = '<div style="text-align:center;color:var(--text-tertiary);font-size:0.8rem;padding:20px">暂无缓存任务</div>';
       return;
     }
-
     list.innerHTML = items.map(function(s){
       var pct = s.cached ? 100 : (s.progress || 0);
       var isCached = s.cached;
+      var cardId = '';
+      var badge = document.querySelector('.cache-badge[data-hash="' + s.hash + '"]');
+      if(badge) cardId = '#' + (badge.getAttribute('data-id') || '');
       return '<div class="cache-item" data-hash="' + s.hash + '">'
-        + '<div class="cache-item-info">'
-        +   '<span class="cache-item-name">' + escHtml(s.name || s.hash.slice(0,12)) + '</span>'
-        +   '<span class="cache-item-size">' + (isCached ? '✅ ' : '📥 ') + formatBytes(s.size || 0)
-        +     (s.video_size ? ' / ' + formatBytes(s.video_size) : '') + '</span>'
+        + '<div>'
+        +   '<div class="cache-item-name">' + escHtml(s.name || s.hash.slice(0,12)) + '</div>'
+        +   '<div class="cache-item-meta">' + cardId + ' ' + (isCached ? '✅ ' : '📥 ') + formatBytes(s.size || 0)
+        +     (s.video_size ? ' / ' + formatBytes(s.video_size) : '') + '</div>'
         + '</div>'
-        + '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px">'
-        +   '<div class="cache-item-bar"><div class="cache-item-bar-inner" style="width:' + pct + '%;background:' + (isCached ? '#34C759' : 'var(--accent)') + '"></div></div>'
-        +   '<div class="cache-item-actions">'
-        +     '<button class="cache-item-del" data-hash="' + s.hash + '">删除</button>'
-        +   '</div>'
+        + '<div style="display:flex;align-items:center;gap:12px">'
+        +   '<div class="cache-item-bar"><div class="cache-item-bar-inner" style="width:' + pct + '%;background:' + (isCached ? '#22c55e' : '#3b82f6') + '"></div></div>'
+        +   '<button class="cache-item-del" data-hash="' + s.hash + '">删除</button>'
         + '</div>'
         + '</div>';
     }).join('');
-
     list.querySelectorAll('.cache-item-del').forEach(function(btn){
       btn.addEventListener('click', function(){
         var h = this.getAttribute('data-hash');
@@ -660,19 +777,12 @@ ${cardsHtml}</main>
         fetch('/api/cache/' + h, { method: 'DELETE' })
           .then(function(r){ return r.json(); })
           .then(function(data){
-            if(data.deleted){
-              delete cacheState[h];
-              updateCacheBadges();
-              updateCachePanel();
-              showToast('已删除');
-            }
-          })
-          .catch(function(err){ showToast('删除失败'); });
+            if(data.deleted){ delete cacheState[h]; updateCacheBadges(); updateCachePanel(); showToast('已删除'); }
+          }).catch(function(){ showToast('删除失败'); });
       });
     });
   }
 
-  // 轮询缓存状态
   function pollCacheState(){
     fetch('/api/cache')
       .then(function(r){ return r.json(); })
@@ -681,63 +791,44 @@ ${cardsHtml}</main>
           data.items.forEach(function(item){
             var st = cacheState[item.hash] || {};
             cacheState[item.hash] = {
-              cached: item.cached,
-              head_ready: item.head_ready,
+              cached: item.cached, head_ready: item.head_ready,
               downloading: item.progress < 100 && item.peers > 0,
-              ready: item.ready,
-              progress: item.progress,
-              peers: item.peers,
-              size: item.local_size,
-              video_size: item.video_size,
-              name: item.video_file || item.name || item.hash.slice(0,12),
-              hash: item.hash
+              ready: item.ready, progress: item.progress, peers: item.peers,
+              size: item.local_size, video_size: item.video_size,
+              name: item.video_file || item.name || item.hash.slice(0,12), hash: item.hash
             };
           });
-          updateCacheBadges();
-          updateCachePanel();
+          updateCacheBadges(); updateCachePanel();
         }
-      })
-      .catch(function(err){ console.error('Cache poll error:', err); });
+      }).catch(function(err){ console.error('Cache poll error:', err); });
   }
 
-  // 预缓存：页面加载后添加最新的 13 个 magnet
   function prefetchAll(){
     var magnets = [];
     var seen = new Set();
     document.querySelectorAll('[data-magnet]').forEach(function(el){
       var m = el.getAttribute('data-magnet');
       var h = extractHash(m);
-      if(h && !seen.has(h)){
-        seen.add(h);
-        magnets.push(m);
-      }
+      if(h && !seen.has(h)){ seen.add(h); magnets.push(m); }
     });
-
     var prefetchMagnets = magnets.slice(0, 13);
     console.log('[prefetch] ' + prefetchMagnets.length + ' / ' + magnets.length + ' magnets');
-
     var idx = 0;
     function next(){
       if(idx >= prefetchMagnets.length) return;
       var m = prefetchMagnets[idx++];
       fetch('/torrent/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ magnet: m, prefetch: true })
       }).catch(function(err){});
       setTimeout(next, 500);
     }
     next();
-
-    // 批量检查本地缓存状态
     checkAllCaches();
-
-    // 开始轮询
     setTimeout(function(){ pollCacheState(); }, 5000);
     setInterval(pollCacheState, 10000);
   }
 
-  // 检查所有 hash 的本地缓存
   function checkAllCaches(){
     var hashes = [];
     document.querySelectorAll('[data-magnet]').forEach(function(el){
@@ -745,7 +836,6 @@ ${cardsHtml}</main>
       var h = extractHash(m);
       if(h && hashes.indexOf(h) < 0) hashes.push(h);
     });
-
     var batchSize = 5;
     function checkBatch(start){
       var batch = hashes.slice(start, start + batchSize);
@@ -757,45 +847,25 @@ ${cardsHtml}</main>
           .then(function(data){
             var st = cacheState[h] || {};
             cacheState[h] = {
-              cached: !!data.cached,
-              head_ready: !!data.head_ready,
-              downloading: st.downloading || false,
-              ready: st.ready || false,
-              progress: st.progress || 0,
-              peers: st.peers || 0,
-              size: data.size || 0,
-              name: data.name || st.name || h.slice(0,12),
-              hash: h
+              cached: !!data.cached, head_ready: !!data.head_ready,
+              downloading: st.downloading || false, ready: st.ready || false,
+              progress: st.progress || 0, peers: st.peers || 0,
+              size: data.size || 0, name: data.name || st.name || h.slice(0,12), hash: h
             };
             done++;
-            if(done >= batch.length){
-              updateCacheBadges();
-              if(start + batchSize < hashes.length){
-                setTimeout(function(){ checkBatch(start + batchSize); }, 100);
-              }
-            }
-          })
-          .catch(function(err){
-            done++;
-            if(done >= batch.length){
-              if(start + batchSize < hashes.length){
-                setTimeout(function(){ checkBatch(start + batchSize); }, 100);
-              }
-            }
-          });
+            if(done >= batch.length){ updateCacheBadges(); if(start + batchSize < hashes.length){ setTimeout(function(){ checkBatch(start + batchSize); }, 100); } }
+          }).catch(function(){ done++; if(done >= batch.length && start + batchSize < hashes.length){ setTimeout(function(){ checkBatch(start + batchSize); }, 100); } });
       });
     }
     checkBatch(0);
   }
 
-  // 缓存面板折叠
   document.getElementById('cachePanelHeader').addEventListener('click', function(){
     var body = document.getElementById('cachePanelBody');
     body.classList.toggle('open');
     if(body.classList.contains('open')) pollCacheState();
   });
 
-  // 清理全部缓存
   document.getElementById('cacheClearBtn').addEventListener('click', function(){
     if(!confirm('确定要清理全部缓存吗？')) return;
     fetch('/api/cache')
@@ -805,38 +875,23 @@ ${cardsHtml}</main>
         var cleared = 0;
         items.forEach(function(item){
           fetch('/api/cache/' + item.hash, { method: 'DELETE' })
-            .then(function(){
-              cleared++;
-              delete cacheState[item.hash];
-              if(cleared >= items.length){
-                updateCacheBadges();
-                updateCachePanel();
-                showToast('已清理 ' + items.length + ' 个缓存');
-              }
-            })
+            .then(function(){ cleared++; delete cacheState[item.hash]; if(cleared >= items.length){ updateCacheBadges(); updateCachePanel(); showToast('已清理 ' + items.length + ' 个缓存'); } })
             .catch(function(){});
         });
         if(items.length === 0) updateCachePanel();
       });
   });
 
-  // 页面加载后启动
   if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', prefetchAll);
-  } else {
-    prefetchAll();
-  }
+  } else { prefetchAll(); }
 
-  // 回到顶部
+  // Back to Top
   var btnTop = document.getElementById('backToTop');
-  window.addEventListener('scroll', function(){
-    btnTop.classList.toggle('visible', window.scrollY > 500);
-  });
-  btnTop.addEventListener('click', function(){
-    window.scrollTo({top:0, behavior:'smooth'});
-  });
+  window.addEventListener('scroll', function(){ btnTop.classList.toggle('visible', window.scrollY > 500); });
+  btnTop.addEventListener('click', function(){ window.scrollTo({top:0, behavior:'smooth'}); });
 
-  // 弹窗视频播放
+  // ===== Video Modal =====
   var modalOverlay = document.getElementById('videoModal');
   var modalVideo = document.getElementById('modalVideo');
   var modalLoading = document.getElementById('modalLoading');
@@ -844,11 +899,9 @@ ${cardsHtml}</main>
 
   function closeModal(){
     modalOverlay.classList.remove('active');
-    modalVideo.pause();
-    modalVideo.src = '';
-    modalVideo.removeAttribute('src');
+    modalVideo.pause(); modalVideo.src = ''; modalVideo.removeAttribute('src');
     modalLoading.style.display = 'none';
-    modalLoading.innerHTML = '<span>正在加载...</span>';
+    modalLoading.innerHTML = '<span>正在加载视频...</span>';
     if(progressTimer){ clearInterval(progressTimer); progressTimer = null; }
   }
 
@@ -856,23 +909,16 @@ ${cardsHtml}</main>
   modalOverlay.addEventListener('click', function(e){ if(e.target === this) closeModal(); });
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeModal(); });
 
-  // Toast
   function showToast(msg){
     var t = document.getElementById('toast');
     if(!t){
-      t = document.createElement('div');
-      t.id = 'toast';
-      t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);background:rgba(0,0,0,0.8);color:#fff;padding:10px 20px;border-radius:20px;font-size:0.85rem;z-index:9999;opacity:0;transition:all 0.3s ease;pointer-events:none;white-space:nowrap;';
+      t = document.createElement('div'); t.id = 'toast';
       document.body.appendChild(t);
     }
     t.textContent = msg;
-    t.style.opacity = '1';
-    t.style.transform = 'translateX(-50%) translateY(0)';
+    t.style.opacity = '1'; t.style.transform = 'translateX(-50%) translateY(0)';
     if(t._timer) clearTimeout(t._timer);
-    t._timer = setTimeout(function(){
-      t.style.opacity = '0';
-      t.style.transform = 'translateX(-50%) translateY(20px)';
-    }, 2000);
+    t._timer = setTimeout(function(){ t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(20px)'; }, 2000);
   }
 
   function extractHash(magnet){
@@ -880,34 +926,27 @@ ${cardsHtml}</main>
     return m ? m[1].toLowerCase() : '';
   }
 
-  // 复制 magnet
+  // Copy Magnet
   document.querySelectorAll('.btn-copy').forEach(function(btn){
     btn.addEventListener('click', function(e){
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       var magnet = this.getAttribute('data-magnet');
       if(!magnet) return;
       if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(magnet).then(function(){ showToast('已复制磁力链接'); })
-          .catch(function(){ showToast('复制失败'); });
+        navigator.clipboard.writeText(magnet).then(function(){ showToast('已复制磁力链接'); }).catch(function(){ showToast('复制失败'); });
       } else {
-        var ta = document.createElement('textarea');
-        ta.value = magnet;
-        ta.style.cssText = 'position:fixed;opacity:0';
-        document.body.appendChild(ta);
-        ta.select();
-        try{ document.execCommand('copy'); showToast('已复制磁力链接'); }
-        catch(err){ showToast('复制失败'); }
+        var ta = document.createElement('textarea'); ta.value = magnet; ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); showToast('已复制磁力链接'); } catch(err){ showToast('复制失败'); }
         document.body.removeChild(ta);
       }
     });
   });
 
-  // 播放按钮：优先本地缓存，无缓存启动下载
+  // Play Button
   document.querySelectorAll('.btn-play').forEach(function(btn){
     btn.addEventListener('click', function(e){
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       var magnet = this.getAttribute('data-magnet');
       if(!magnet) return;
       var hash = extractHash(magnet);
@@ -917,31 +956,18 @@ ${cardsHtml}</main>
       modalOverlay.classList.add('active');
       if(progressTimer){ clearInterval(progressTimer); progressTimer = null; }
 
-      // 第一步：检查本地缓存
       fetch('/api/check/' + hash)
         .then(function(r){ return r.json(); })
         .then(function(data){
-          if(data.head_ready){
-            // 头部就绪 → 直接播放
-            startPlayback(hash);
-            return;
-          }
-
-          // 无缓存 → 启动 torrent 下载
+          if(data.head_ready){ startPlayback(hash); return; }
           modalLoading.innerHTML = '<span>正在连接种子...</span>';
           fetch('/torrent/add', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ magnet: magnet })
           })
           .then(function(r){ return r.json(); })
           .then(function(data){
-            if(data.error){
-              modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>';
-              return;
-            }
-
-            // 轮询下载进度
+            if(data.error){ modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>'; return; }
             var startTime = Date.now();
             progressTimer = setInterval(function(){
               fetch('/torrent/status/' + hash)
@@ -950,42 +976,19 @@ ${cardsHtml}</main>
                   var elapsed = Math.round((Date.now() - startTime) / 1000);
                   var speed = (s.download_rate / 1024 / 1024).toFixed(1);
                   var pct = s.progress.toFixed(1);
-
-                  if(s.head_ready){
-                    // 头部就绪 → 开始播放
-                    clearInterval(progressTimer);
-                    progressTimer = null;
-                    startPlayback(hash);
-                    return;
-                  }
-
-                  if(elapsed > 60){
-                    clearInterval(progressTimer);
-                    progressTimer = null;
-                    modalLoading.innerHTML = '<span>下载超时，请稍后再试</span>';
-                    return;
-                  }
-
+                  if(s.head_ready){ clearInterval(progressTimer); progressTimer = null; startPlayback(hash); return; }
+                  if(elapsed > 60){ clearInterval(progressTimer); progressTimer = null; modalLoading.innerHTML = '<span>下载超时，请稍后再试</span>'; return; }
                   modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
-                })
-                .catch(function(err){});
+                }).catch(function(err){});
             }, 1500);
-          })
-          .catch(function(err){
-            modalLoading.innerHTML = '<span>无法连接下载服务器</span>';
-          });
-        })
-        .catch(function(err){
-          modalLoading.innerHTML = '<span>无法连接缓存服务器</span>';
-        });
+          }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接下载服务器</span>'; });
+        }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接缓存服务器</span>'; });
     });
   });
 
   function startPlayback(hash){
     modalLoading.innerHTML = '<span>正在加载视频...</span>';
     modalVideo.currentHash = hash;
-
-    // 先绑定监听器，再设置 src（防止 canplay 在绑定前触发）
     var canplayFired = false;
     function onCanplay(){
       canplayFired = true;
@@ -993,15 +996,10 @@ ${cardsHtml}</main>
       modalVideo.play().catch(function(err){ console.error('Play error:', err); });
     }
     modalVideo.addEventListener('canplay', onCanplay, { once: true });
-
-    // 备用：loadedmetadata 也触发（某些浏览器 canplay 不可靠）
     modalVideo.addEventListener('loadedmetadata', function(){
-      if(!canplayFired){
-        modalLoading.innerHTML = '<span>缓冲第一帧...</span>';
-      }
+      if(!canplayFired) modalLoading.innerHTML = '<span>缓冲第一帧...</span>';
     }, { once: true });
 
-    // 轮询下载状态，在缓冲时显示速率和进度
     var statusTimer = null;
     function startStatusPoll(){
       if(statusTimer) return;
@@ -1016,67 +1014,28 @@ ${cardsHtml}</main>
             if(modalVideo.paused || modalVideo.readyState < 3){
               modalLoading.innerHTML = '<span>缓冲中 | ' + speed + ' MB/s | 已缓存 ' + buf + ' (' + pct + '%)</span>';
             }
-          })
-          .catch(function(err){});
+          }).catch(function(err){});
       }, 2000);
     }
-    function stopStatusPoll(){
-      if(statusTimer){ clearInterval(statusTimer); statusTimer = null; }
-    }
+    function stopStatusPoll(){ if(statusTimer){ clearInterval(statusTimer); statusTimer = null; } }
 
-    modalVideo.addEventListener('waiting', function(){
-      modalLoading.style.display = 'flex';
-      startStatusPoll();
-    });
+    modalVideo.addEventListener('waiting', function(){ modalLoading.style.display = 'flex'; startStatusPoll(); });
+    modalVideo.addEventListener('playing', function(){ modalLoading.style.display = 'none'; stopStatusPoll(); });
+    modalVideo.addEventListener('seeking', function(){ modalLoading.style.display = 'flex'; modalLoading.innerHTML = '<span>定位中...</span>'; startStatusPoll(); });
+    modalVideo.addEventListener('seeked', function(){ stopStatusPoll(); if(!modalVideo.paused) modalLoading.style.display = 'none'; });
+    modalVideo.addEventListener('error', function(){ stopStatusPoll(); modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>'; }, { once: true });
 
-    modalVideo.addEventListener('playing', function(){
-      modalLoading.style.display = 'none';
-      stopStatusPoll();
-    });
-
-    modalVideo.addEventListener('seeking', function(){
-      modalLoading.style.display = 'flex';
-      modalLoading.innerHTML = '<span>定位中...</span>';
-      startStatusPoll();
-    });
-
-    modalVideo.addEventListener('seeked', function(){
-      stopStatusPoll();
-      if(!modalVideo.paused){
-        modalLoading.style.display = 'none';
-      }
-    });
-
-    modalVideo.addEventListener('error', function(){
-      stopStatusPoll();
-      modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>';
-    }, { once: true });
-
-    // 设置 src 并强制加载
     modalVideo.src = '/stream/' + hash;
     modalVideo.load();
-
-    // 30秒超时
-    setTimeout(function(){
-      if(modalLoading.style.display !== 'none'){
-        stopStatusPoll();
-        modalLoading.innerHTML = '<span>加载超时，请检查文件完整性</span>';
-      }
-    }, 30000);
+    setTimeout(function(){ if(modalLoading.style.display !== 'none'){ stopStatusPoll(); modalLoading.innerHTML = '<span>加载超时，请检查文件完整性</span>'; } }, 30000);
   }
 
-  // 键盘快捷键：← 后退 10s，→ 前进 10s，ESC 关闭
+  // Keyboard Shortcuts
   document.addEventListener('keydown', function(e){
     if(!modalOverlay.classList.contains('active')) return;
-    if(e.key === 'ArrowLeft'){
-      e.preventDefault();
-      modalVideo.currentTime = Math.max(0, modalVideo.currentTime - 10);
-    } else if(e.key === 'ArrowRight'){
-      e.preventDefault();
-      modalVideo.currentTime = Math.min(modalVideo.duration || Infinity, modalVideo.currentTime + 10);
-    } else if(e.key === 'Escape'){
-      closeModal();
-    }
+    if(e.key === 'ArrowLeft'){ e.preventDefault(); modalVideo.currentTime = Math.max(0, modalVideo.currentTime - 10); }
+    else if(e.key === 'ArrowRight'){ e.preventDefault(); modalVideo.currentTime = Math.min(modalVideo.duration || Infinity, modalVideo.currentTime + 10); }
+    else if(e.key === 'Escape'){ closeModal(); }
   });
 
 })();
