@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// generate-report.js — 高性能外部图片版本
+// generate-report.js — high-performance external image version
 
 const fs = require('fs');
 const path = require('path');
@@ -10,7 +10,7 @@ const CONFIG_PATH = process.argv[2] || path.join(TOOLBOX, 'config.json');
 const OUT_PATH = process.argv[3] || path.join(TOOLBOX, '..', '..', 'actresses-report.html');
 const IMAGES_DIR = path.join(TOOLBOX, 'images');
 
-// ── 日志双写（如果 LOG_DIR 环境变量设置）──
+// ── dual log output (if LOG_DIR env var set) ──
 const LOG_DIR = process.env.LOG_DIR;
 if(LOG_DIR){
   fs.mkdirSync(LOG_DIR, {recursive: true});
@@ -26,7 +26,7 @@ const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 const solo = config.actresses.filter(a => !a.type || a.type === 'solo');
 console.log('[filter] Solo: ' + solo.length + ' actresses');
 
-// 确保图片目录存在
+// ensure image directories exist
 const heroesDir = path.join(IMAGES_DIR, 'heroes');
 const worksDir = path.join(IMAGES_DIR, 'works');
 fs.mkdirSync(heroesDir, { recursive: true });
@@ -78,7 +78,7 @@ let totalWorks = 0;
 let navHtml = '';
 let cardsHtml = '';
 
-// ── 从 DuckDB 直接读取数据 ──
+// ── read data directly from DuckDB ──
 const duckdb = require('duckdb');
 const DB_DATA = {};
 await new Promise(function(resolve, reject){
@@ -126,7 +126,7 @@ await new Promise(function(resolve, reject){
         });
       }
     });
-    // 查询社交动态
+    // query social posts
     conn.all(`
       SELECT a.code as actress_code, s.platform, s.content, s.post_url, s.posted_at
       FROM social_posts s
@@ -175,18 +175,18 @@ const actressData = solo.map(function(a) {
     };
   });
 
-  // 按日期倒序（最新的在前）
+  // sort by date descending (newest first)
   works.sort(function(a, b) {
     const da = a.date ? (a.date.split('/')[2] + a.date.split('/')[1] + a.date.split('/')[0]) : '00000000';
     const db = b.date ? (b.date.split('/')[2] + b.date.split('/')[1] + b.date.split('/')[0]) : '00000000';
     return db.localeCompare(da);
   });
 
-  // 限制最近 3 部
+  // limit to latest 3 works
   works = works.slice(0, 3);
   totalWorks += works.length;
 
-  // 社交动态（去重，最多3条）
+  // social posts (dedup, max 3)
   const allPosts = DB_DATA[a.code] ? (DB_DATA[a.code].posts || []) : [];
   const seen = new Set();
   const posts = [];
@@ -207,7 +207,7 @@ const actressData = solo.map(function(a) {
   };
 });
 
-// 按每个女优最新作品的日期升序排序整个 stream
+// sort entire stream by each actress's latest work date ascending
 actressData.sort(function(ad, bd) {
   const da = ad.works.length > 0 && ad.works[0].date
     ? (ad.works[0].date.split('/')[2] + ad.works[0].date.split('/')[1] + ad.works[0].date.split('/')[0])
@@ -219,7 +219,7 @@ actressData.sort(function(ad, bd) {
 });
 
 
-// 分配全局 id（从 1 开始）
+// assign global id (starting from 1)
 var globalIdMap = {};
 var gid = 1;
 actressData.forEach(function(data) {
@@ -238,7 +238,7 @@ actressData.forEach(function(data) {
   const works = data.works;
   const initial = a.name.charAt(0);
 
-  // 保存女优封面
+  // save actress hero cover
   let heroSaved = { success: false };
   if (works.length > 0 && works[0].cover_local && fs.existsSync(works[0].cover_local)) {
     const src = works[0].cover_local;
@@ -273,7 +273,7 @@ actressData.forEach(function(data) {
   const hasHero = heroSaved.success;
   const heroRel = hasHero ? rel(heroSaved.path) : '';
 
-  // 导航项
+  // nav item
   const navImg = hasHero
     ? `<img src="${esc(heroRel)}" alt="${esc(a.name)}" loading="lazy" decoding="async">`
     : `<span class="nav-initial">${initial}</span>`;
@@ -282,7 +282,7 @@ actressData.forEach(function(data) {
            + `    <span class="nav-label">${esc(a.name)}</span>`
            + `  </a>`;
 
-  // 作品卡片
+  // work cards
   let cardsHtml = '';
   const actressWorksDir = path.join(worksDir, id);
   fs.mkdirSync(actressWorksDir, { recursive: true });
@@ -321,14 +321,14 @@ actressData.forEach(function(data) {
     const globalId = globalIdMap[w.code.toUpperCase()] || 0;
     const isPrefetchTarget = (globalId % 3 === 1);
     const prefetchClass = isPrefetchTarget ? 'prefetch-target' : '';
-    const cacheBadge = hashAttr ? `<span class="cache-badge pending ${prefetchClass}" data-hash="${hashAttr}" data-id="${globalId}" title="未缓存"></span>` : '';
+    const cacheBadge = hashAttr ? `<span class="cache-badge pending ${prefetchClass}" data-hash="${hashAttr}" data-id="${globalId}" title="Not cached"></span>` : '';
 
     const res = w.resolution || '';
     let btnPlay = '', btnMagnet = '', btnCopy = '';
     if (w.magnet) {
-      btnPlay = `<button class="btn-action btn-play" data-magnet="${esc(w.magnet)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>播放</span></button>`;
-      btnMagnet = `<a class="btn-action btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg><span>磁力</span></a>`;
-      btnCopy = `<button class="btn-action btn-copy" data-magnet="${esc(w.magnet)}" title="复制磁力链接"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
+      btnPlay = `<button class="btn-action btn-play" data-magnet="${esc(w.magnet)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Play</span></button>`;
+      btnMagnet = `<a class="btn-action btn-magnet" href="${esc(w.magnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg><span>Magnet</span></a>`;
+      btnCopy = `<button class="btn-action btn-copy" data-magnet="${esc(w.magnet)}" title="Copy magnet link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
     }
 
     const dateStr = w.date ? `<span class="card-date">${esc(w.date)}</span>` : '';
@@ -351,7 +351,7 @@ actressData.forEach(function(data) {
                + `</article>`;
   });
 
-  // Hero banner（第一个有封面的 actress）
+  // Hero banner (first actress with cover)
   if (!heroBannerHtml && hasHero) {
     const firstWork = works[0];
     const firstMagnet = firstWork ? firstWork.magnet : '';
@@ -360,22 +360,22 @@ actressData.forEach(function(data) {
                    + `  <div class="hero-content">`
                    + `    <h1 class="hero-title">${esc(a.name)}</h1>`
                    + `    <p class="hero-subtitle">${esc(a.jp)} · ${esc(a.code)}</p>`
-                   + `    <p class="hero-desc">${works.length} 部最新作品</p>`
+                   + `    <p class="hero-desc">${works.length} latest works</p>`
                    + `    <div class="hero-actions">`
-                   + `      <button class="hero-btn hero-btn-primary btn-play" data-magnet="${esc(firstMagnet)}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>立即播放</button>`
-                   + `      <a class="hero-btn hero-btn-secondary" href="${esc(firstMagnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>磁力链接</a>`
+                   + `      <button class="hero-btn hero-btn-primary btn-play" data-magnet="${esc(firstMagnet)}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Play Now</button>`
+                   + `      <a class="hero-btn hero-btn-secondary" href="${esc(firstMagnet)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>Magnet Link</a>`
                    + `    </div>`
                    + `  </div>`
                    + `</section>`;
   }
 
-  // 社交动态 HTML
+  // social feed HTML
   let socialHtml = '';
   if (data.posts.length > 0) {
     socialHtml = `<div class="social-feed">`
                + `  <div class="social-feed-header">`
                + `    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`
-               + `    <span>最新动态</span>`
+               + `    <span>Latest</span>`
                + `  </div>`
                + `  <div class="social-posts">`;
     data.posts.forEach(function(p) {
@@ -396,7 +396,7 @@ actressData.forEach(function(data) {
             + `</section>`;
 });
 
-// 构建完整 HTML
+// build full HTML
 const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -782,30 +782,30 @@ body{
 <nav class="top-nav">
   <div class="nav-brand">${esc(config.title)}</div>
   <div class="nav-scroll" id="siteNav">${navHtml}</div>
-  <button class="nav-search-btn" id="searchToggle" aria-label="搜索">
+  <button class="nav-search-btn" id="searchToggle" aria-label="Search">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
   </button>
-  <button class="nav-magnet-btn" id="magnetToggle" aria-label="Magnet 播放器">
+  <button class="nav-magnet-btn" id="magnetToggle" aria-label="Magnet Player">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
   </button>
-  <button class="nav-refresh-btn" id="refreshToggle" aria-label="刷新数据" title="重新抓取数据并重排">
+  <button class="nav-refresh-btn" id="refreshToggle" aria-label="Refresh" title="Re-fetch data and regenerate">
     <span id="refreshIcon">🔄</span>
   </button>
-  <button class="nav-theme-btn" id="themeToggle" aria-label="切换主题">
+  <button class="nav-theme-btn" id="themeToggle" aria-label="Toggle theme">
     <svg class="theme-icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
     <svg class="theme-icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" style="display:none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
   </button>
 </nav>
 
 <div class="search-bar" id="searchBar">
-  <input type="search" class="search-input" id="searchInput" placeholder="搜索女优、日文名或作品番号..." autocomplete="off">
+  <input type="search" class="search-input" id="searchInput" placeholder="Search actress, JP name or code..." autocomplete="off">
 </div>
 
 ${heroBannerHtml}
 
 <div class="stats-bar">
-  <div class="stat"><div class="stat-num">${solo.length}</div><div class="stat-label">女优</div></div>
-  <div class="stat"><div class="stat-num">${totalWorks}</div><div class="stat-label">作品</div></div>
+  <div class="stat"><div class="stat-num">${solo.length}</div><div class="stat-label">Actresses</div></div>
+  <div class="stat"><div class="stat-num">${totalWorks}</div><div class="stat-label">Works</div></div>
 </div>
 
 <main id="main">${rowsHtml}</main>
@@ -814,31 +814,31 @@ ${heroBannerHtml}
 <div class="cache-panel" id="cachePanel">
   <div class="cache-panel-header" id="cachePanelHeader">
     <div style="display:flex;align-items:center;gap:12px">
-      <h3 style="font-size:0.95rem;font-weight:700">📦 缓存管理</h3>
-      <span class="cache-item-meta" id="cacheSummary">加载中...</span>
+      <h3 style="font-size:0.95rem;font-weight:700">📦 Cache Manager</h3>
+      <span class="cache-item-meta" id="cacheSummary">Loading...</span>
     </div>
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
   </div>
   <div class="cache-panel-body" id="cachePanelBody">
     <div class="cache-list" id="cacheList"></div>
     <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="cache-clear-btn" id="cacheClearBtn" style="display:none;flex:1">清理全部缓存</button>
-      <button class="cache-clear-btn" id="viewLogsBtn" style="flex:1;background:rgba(249,115,22,0.1);color:var(--accent)">📋 查看日志</button>
+      <button class="cache-clear-btn" id="cacheClearBtn" style="display:none;flex:1">Clear All</button>
+      <button class="cache-clear-btn" id="viewLogsBtn" style="flex:1;background:rgba(249,115,22,0.1);color:var(--accent)">📋 View Logs</button>
     </div>
   </div>
 </div>
 
-<button class="back-to-top" id="backToTop" aria-label="回到顶部">
+<button class="back-to-top" id="backToTop" aria-label="Back to top">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
 </button>
 
 <!-- Video Modal -->
 <div class="video-modal-overlay" id="videoModal">
   <div class="video-modal-box">
-    <button class="video-modal-close" id="modalClose" aria-label="关闭">&times;</button>
+    <button class="video-modal-close" id="modalClose" aria-label="Close">&times;</button>
     <video id="modalVideo" controls playsinline></video>
     <div class="video-modal-loading" id="modalLoading" style="display:none">
-      <span>正在加载视频...</span>
+      <span>Loading video...</span>
     </div>
   </div>
 </div>
@@ -846,19 +846,19 @@ ${heroBannerHtml}
 <!-- Magnet Player Modal -->
 <div class="magnet-modal-overlay" id="magnetModal">
   <div class="magnet-modal-box">
-    <button class="magnet-modal-close" id="magnetModalClose" aria-label="关闭">&times;</button>
+    <button class="magnet-modal-close" id="magnetModalClose" aria-label="Close">&times;</button>
     <div class="magnet-modal-content">
-      <h2 class="magnet-modal-title">🧲 Magnet 播放器</h2>
-      <p class="magnet-modal-desc">粘贴任意磁力链接，利用本地缓存实时播放预览。</p>
+      <h2 class="magnet-modal-title">🧲 Magnet Player</h2>
+      <p class="magnet-modal-desc">Paste any magnet link to stream via local cache.</p>
       <textarea class="magnet-input" id="magnetInput" placeholder="magnet:?xt=urn:btih:..." rows="3"></textarea>
       <div class="magnet-modal-actions">
         <button class="magnet-play-btn" id="magnetPlayBtn">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          <span>立即播放</span>
+          <span>Play Now</span>
         </button>
       </div>
       <div class="magnet-modal-hint">
-        <span>💡 提示：如果该视频已在缓存中，会立即播放；否则需要等待头部下载（约 30-60 秒）</span>
+        <span>💡 Tip: If cached, plays instantly; otherwise wait for header (~30-60s)</span>
       </div>
     </div>
   </div>
@@ -965,13 +965,13 @@ ${heroBannerHtml}
       badge.classList.remove('cached','downloading','pending');
       if(st && st.head_ready){
         badge.classList.add('cached');
-        badge.title = '可播放 | ' + formatBytes(st.size || 0);
+        badge.title = 'Ready | ' + formatBytes(st.size || 0);
       } else if(st && st.downloading){
         badge.classList.add('downloading');
-        badge.title = '下载中 ' + (st.progress || 0).toFixed(1) + '% | Peers: ' + (st.peers || 0);
+        badge.title = 'Downloading ' + (st.progress || 0).toFixed(1) + '% | Peers: ' + (st.peers || 0);
       } else {
         badge.classList.add('pending');
-        badge.title = '未缓存';
+        badge.title = 'Not cached';
       }
     });
   }
@@ -984,10 +984,10 @@ ${heroBannerHtml}
     var items = Object.values(cacheState).filter(function(s){ return s.ready || s.downloading; });
     var cachedCount = items.filter(function(s){ return s.cached; }).length;
     var totalSize = items.reduce(function(sum, s){ return sum + (s.size || 0); }, 0);
-    summary.textContent = cachedCount + ' 已缓存 / ' + items.length + ' 任务';
+    summary.textContent = cachedCount + ' cached / ' + items.length + ' tasks';
     clearBtn.style.display = items.length > 0 ? '' : 'none';
     if(items.length === 0){
-      list.innerHTML = '<div style="text-align:center;color:var(--text-tertiary);font-size:0.8rem;padding:20px">暂无缓存任务</div>';
+      list.innerHTML = '<div style="text-align:center;color:var(--text-tertiary);font-size:0.8rem;padding:20px">No cache tasks</div>';
       return;
     }
     list.innerHTML = items.map(function(s){
@@ -1004,7 +1004,7 @@ ${heroBannerHtml}
         + '</div>'
         + '<div style="display:flex;align-items:center;gap:12px">'
         +   '<div class="cache-item-bar"><div class="cache-item-bar-inner" style="width:' + pct + '%;background:' + (isCached ? '#22c55e' : '#3b82f6') + '"></div></div>'
-        +   '<button class="cache-item-del" data-hash="' + s.hash + '">删除</button>'
+        +   '<button class="cache-item-del" data-hash="' + s.hash + '">Del</button>'
         + '</div>'
         + '</div>';
     }).join('');
@@ -1015,8 +1015,8 @@ ${heroBannerHtml}
         fetch('/api/cache/' + h, { method: 'DELETE' })
           .then(function(r){ return r.json(); })
           .then(function(data){
-            if(data.deleted){ delete cacheState[h]; updateCacheBadges(); updateCachePanel(); showToast('已删除'); }
-          }).catch(function(){ showToast('删除失败'); });
+            if(data.deleted){ delete cacheState[h]; updateCacheBadges(); updateCachePanel(); showToast('Deleted'); }
+          }).catch(function(){ showToast('Delete failed'); });
       });
     });
   }
@@ -1117,7 +1117,7 @@ ${heroBannerHtml}
         var cleared = 0;
         items.forEach(function(item){
           fetch('/api/cache/' + item.hash, { method: 'DELETE' })
-            .then(function(){ cleared++; delete cacheState[item.hash]; if(cleared >= items.length){ updateCacheBadges(); updateCachePanel(); showToast('已清理 ' + items.length + ' 个缓存'); } })
+            .then(function(){ cleared++; delete cacheState[item.hash]; if(cleared >= items.length){ updateCacheBadges(); updateCachePanel(); showToast('Cleared ' + items.length + ' items'); } })
             .catch(function(){});
         });
         if(items.length === 0) updateCachePanel();
@@ -1143,7 +1143,7 @@ ${heroBannerHtml}
     modalOverlay.classList.remove('active');
     modalVideo.pause(); modalVideo.src = ''; modalVideo.removeAttribute('src');
     modalLoading.style.display = 'none';
-    modalLoading.innerHTML = '<span>正在加载视频...</span>';
+    modalLoading.innerHTML = '<span>Loading video...</span>';
     if(progressTimer){ clearInterval(progressTimer); progressTimer = null; }
   }
 
@@ -1175,11 +1175,11 @@ ${heroBannerHtml}
       var magnet = this.getAttribute('data-magnet');
       if(!magnet) return;
       if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(magnet).then(function(){ showToast('已复制磁力链接'); }).catch(function(){ showToast('复制失败'); });
+        navigator.clipboard.writeText(magnet).then(function(){ showToast('Magnet copied'); }).catch(function(){ showToast('Copy failed'); });
       } else {
         var ta = document.createElement('textarea'); ta.value = magnet; ta.style.cssText = 'position:fixed;opacity:0';
         document.body.appendChild(ta); ta.select();
-        try{ document.execCommand('copy'); showToast('已复制磁力链接'); } catch(err){ showToast('复制失败'); }
+        try{ document.execCommand('copy'); showToast('Magnet copied'); } catch(err){ showToast('Copy failed'); }
         document.body.removeChild(ta);
       }
     });
@@ -1188,7 +1188,7 @@ ${heroBannerHtml}
   // ===== Unified Play Logic =====
   function playByMagnet(magnet){
     var hash = extractHash(magnet);
-    if(!hash){ showToast('无效的磁力链接'); return; }
+    if(!hash){ showToast('Invalid magnet link'); return; }
 
     modalLoading.style.display = 'flex';
     modalOverlay.classList.add('active');
@@ -1198,14 +1198,14 @@ ${heroBannerHtml}
       .then(function(r){ return r.json(); })
       .then(function(data){
         if(data.head_ready){ startPlayback(hash); return; }
-        modalLoading.innerHTML = '<span>正在连接种子...</span>';
+        modalLoading.innerHTML = '<span>Connecting torrent...</span>';
         fetch('/torrent/add', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ magnet: magnet })
         })
         .then(function(r){ return r.json(); })
         .then(function(data){
-          if(data.error){ modalLoading.innerHTML = '<span>启动失败: ' + data.error + '</span>'; return; }
+          if(data.error){ modalLoading.innerHTML = '<span>Launch failed: ' + data.error + '</span>'; return; }
           var startTime = Date.now();
           progressTimer = setInterval(function(){
             fetch('/torrent/status/' + hash)
@@ -1215,12 +1215,12 @@ ${heroBannerHtml}
                 var speed = (s.download_rate / 1024 / 1024).toFixed(1);
                 var pct = s.progress.toFixed(1);
                 if(s.head_ready){ clearInterval(progressTimer); progressTimer = null; startPlayback(hash); return; }
-                if(elapsed > 60){ clearInterval(progressTimer); progressTimer = null; modalLoading.innerHTML = '<span>下载超时，请稍后再试</span>'; return; }
-                modalLoading.innerHTML = '<span>缓冲中 | Peers: ' + s.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
+                if(elapsed > 60){ clearInterval(progressTimer); progressTimer = null; modalLoading.innerHTML = '<span>Download timeout, retry later</span>'; return; }
+                modalLoading.innerHTML = '<span>Buffering | Peers: ' + s.peers + ' | ' + speed + ' MB/s | ' + pct + '%</span>';
               }).catch(function(err){});
           }, 1500);
-        }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接下载服务器</span>'; });
-      }).catch(function(err){ modalLoading.innerHTML = '<span>无法连接缓存服务器</span>'; });
+        }).catch(function(err){ modalLoading.innerHTML = '<span>Cannot connect to download server</span>'; });
+      }).catch(function(err){ modalLoading.innerHTML = '<span>Cannot connect to cache server</span>'; });
   }
 
   // Play Button (cards & hero)
@@ -1253,12 +1253,12 @@ ${heroBannerHtml}
     isRefreshing = true;
     refreshToggle.classList.add('spinning');
     refreshIcon.textContent = '⏳';
-    showToast('正在刷新数据...');
+    showToast('Refreshing data...');
 
     fetch('/api/regenerate', {method: 'POST'})
       .then(function(r){ return r.text(); })
       .then(function(text){
-        // 流式 JSON：可能有多行，取最后一行作为结果
+        // stream JSON: may have multiple lines, take last line as result
         var lines = text.trim().split('\\n');
         var last = lines[lines.length - 1];
         var data = JSON.parse(last);
@@ -1266,17 +1266,17 @@ ${heroBannerHtml}
         refreshIcon.textContent = '🔄';
         isRefreshing = false;
         if(data.status === 'done'){
-          showToast('刷新完成！页面将在 2 秒后自动重载');
+          showToast('Refresh done! Reloading in 2s');
           setTimeout(function(){ location.reload(); }, 2000);
         }else{
-          showToast('刷新失败: ' + (data.message || data.stderr || '未知错误'));
+          showToast('Refresh failed: ' + (data.message || data.stderr || 'Unknown error'));
         }
       })
       .catch(function(err){
         refreshToggle.classList.remove('spinning');
         refreshIcon.textContent = '🔄';
         isRefreshing = false;
-        showToast('刷新失败: ' + err.message);
+        showToast('Refresh failed: ' + err.message);
       });
   });
   document.getElementById('magnetModalClose').addEventListener('click', function(){
@@ -1286,7 +1286,7 @@ ${heroBannerHtml}
 
   magnetPlayBtn.addEventListener('click', function(){
     var magnet = magnetInput.value.trim();
-    if(!magnet){ showToast('请输入磁力链接'); return; }
+    if(!magnet){ showToast('Enter magnet link'); return; }
     magnetModal.classList.remove('active');
     playByMagnet(magnet);
   });
@@ -1299,7 +1299,7 @@ ${heroBannerHtml}
   });
 
   function startPlayback(hash){
-    modalLoading.innerHTML = '<span>正在加载视频...</span>';
+    modalLoading.innerHTML = '<span>Loading video...</span>';
     modalVideo.currentHash = hash;
     var canplayFired = false;
     function onCanplay(){
@@ -1309,7 +1309,7 @@ ${heroBannerHtml}
     }
     modalVideo.addEventListener('canplay', onCanplay, { once: true });
     modalVideo.addEventListener('loadedmetadata', function(){
-      if(!canplayFired) modalLoading.innerHTML = '<span>缓冲第一帧...</span>';
+      if(!canplayFired) modalLoading.innerHTML = '<span>Buffering first frame...</span>';
     }, { once: true });
 
     var statusTimer = null;
@@ -1324,7 +1324,7 @@ ${heroBannerHtml}
             var pct = s.progress.toFixed(0);
             var buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : '';
             if(modalVideo.paused || modalVideo.readyState < 3){
-              modalLoading.innerHTML = '<span>缓冲中 | ' + speed + ' MB/s | 已缓存 ' + buf + ' (' + pct + '%)</span>';
+              modalLoading.innerHTML = '<span>Buffering | ' + speed + ' MB/s | cached ' + buf + ' (' + pct + '%)</span>';
             }
           }).catch(function(err){});
       }, 2000);
@@ -1333,13 +1333,13 @@ ${heroBannerHtml}
 
     modalVideo.addEventListener('waiting', function(){ modalLoading.style.display = 'flex'; startStatusPoll(); });
     modalVideo.addEventListener('playing', function(){ modalLoading.style.display = 'none'; stopStatusPoll(); });
-    modalVideo.addEventListener('seeking', function(){ modalLoading.style.display = 'flex'; modalLoading.innerHTML = '<span>定位中...</span>'; startStatusPoll(); });
+    modalVideo.addEventListener('seeking', function(){ modalLoading.style.display = 'flex'; modalLoading.innerHTML = '<span>Seeking...</span>'; startStatusPoll(); });
     modalVideo.addEventListener('seeked', function(){ stopStatusPoll(); if(!modalVideo.paused) modalLoading.style.display = 'none'; });
-    modalVideo.addEventListener('error', function(){ stopStatusPoll(); modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>'; }, { once: true });
+    modalVideo.addEventListener('error', function(){ stopStatusPoll(); modalLoading.innerHTML = '<span>Playback failed, file may be incomplete</span>'; }, { once: true });
 
     modalVideo.src = '/stream/' + hash;
     modalVideo.load();
-    setTimeout(function(){ if(modalLoading.style.display !== 'none'){ stopStatusPoll(); modalLoading.innerHTML = '<span>加载超时，请检查文件完整性</span>'; } }, 30000);
+    setTimeout(function(){ if(modalLoading.style.display !== 'none'){ stopStatusPoll(); modalLoading.innerHTML = '<span>Load timeout, check file integrity</span>'; } }, 30000);
   }
 
   // Keyboard Shortcuts
