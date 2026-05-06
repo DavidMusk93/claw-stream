@@ -89,12 +89,20 @@ def find_video_state(hash_str):
     if moov_end == 0:
         # moov not in head, try find in tail
         try:
+            tail_offset = max(0, best_logic - 1024 * 1024)
             with open(best, "rb") as f:
-                f.seek(max(0, best_logic - 1024 * 1024))
+                f.seek(tail_offset)
                 tail = f.read()
-                if b"moov" in tail:
-                    # moov in tail, need full download to play
-                    moov_end = best_logic
+                moov_idx = tail.find(b"moov")
+                if moov_idx >= 4:
+                    # moov in tail, calculate actual moov end
+                    # moov box starts 4 bytes before "moov" (size field)
+                    box_start = tail_offset + moov_idx - 4
+                    box_size = int.from_bytes(tail[moov_idx - 4:moov_idx], "big")
+                    if box_size > 0 and box_size < 100 * 1024 * 1024:
+                        moov_end = box_start + box_size
+                    else:
+                        return best, best_size, False
                 else:
                     return best, best_size, False
         except Exception:
@@ -104,7 +112,7 @@ def find_video_state(hash_str):
     head_ready = False
     try:
         with open(best, "rb") as f:
-            f.seek(moov_end - 1024)
+            f.seek(max(0, moov_end - 1024))
             tail = f.read(1024)
             if len(tail) == 1024 and not all(b == 0 for b in tail):
                 head_ready = True
@@ -301,7 +309,7 @@ class TorrentEngine:
         info["ready"] = True
 
     def _apply_play_priority(self, h, info):
-        """Apply play priority: head urgent, rest slow (stream while download)"""
+        """Apply play priority: head + tail urgent, rest slow (stream while download)"""
         if not h.status().has_metadata:
             return False
         ti = h.torrent_file()
@@ -313,24 +321,30 @@ class TorrentEngine:
         piece_length = ti.piece_length()
         file_offset = fs.file_offset(idx)
         start_piece = file_offset // piece_length
+        end_piece = (file_offset + fs.file_size(idx)) // piece_length
 
-        # Head pieces: urgent deadline + priority 7
-        # moov max 12MB, need at least 6 pieces, safely download 30pcs (~60MB)
+        # Head pieces: urgent deadline + priority 7 (for moov-in-head & first frame)
         head_count = min(30, num_pieces)
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             h.set_piece_deadline(p, 0)
 
-        # Head pieces: priority 7
-        # Rest pieces: priority 1 (slow download, smooth streaming)
+        # Tail pieces: priority 7 (for moov-in-tail)
+        tail_count = min(30, num_pieces)
+
         piece_prios = [1] * num_pieces
+        # Head
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             piece_prios[p] = 7
+        # Tail
+        for p in range(max(start_piece, end_piece - tail_count + 1), min(end_piece + 1, num_pieces)):
+            piece_prios[p] = 7
+
         h.prioritize_pieces(piece_prios)
 
         # Enable sequential download, fill holes in order
         h.set_sequential_download(True)
 
-        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs, seq=true")
+        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs tail={tail_count}pcs seq=true")
         return True
 
     def set_full_priority(self, hash_str):
