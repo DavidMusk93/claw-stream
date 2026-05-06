@@ -1011,7 +1011,7 @@ ${heroBannerHtml}
     list.querySelectorAll('.cache-item-del').forEach(function(btn){
       btn.addEventListener('click', function(){
         var h = this.getAttribute('data-hash');
-        if(!h || !confirm('确定删除该缓存吗？')) return;
+        if(!h || !confirm('Delete this cache item?')) return;
         fetch('/api/cache/' + h, { method: 'DELETE' })
           .then(function(r){ return r.json(); })
           .then(function(data){
@@ -1109,7 +1109,7 @@ ${heroBannerHtml}
   });
 
   document.getElementById('cacheClearBtn').addEventListener('click', function(){
-    if(!confirm('确定要清理全部缓存吗？')) return;
+    if(!confirm('Clear all cache?')) return;
     fetch('/api/cache')
       .then(function(r){ return r.json(); })
       .then(function(data){
@@ -1249,7 +1249,7 @@ ${heroBannerHtml}
   var isRefreshing = false;
   refreshToggle.addEventListener('click', function(){
     if(isRefreshing) return;
-    if(!confirm('重新抓取最新数据并重排报告？\n（约需 1-3 分钟）')) return;
+    if(!confirm('Refresh data and regenerate report? (1-3 min)')) return;
     isRefreshing = true;
     refreshToggle.classList.add('spinning');
     refreshIcon.textContent = '⏳';
@@ -1259,7 +1259,7 @@ ${heroBannerHtml}
       .then(function(r){ return r.text(); })
       .then(function(text){
         // 流式 JSON：可能有多行，取最后一行作为结果
-        var lines = text.trim().split('\n');
+        var lines = text.trim().split('\\n');
         var last = lines[lines.length - 1];
         var data = JSON.parse(last);
         refreshToggle.classList.remove('spinning');

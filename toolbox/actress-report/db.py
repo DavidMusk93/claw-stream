@@ -54,7 +54,7 @@ def init_schema():
             jable_cover TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (actress_id) REFERENCES actresses(id),
+            -- FK removed: DuckDB UPDATE bug with FK constraints
             UNIQUE(actress_id, code)
         )
     """)
@@ -67,7 +67,7 @@ def init_schema():
             hash TEXT,
             is_primary BOOLEAN DEFAULT true,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (work_id) REFERENCES works(id),
+            -- FK removed: DuckDB UPDATE bug with FK constraints
             UNIQUE(work_id, hash)
         )
     """)
