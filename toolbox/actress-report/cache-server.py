@@ -33,36 +33,78 @@ PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
-    r"game pack", r"996gg", r"hhd800", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
+    r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
 ]]
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def _scan_mp4_moov(path, max_read=16 * 1024 * 1024):
-    """Scan MP4 file, find moov box end position"""
+    """Scan MP4 file, find moov box end position.
+    Handles extended size (size==1) and size==0 (box extends to EOF).
+    For tail-moov files with large mdat, jumps to end of mdat to locate moov."""
     try:
+        file_size = os.path.getsize(path)
         with open(path, "rb") as f:
             data = f.read(max_read)
             offset = 0
+            mdat_end = 0
             while offset < len(data) - 8:
                 size = int.from_bytes(data[offset:offset+4], "big")
                 box_type = data[offset+4:offset+8]
-                if size == 0 or size > 100 * 1024 * 1024:
+                if size == 0:
+                    # Box extends to end of file
+                    mdat_end = file_size
+                    break
+                if size == 1:
+                    # Extended size in next 8 bytes
+                    if offset + 16 > len(data):
+                        break
+                    size = int.from_bytes(data[offset+8:offset+16], "big")
+                    if size > 100 * 1024 * 1024 * 1024:
+                        break
+                    if box_type == b"mdat":
+                        mdat_end = offset + size
+                        break
+                elif size < 8 or size > 100 * 1024 * 1024:
                     break
                 if box_type == b"moov":
                     return offset + size
                 offset += size
+
+            # If we found a large mdat, moov is likely right after it (tail-moov)
+            if mdat_end > 0:
+                f.seek(max(0, mdat_end - 1024))
+                check = f.read(2048)
+                moov_idx = check.find(b"moov")
+                if moov_idx >= 4:
+                    box_size_raw = int.from_bytes(check[moov_idx - 4:moov_idx], "big")
+                    if box_size_raw == 1 and moov_idx >= 12:
+                        box_size = int.from_bytes(check[moov_idx - 12:moov_idx - 4], "big")
+                    else:
+                        box_size = box_size_raw
+                    if 0 < box_size < 100 * 1024 * 1024:
+                        return (mdat_end - 1024 if mdat_end >= 1024 else 0) + moov_idx - 4 + box_size
     except Exception:
         pass
     return 0
 
 
+def _mime_type(path):
+    ext = os.path.splitext(path)[1].lower()
+    return {
+        ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska", ".webm": "video/webm",
+        ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv",
+        ".flv": "video/x-flv",
+    }.get(ext, "video/mp4")
+
+
 def find_video_state(hash_str):
-    """Find video file and check if moov is fully downloaded"""
+    """Find video file and check if enough header data is downloaded for playback"""
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
-        return None, 0, False
+        return None, 0, False, "video/mp4"
     best = None
     best_size = 0
     best_logic = 0
@@ -82,43 +124,57 @@ def find_video_state(hash_str):
             except OSError:
                 pass
     if not best or best_size < 1024 * 1024:
-        return best, best_size, False
+        return best, best_size, False, _mime_type(best or "")
 
-    # Scan moov position
-    moov_end = _scan_mp4_moov(best)
-    if moov_end == 0:
-        # moov not in head, try find in tail
-        try:
-            tail_offset = max(0, best_logic - 1024 * 1024)
-            with open(best, "rb") as f:
-                f.seek(tail_offset)
-                tail = f.read()
-                moov_idx = tail.find(b"moov")
-                if moov_idx >= 4:
-                    # moov in tail, calculate actual moov end
-                    # moov box starts 4 bytes before "moov" (size field)
-                    box_start = tail_offset + moov_idx - 4
-                    box_size = int.from_bytes(tail[moov_idx - 4:moov_idx], "big")
-                    if box_size > 0 and box_size < 100 * 1024 * 1024:
-                        moov_end = box_start + box_size
+    mime = _mime_type(best)
+    ext = os.path.splitext(best)[1].lower()
+
+    # MP4/MOV: need moov atom downloaded
+    if ext in (".mp4", ".m4v", ".mov"):
+        moov_end = _scan_mp4_moov(best)
+        if moov_end == 0:
+            # moov not in head, try find in tail (scan last 128MB — moov may be
+            # far from end if mdat uses extended size)
+            try:
+                tail_scan_size = min(128 * 1024 * 1024, best_logic)
+                tail_offset = max(0, best_logic - tail_scan_size)
+                with open(best, "rb") as f:
+                    f.seek(tail_offset)
+                    tail = f.read(tail_scan_size)
+                    moov_idx = tail.find(b"moov")
+                    if moov_idx >= 4:
+                        box_size_raw = int.from_bytes(tail[moov_idx - 4:moov_idx], "big")
+                        if box_size_raw == 1 and moov_idx >= 12:
+                            box_size = int.from_bytes(tail[moov_idx - 12:moov_idx - 4], "big")
+                        else:
+                            box_size = box_size_raw
+                        if 0 < box_size < 100 * 1024 * 1024:
+                            moov_end = tail_offset + moov_idx - 4 + box_size
+                        else:
+                            return best, best_size, False, mime
                     else:
-                        return best, best_size, False
-                else:
-                    return best, best_size, False
-        except Exception:
-            return best, best_size, False
+                        return best, best_size, False, mime
+            except Exception:
+                return best, best_size, False, mime
 
-    # Confirm moov_end in downloaded area (non-zero)
-    head_ready = False
-    try:
-        with open(best, "rb") as f:
-            f.seek(max(0, moov_end - 1024))
-            tail = f.read(1024)
-            if len(tail) == 1024 and not all(b == 0 for b in tail):
-                head_ready = True
-    except Exception:
-        pass
-    return best, best_size, head_ready
+        # Confirm moov_end in downloaded area (non-zero bytes around moov end)
+        head_ready = False
+        try:
+            with open(best, "rb") as f:
+                f.seek(max(0, moov_end - 1024))
+                tail = f.read(1024)
+                if len(tail) == 1024 and not all(b == 0 for b in tail):
+                    head_ready = True
+        except Exception:
+            pass
+        return best, best_size, head_ready, mime
+
+    # MKV/WEBM: need first 5MB downloaded for header parsing
+    if ext in (".mkv", ".webm"):
+        return best, best_size, best_size >= 5 * 1024 * 1024, mime
+
+    # Other formats: need first 10MB
+    return best, best_size, best_size >= 10 * 1024 * 1024, mime
 
 
 def format_size(b):
@@ -154,6 +210,7 @@ class TorrentEngine:
     def _pick_video_file(self, ti):
         fs = ti.files()
         candidates = []
+        hhd800_candidates = []
         for idx in range(fs.num_files()):
             name = fs.file_path(idx)
             size = fs.file_size(idx)
@@ -162,10 +219,20 @@ class TorrentEngine:
                 continue
             if any(p.search(name) for p in SPAM_PATTERNS):
                 continue
+            # hhd800.com@ prefix indicates main video file (not spam)
+            if "hhd800" in name.lower() or "hdd800" in name.lower():
+                hhd800_candidates.append((size, idx, name))
             candidates.append((size, idx, name))
-        if not candidates:
-            for idx in range(fs.num_files()):
-                candidates.append((fs.file_size(idx), idx, fs.file_path(idx)))
+        # Prefer hhd800/hdd800 main video files
+        if hhd800_candidates:
+            hhd800_candidates.sort(reverse=True)
+            return hhd800_candidates[0]
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0]
+        # Fallback: any file
+        for idx in range(fs.num_files()):
+            candidates.append((fs.file_size(idx), idx, fs.file_path(idx)))
         candidates.sort(reverse=True)
         return candidates[0] if candidates else (0, 0, "")
 
@@ -215,10 +282,13 @@ class TorrentEngine:
             return None
 
         with self.lock:
-            if hash_str in self.torrents:
-                info = self.torrents[hash_str]
-                info["last_access"] = time.time()
-                return info
+            existing = self.torrents.get(hash_str)
+        if existing:
+            existing["last_access"] = time.time()
+            # Re-pick video file in case logic changed (outside lock to avoid deadlock)
+            if existing["handle"].status().has_metadata:
+                self._on_metadata(existing["handle"])
+            return existing
 
         # Check cache limit before adding
         self._enforce_cache_limit()
@@ -341,10 +411,12 @@ class TorrentEngine:
 
         h.prioritize_pieces(piece_prios)
 
-        # Enable sequential download, fill holes in order
-        h.set_sequential_download(True)
+        # Do NOT use sequential_download — it forces head-to-tail order,
+        # which delays tail-moov download for hours. Piece priority alone
+        # lets libtorrent fetch head + tail simultaneously.
+        h.set_sequential_download(False)
 
-        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs tail={tail_count}pcs seq=true")
+        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs tail={tail_count}pcs seq=false")
         return True
 
     def set_full_priority(self, hash_str):
@@ -367,7 +439,7 @@ class TorrentEngine:
 
         h = info["handle"]
         s = h.status()
-        local_path, local_size, head_ready = find_video_state(hash_str)
+        local_path, local_size, head_ready, mime = find_video_state(hash_str)
 
         return {
             "hash": hash_str,
@@ -382,6 +454,7 @@ class TorrentEngine:
             "video_file": os.path.basename(info["video_path"]) if info["video_path"] else None,
             "video_size": info["video_size"],
             "local_size": local_size,
+            "mime": mime,
             "state": str(s.state),
         }
 
@@ -557,10 +630,22 @@ function check(){
 
     def _serve_video(self, hash_str):
         """Serve video stream directly from local file (Range support), trigger urgent download on seek"""
-        path, real_size, head_ready = find_video_state(hash_str)
-        if not path or not head_ready:
-            self.send_error(404, "Video head not ready yet")
+        path, real_size, head_ready, mime = find_video_state(hash_str)
+        if not path:
+            self.send_error(404, "Video not found")
             return
+
+        # Ensure play priority is applied (tail pieces urgent for moov-in-tail MP4s)
+        with self.engine.lock:
+            info = self.engine.torrents.get(hash_str)
+        if info:
+            h = info["handle"]
+            if h.status().has_metadata and info.get("prefetch"):
+                # Switch from prefetch to play mode: boost tail pieces
+                info["prefetch"] = False
+                self.engine._apply_play_priority(h, info)
+            elif h.status().has_metadata:
+                self.engine._apply_play_priority(h, info)
 
         total_size = os.path.getsize(path)  # Logical size (sparse file may be large)
         range_hdr = self.headers.get("Range")
@@ -578,7 +663,7 @@ function check(){
             self.send_header("Content-Range", f"bytes {start}-{end}/{total_size}")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", chunk_size)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", mime)
             self.end_headers()
 
             with open(path, "rb") as f:
@@ -599,7 +684,7 @@ function check(){
             self.send_response(200)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", total_size)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", mime)
             self.end_headers()
 
             with open(path, "rb") as f:
@@ -638,7 +723,7 @@ function check(){
         check_match = re.match(r"^/api/check/([a-f0-9]{40})$", path, re.I)
         if check_match:
             hash_str = check_match.group(1).lower()
-            local_path, local_size, head_ready = find_video_state(hash_str)
+            local_path, local_size, head_ready, mime = find_video_state(hash_str)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -648,6 +733,7 @@ function check(){
                 "head_ready": head_ready,
                 "path": local_path,
                 "size": local_size,
+                "mime": mime,
             }).encode())
             return
 
