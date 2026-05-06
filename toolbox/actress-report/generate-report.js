@@ -1001,27 +1001,54 @@ ${cardsHtml}</main>
       }
     }, { once: true });
 
+    // 轮询下载状态，在缓冲时显示速率和进度
+    var statusTimer = null;
+    function startStatusPoll(){
+      if(statusTimer) return;
+      statusTimer = setInterval(function(){
+        fetch('/torrent/status/' + hash)
+          .then(function(r){ return r.json(); })
+          .then(function(s){
+            if(!s.ready) return;
+            var speed = (s.download_rate / 1024 / 1024).toFixed(1);
+            var pct = s.progress.toFixed(0);
+            var buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : '';
+            if(modalVideo.paused || modalVideo.readyState < 3){
+              modalLoading.innerHTML = '<span>缓冲中 | ' + speed + ' MB/s | 已缓存 ' + buf + ' (' + pct + '%)</span>';
+            }
+          })
+          .catch(function(err){});
+      }, 2000);
+    }
+    function stopStatusPoll(){
+      if(statusTimer){ clearInterval(statusTimer); statusTimer = null; }
+    }
+
     modalVideo.addEventListener('waiting', function(){
       modalLoading.style.display = 'flex';
-      modalLoading.innerHTML = '<span>缓冲中...</span>';
+      startStatusPoll();
     });
 
     modalVideo.addEventListener('playing', function(){
       modalLoading.style.display = 'none';
+      stopStatusPoll();
     });
 
     modalVideo.addEventListener('seeking', function(){
       modalLoading.style.display = 'flex';
       modalLoading.innerHTML = '<span>定位中...</span>';
+      startStatusPoll();
     });
 
     modalVideo.addEventListener('seeked', function(){
+      stopStatusPoll();
       if(!modalVideo.paused){
         modalLoading.style.display = 'none';
       }
     });
 
     modalVideo.addEventListener('error', function(){
+      stopStatusPoll();
       modalLoading.innerHTML = '<span>播放失败，文件可能不完整</span>';
     }, { once: true });
 
@@ -1032,6 +1059,7 @@ ${cardsHtml}</main>
     // 30秒超时
     setTimeout(function(){
       if(modalLoading.style.display !== 'none'){
+        stopStatusPoll();
         modalLoading.innerHTML = '<span>加载超时，请检查文件完整性</span>';
       }
     }, 30000);

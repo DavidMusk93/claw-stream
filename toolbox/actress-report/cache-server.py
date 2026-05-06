@@ -263,7 +263,7 @@ class TorrentEngine:
         info["ready"] = True
 
     def _apply_play_priority(self, h, info):
-        """应用播放优先级：头部 urgent，其余暂停"""
+        """应用播放优先级：头部 urgent，其余慢速（边下边播）"""
         if not h.status().has_metadata:
             return False
         ti = h.torrent_file()
@@ -282,13 +282,17 @@ class TorrentEngine:
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             h.set_piece_deadline(p, 0)
 
-        # 其余 pieces: 优先级 0（暂停下载）
-        piece_prios = [0] * num_pieces
+        # 头部 pieces: 优先级 7
+        # 其余 pieces: 优先级 1（慢速下载，边下边播不卡顿）
+        piece_prios = [1] * num_pieces
         for p in range(start_piece, min(start_piece + head_count, num_pieces)):
             piece_prios[p] = 7
         h.prioritize_pieces(piece_prios)
 
-        print(f"[torrent] play priority: {info['hash'][:12]}... head={head_count}pcs")
+        # 开启顺序下载，确保按顺序填充空洞
+        h.set_sequential_download(True)
+
+        print(f"[torrent] play priority: {info['hash'][:12]}... head={head_count}pcs, seq=true")
         return True
 
     def set_full_priority(self, hash_str):
@@ -406,7 +410,7 @@ class CacheHandler(SimpleHTTPRequestHandler):
         return super().translate_path(path)
 
     def _seek_priority(self, hash_str, start_byte, end_byte):
-        """根据 Range 请求设置对应 pieces 为 urgent"""
+        """根据 Range 请求设置对应 pieces 为 urgent（优先级提升 + 截止时间）"""
         with self.engine.lock:
             info = self.engine.torrents.get(hash_str)
         if not info:
@@ -427,9 +431,13 @@ class CacheHandler(SimpleHTTPRequestHandler):
         start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
         end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
-        # 设置 urgent deadline
+        # seek 区域 pieces: 优先级提到 7 + urgent deadline
+        # 确保其余 pieces 至少为 1（边下边播不卡顿）
+        prios = [1] * num_pieces
         for p in range(start_piece, end_piece + 1):
+            prios[p] = 7
             h.set_piece_deadline(p, 0)
+        h.prioritize_pieces(prios)
 
     def _serve_video(self, hash_str):
         """直接从本地文件提供视频流（支持 Range），seek 时触发 urgent 下载"""
@@ -461,8 +469,13 @@ class CacheHandler(SimpleHTTPRequestHandler):
                 f.seek(start)
                 remaining = chunk_size
                 while remaining > 0:
-                    buf = f.read(min(65536, remaining))
+                    # 小块读取，更容易检测空洞边界
+                    buf = f.read(min(16384, remaining))
                     if not buf:
+                        break
+                    # 空洞检测：全 0 说明该 piece 未下载
+                    # 发送 0 会导致浏览器解析失败、seek 卡住
+                    if not any(buf):
                         break
                     self.wfile.write(buf)
                     remaining -= len(buf)
@@ -475,8 +488,10 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
             with open(path, "rb") as f:
                 while True:
-                    buf = f.read(65536)
+                    buf = f.read(16384)
                     if not buf:
+                        break
+                    if not any(buf):
                         break
                     self.wfile.write(buf)
 

@@ -257,3 +257,93 @@ faststart MP4（约 50%）:
 原因: 之前下载过同 hash 的文件，libtorrent 在逐块校验
 解决: 等它完成（通常 30-60s），或 DELETE 后重新下载
 ```
+
+
+## 稀疏文件空洞陷阱（seeking 卡住）
+
+### 现象
+点击播放后显示"定位中..."，然后永远卡住，`seeked` / `canplay` 永远不触发。
+
+### 根因链
+
+```
+预缓存只下载前 2% pieces (~5-40MB)
+         │
+         ▼
+/api/check 返回 head_ready=true（moov 已下载）
+         │
+         ▼
+浏览器开始播放，发送 Range 请求
+         │
+         ▼
+_serve_video 读取稀疏文件
+         │
+         ▼
+未下载区域 → read() 返回全 0
+         │
+         ▼
+浏览器收到 0 字节
+         │
+         ▼
+MP4 解析失败 / seek 无法完成
+         │
+         ▼
+seeked 不触发 → 永远"定位中"
+```
+
+### 关键认知
+
+1. **稀疏文件的空洞返回 0，不是 EOF**
+   - Linux 稀疏文件未分配区域 `read()` 返回 `\x00` 填充
+   - `if not buf:` 不会触发，数据会正常发给浏览器
+   - 浏览器解析 0 数据 = 无效的 MP4 box → 解析器崩溃或无限等待
+
+2. **为什么不是"缓冲中"而是"定位中"**
+   - `video.load()` 触发 `seeking`（seek 到时间 0）
+   - 浏览器在 seek 过程中需要读取时间 0 的数据
+   - 如果读到 0，认为 seek 还没完成 → `seeked` 不触发
+   - 不会进入 `waiting` 状态，所以不会显示"缓冲中"
+
+3. **为什么头部 urgent 下载了还会遇到空洞**
+   - 头部 30 pieces = 60MB 是 urgent 的，但下载需要时间
+   - 如果用户点击播放时 urgent pieces 还没下载完，就会遇到空洞
+   - 或者 `/api/check` 之前检测通过，但播放时某些 piece 刚好还没落盘
+
+### 修复方案
+
+**后端**：`_serve_video` 读取时检测空洞，遇到全 0 停止发送
+
+```python
+buf = f.read(min(16384, remaining))
+if not any(buf):  # 全 0 → 空洞
+    break           # 停止发送，让浏览器重试
+```
+
+- 用 16KB 小块读取，更容易精确定位到空洞边界（piece = 2MB）
+- 不发送 0 数据给浏览器，避免解析器崩溃
+- 浏览器收到不完整响应后会自动重试
+
+**前端**：`seeking` 事件也启动状态轮询
+
+```javascript
+modalVideo.addEventListener('seeking', function(){
+  modalLoading.innerHTML = '<span>定位中...</span>';
+  startStatusPoll();  // 实时显示速率和进度
+});
+```
+
+- 之前只在 `waiting` 事件轮询，`seeking` 时没有进度反馈
+- 现在即使卡在 seek，用户也能看到 `缓冲中 | X.X MB/s | 已缓存 X MB`
+
+### 验证方法
+
+```bash
+# 检查缓存文件实际大小 vs 逻辑大小
+ls -ls cache/torrent/<hash>/
+# 第一列是实际块数 * 512 = 实际字节数
+# 如果实际 << 逻辑，说明大部分是空洞
+```
+
+### 相关修复
+
+- `get_status()` 增加 `try/except RuntimeError` 防御，避免 torrent handle 被销毁后查询导致 500
