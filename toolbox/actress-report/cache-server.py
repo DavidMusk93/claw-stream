@@ -11,7 +11,7 @@ cache-server.py — 一体化 BitTorrent 缓存服务器（本地文件直接播
   cd toolbox/actress-report && python3 cache-server.py
 """
 
-import os, sys, json, re, time, threading, math, argparse, signal, shutil
+import os, sys, json, re, time, threading, math, argparse, signal, shutil, subprocess, ipaddress
 from urllib.parse import unquote
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import socketserver
@@ -376,6 +376,15 @@ class TorrentEngine:
 
 
 # ── HTTP 处理器 ───────────────────────────────────────
+def _is_local_client(address):
+    """只允许本地回环和私有 IP 访问管理端点"""
+    try:
+        ip = ipaddress.ip_address(address)
+        return ip.is_loopback or ip.is_private
+    except ValueError:
+        return False
+
+
 class CacheHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, engine=None, **kwargs):
         self.engine = engine
@@ -567,6 +576,46 @@ class CacheHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = unquote(self.path)
+
+        # ── 一键刷新：重新抓取数据并重排生成报告 ──
+        if path == "/api/regenerate":
+            if not _is_local_client(self.client_address[0]):
+                self.send_error(403, "Forbidden: local access only")
+                return
+
+            script_path = os.path.join(SCRIPT_DIR, "refresh.sh")
+            if not os.path.exists(script_path):
+                self.send_error(500, "refresh.sh not found")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+
+            # 流式输出：先发送 running 状态
+            self.wfile.write(json.dumps({"status": "running", "message": "开始刷新..."}).encode())
+            self.wfile.write(b"\n")
+
+            try:
+                proc = subprocess.run(
+                    ["bash", script_path],
+                    cwd=SCRIPT_DIR,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 分钟超时
+                )
+                result = {
+                    "status": "done" if proc.returncode == 0 else "error",
+                    "returncode": proc.returncode,
+                    "stdout": proc.stdout,
+                    "stderr": proc.stderr,
+                }
+                self.wfile.write(json.dumps(result).encode())
+            except subprocess.TimeoutExpired:
+                self.wfile.write(json.dumps({"status": "error", "message": "刷新超时 (>10min)"}).encode())
+            except Exception as e:
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+            return
 
         if path == "/torrent/add":
             content_length = int(self.headers.get("Content-Length", 0))

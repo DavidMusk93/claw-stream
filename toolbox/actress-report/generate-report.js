@@ -393,6 +393,14 @@ body{
   transition:background .2s,transform .2s
 }
 .nav-magnet-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary);transform:scale(1.1)}
+.nav-refresh-btn{
+  width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.08);
+  color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .2s,transform .2s;font-size:1rem
+}
+.nav-refresh-btn:hover{background:rgba(255,255,255,0.15);color:var(--text-primary);transform:rotate(180deg)}
+.nav-refresh-btn.spinning{animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 
 /* Search Bar */
 .search-bar{
@@ -685,6 +693,9 @@ body{
   </button>
   <button class="nav-magnet-btn" id="magnetToggle" aria-label="Magnet 播放器">
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+  </button>
+  <button class="nav-refresh-btn" id="refreshToggle" aria-label="刷新数据" title="重新抓取数据并重排">
+    <span id="refreshIcon">🔄</span>
   </button>
   <button class="nav-theme-btn" id="themeToggle" aria-label="切换主题">
     <svg class="theme-icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
@@ -1113,6 +1124,43 @@ ${heroBannerHtml}
   document.getElementById('magnetToggle').addEventListener('click', function(){
     magnetModal.classList.add('active');
     magnetInput.focus();
+  });
+
+  // ===== Refresh Toggle =====
+  var refreshToggle = document.getElementById('refreshToggle');
+  var refreshIcon = document.getElementById('refreshIcon');
+  var isRefreshing = false;
+  refreshToggle.addEventListener('click', function(){
+    if(isRefreshing) return;
+    if(!confirm('重新抓取最新数据并重排报告？\n（约需 1-3 分钟）')) return;
+    isRefreshing = true;
+    refreshToggle.classList.add('spinning');
+    refreshIcon.textContent = '⏳';
+    showToast('正在刷新数据...');
+
+    fetch('/api/regenerate', {method: 'POST'})
+      .then(function(r){ return r.text(); })
+      .then(function(text){
+        // 流式 JSON：可能有多行，取最后一行作为结果
+        var lines = text.trim().split('\n');
+        var last = lines[lines.length - 1];
+        var data = JSON.parse(last);
+        refreshToggle.classList.remove('spinning');
+        refreshIcon.textContent = '🔄';
+        isRefreshing = false;
+        if(data.status === 'done'){
+          showToast('刷新完成！页面将在 2 秒后自动重载');
+          setTimeout(function(){ location.reload(); }, 2000);
+        }else{
+          showToast('刷新失败: ' + (data.message || data.stderr || '未知错误'));
+        }
+      })
+      .catch(function(err){
+        refreshToggle.classList.remove('spinning');
+        refreshIcon.textContent = '🔄';
+        isRefreshing = false;
+        showToast('刷新失败: ' + err.message);
+      });
   });
   document.getElementById('magnetModalClose').addEventListener('click', function(){
     magnetModal.classList.remove('active');
