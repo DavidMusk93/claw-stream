@@ -17,9 +17,8 @@ cd "$(dirname "$0")"
 
 # ── 日志配置 ──
 export LOG_DIR="${LOG_DIR:-$(pwd)/logs}"
-DAY=$(date +%Y-%m-%d)
-mkdir -p "$LOG_DIR/$DAY"
-REFRESH_LOG="$LOG_DIR/$DAY/refresh.log"
+mkdir -p "$LOG_DIR"
+REFRESH_LOG="$LOG_DIR/refresh.log"
 # 同时输出到终端和日志文件
 exec > >(tee -a "$REFRESH_LOG") 2>&1
 

@@ -18,7 +18,7 @@ import socketserver
 
 import libtorrent as lt
 
-from logger import get_logger, _ensure_day_dir
+from logger import get_logger, _ensure_log_dir
 
 log = get_logger("cache-server")
 
@@ -692,11 +692,10 @@ class CacheHandler(SimpleHTTPRequestHandler):
         path = unquote(self.path)
 
         # 日志列表/查看
-        logs_match = re.match(r"^/api/logs(/.*)?$", path)
-        if logs_match:
-            subpath = logs_match.group(1) or ""
-            log_dir = os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs"))
-            target = os.path.normpath(os.path.join(log_dir, subpath.lstrip("/")))
+        if path == "/api/logs" or path.startswith("/api/logs/"):
+            subpath = path[len("/api/logs"):].lstrip("/")
+            log_dir = _ensure_log_dir(os.environ.get("LOG_DIR", os.path.join(SCRIPT_DIR, "logs")))
+            target = os.path.normpath(os.path.join(log_dir, subpath))
             # 安全检查：禁止跳出 log_dir
             if not target.startswith(os.path.normpath(log_dir)):
                 self.send_error(403, "Forbidden")

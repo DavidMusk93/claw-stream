@@ -14,10 +14,8 @@ const IMAGES_DIR = path.join(TOOLBOX, 'images');
 // ── 日志双写（如果 LOG_DIR 环境变量设置）──
 const LOG_DIR = process.env.LOG_DIR;
 if(LOG_DIR){
-  const day = new Date().toISOString().slice(0, 10);
-  const dir = path.join(LOG_DIR, day);
-  fs.mkdirSync(dir, {recursive: true});
-  const logFile = path.join(dir, 'generate-report.log');
+  fs.mkdirSync(LOG_DIR, {recursive: true});
+  const logFile = path.join(LOG_DIR, 'generate-report.log');
   const logStream = fs.createWriteStream(logFile, {flags: 'a'});
   const origLog = console.log;
   const origErr = console.error;

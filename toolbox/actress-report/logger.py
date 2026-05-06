@@ -13,17 +13,19 @@
 """
 
 import os, sys, json, datetime, logging
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import RotatingFileHandler
 
 DEFAULT_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
+# 回收策略：单个日志文件 10MB，保留 5 个备份
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
-def _ensure_day_dir(log_dir):
-    """按日期创建子目录，返回当天目录路径"""
-    day = datetime.datetime.now().strftime("%Y-%m-%d")
-    path = os.path.join(log_dir, day)
-    os.makedirs(path, exist_ok=True)
-    return path
+
+def _ensure_log_dir(log_dir):
+    """确保日志根目录存在"""
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
 
 
 class _JsonFormatter(logging.Formatter):
@@ -127,8 +129,8 @@ def get_logger(name, log_dir=None, json_format=None):
     if json_format is None:
         json_format = os.environ.get("LOG_JSON", "0") == "1"
 
-    day_dir = _ensure_day_dir(log_dir)
-    log_file = os.path.join(day_dir, f"{name}.log")
+    log_dir = _ensure_log_dir(log_dir)
+    log_file = os.path.join(log_dir, f"{name}.log")
 
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -137,13 +139,12 @@ def get_logger(name, log_dir=None, json_format=None):
     if logger.handlers:
         logger.handlers.clear()
 
-    # 文件 handler（按天轮转，保留 7 天）
-    file_handler = TimedRotatingFileHandler(
-        log_file, when="midnight", interval=1, backupCount=7,
+    # 文件 handler（按大小滚动，保留 N 个备份）
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8"
     )
     file_handler.setLevel(logging.DEBUG)
-    file_handler.suffix = "%Y-%m-%d"
     fmt = _JsonFormatter() if json_format else _TextFormatter()
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
@@ -164,9 +165,8 @@ def capture_stdout(name, log_dir=None):
 
     用于 refresh.sh 等场景，让 print() 也进入日志体系。
     """
-    log = get_logger(name, log_dir=log_dir)
-    day_dir = _ensure_day_dir(log_dir or os.environ.get("LOG_DIR", DEFAULT_LOG_DIR))
-    log_file = os.path.join(day_dir, f"{name}.log")
+    log_dir = _ensure_log_dir(log_dir or os.environ.get("LOG_DIR", DEFAULT_LOG_DIR))
+    log_file = os.path.join(log_dir, f"{name}.log")
 
     f = open(log_file, "a", encoding="utf-8")
     tee = _TeeStream(f)
