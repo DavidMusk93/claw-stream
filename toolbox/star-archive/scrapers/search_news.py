@@ -47,17 +47,31 @@ async def random_delay(min_s=1.0, max_s=2.5):
     await asyncio.sleep(random.uniform(min_s, max_s))
 
 
-def extract_resolution(magnet_url: str) -> str:
-    """从 magnet dn 参数中提取清晰度（含 HTML entity 解码）"""
+def _extract_dn(magnet_url: str) -> str:
+    """从 magnet dn 参数中提取原始文件名（含 HTML entity 解码）"""
     if not magnet_url:
         return ""
-    decoded_url = htmlmod.unescape(magnet_url)
-    parsed = urllib.parse.urlparse(decoded_url)
-    params = urllib.parse.parse_qs(parsed.query)
-    dn = params.get("dn", [""])[0]
-    if not dn:
+    try:
+        decoded_url = htmlmod.unescape(magnet_url)
+        parsed = urllib.parse.urlparse(decoded_url)
+        params = urllib.parse.parse_qs(parsed.query)
+        dn = params.get("dn", [""])[0]
+        return urllib.parse.unquote(dn) if dn else ""
+    except Exception:
         return ""
-    decoded = urllib.parse.unquote(dn)
+
+
+def is_hhd800_magnet(magnet_url: str) -> bool:
+    """检查 magnet 的 dn 参数是否包含 hhd800.com 前缀"""
+    dn = _extract_dn(magnet_url)
+    return "hhd800.com" in dn.lower()
+
+
+def extract_resolution(magnet_url: str) -> str:
+    """从 magnet dn 参数中提取清晰度（含 HTML entity 解码）"""
+    decoded = _extract_dn(magnet_url)
+    if not decoded:
+        return ""
     for pat in ["[4K]", "[FHDC]", "[FHD]", "[HD/720p]", "[HD]", "[720p]", "[1080p]"]:
         if pat.lower() in decoded.lower():
             return pat
@@ -183,8 +197,10 @@ def _parse_video_items(html: str) -> list[dict]:
 
 
 def _pick_best_magnet(item: dict) -> dict:
-    """从多个磁力链接中挑选最佳的一个：优先 FHD/4K，否则按种子数，否则按大小"""
+    """从多个磁力链接中挑选最佳的一个：前置过滤只保留 hhd800.com，再按清晰度/种子数/大小排序"""
     magnets = item.get("magnets", [])
+    # 前置过滤：只保留 dn 中包含 hhd800.com 的 magnet，不存储垃圾来源
+    magnets = [m for m in magnets if is_hhd800_magnet(m)]
     if not magnets:
         return {"magnet": "", "resolution": "", "size": ""}
 
