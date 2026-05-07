@@ -1,7 +1,7 @@
 [Unit]
 Description=Star Archive Frontend (Nuxt production)
 After=network.target star-archive-backend.service
-Requires=star-archive-backend.service
+Wants=star-archive-backend.service
 
 [Service]
 Type=simple
@@ -9,7 +9,7 @@ WorkingDirectory=/root/.openclaw/workspace/toolbox/star-archive/frontend
 Environment=NITRO_HOST=0.0.0.0
 Environment=NITRO_PORT=3000
 ExecStart=/usr/bin/node .output/server/index.mjs
-Restart=on-failure
+Restart=always
 RestartSec=5s
 User=root
 
