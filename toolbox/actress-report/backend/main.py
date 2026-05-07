@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, actresses
 from backend.services.torrent_engine import TorrentEngine
 from logger import get_logger
 
@@ -65,6 +65,7 @@ app.include_router(check_router)
 app.include_router(torrents_router)
 app.include_router(cache_router)
 app.include_router(auth_router)
+app.include_router(actresses.router)
 
 # Static files
 if os.path.exists(IMAGES_DIR):
