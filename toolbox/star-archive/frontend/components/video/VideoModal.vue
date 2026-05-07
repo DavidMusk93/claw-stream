@@ -33,7 +33,6 @@
         <video
           v-show="!loading && !errorMsg"
           ref="videoRef"
-          controls
           playsinline
           webkit-playsinline
           x5-playsinline
@@ -53,6 +52,61 @@
           @ended="onEnded"
           @loadedmetadata="onLoadedMetadata"
         />
+
+        <!-- Custom controls overlay -->
+        <div
+          v-show="!loading && !errorMsg"
+          class="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 transition-opacity duration-500"
+          :class="{ 'opacity-0 pointer-events-none': controlsHidden }"
+          @mousemove="showControls"
+          @touchstart="showControls"
+        >
+          <!-- Progress bar -->
+          <div
+            ref="progressBarRef"
+            class="relative h-1.5 bg-white/20 rounded-full cursor-pointer group"
+            @click="onProgressClick"
+          >
+            <!-- Buffered segments -->
+            <div
+              v-for="(range, i) in bufferedRanges"
+              :key="i"
+              class="absolute h-full bg-white/30 rounded-full"
+              :style="{ left: range.start + '%', width: range.width + '%' }"
+            />
+            <!-- Played -->
+            <div
+              class="absolute h-full bg-orange-500 rounded-full"
+              :style="{ width: progressPercent + '%' }"
+            />
+            <!-- Thumb -->
+            <div
+              class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
+              :style="{ left: 'calc(' + progressPercent + '% - 6px)' }"
+            />
+          </div>
+
+          <!-- Controls row -->
+          <div class="flex items-center justify-between mt-3">
+            <div class="flex items-center gap-3">
+              <button
+                class="w-8 h-8 flex items-center justify-center text-white text-lg touch-manipulation"
+                @click="togglePlay"
+              >
+                {{ isPlaying ? '⏸' : '▶' }}
+              </button>
+              <span class="text-xs text-white/90 font-mono tabular-nums">
+                {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+              </span>
+            </div>
+            <button
+              class="w-8 h-8 flex items-center justify-center text-white text-sm touch-manipulation"
+              @click="toggleFullscreen"
+            >
+              {{ isFullscreen ? '⤓' : '⤢' }}
+            </button>
+          </div>
+        </div>
 
         <!-- Loading overlay -->
         <div
@@ -103,6 +157,7 @@ const props = defineProps<{ hash?: string }>()
 
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
+const progressBarRef = ref<HTMLDivElement>()
 const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, formatSpeed } = useVideoPlayer()
 
 const buffering = ref(false)
@@ -110,6 +165,57 @@ const errorMsg = ref('')
 const isFullscreen = ref(false)
 const retryCount = ref(0)
 const MAX_RETRIES = 3
+
+// Custom controls state
+const currentTime = ref(0)
+const duration = ref(0)
+const isPlaying = ref(false)
+const controlsHidden = ref(false)
+let controlsHideTimer: ReturnType<typeof setTimeout> | null = null
+
+const progressPercent = computed(() => {
+  if (!duration.value || duration.value === Infinity) return 0
+  return (currentTime.value / duration.value) * 100
+})
+
+interface BufferedRange { start: number; width: number }
+const bufferedRanges = computed<BufferedRange[]>(() => {
+  const v = videoRef.value
+  if (!v || !v.buffered || !duration.value || duration.value === Infinity) return []
+  const ranges: BufferedRange[] = []
+  for (let i = 0; i < v.buffered.length; i++) {
+    const start = (v.buffered.start(i) / duration.value) * 100
+    const end = (v.buffered.end(i) / duration.value) * 100
+    ranges.push({ start, width: end - start })
+  }
+  return ranges
+})
+
+function formatTime(sec: number): string {
+  if (!sec || !isFinite(sec)) return '0:00'
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = Math.floor(sec % 60)
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function showControls() {
+  controlsHidden.value = false
+  if (controlsHideTimer) clearTimeout(controlsHideTimer)
+  controlsHideTimer = setTimeout(() => {
+    if (isPlaying.value && !buffering.value) controlsHidden.value = true
+  }, 3000)
+}
+
+function onProgressClick(e: MouseEvent) {
+  const v = videoRef.value
+  const bar = progressBarRef.value
+  if (!v || !v.duration || !bar) return
+  const rect = bar.getBoundingClientRect()
+  const ratio = (e.clientX - rect.left) / rect.width
+  v.currentTime = v.duration * Math.max(0, Math.min(1, ratio))
+}
 
 // Progress persistence
 const PROGRESS_KEY = 'claw_video_progress'
@@ -248,6 +354,8 @@ watch(isOpen, (open) => {
   if (!open) {
     saveProgress()
     stopPolling()
+    if (controlsHideTimer) clearTimeout(controlsHideTimer)
+    controlsHidden.value = false
     if (videoRef.value) {
       videoRef.value.pause()
       videoRef.value.removeAttribute('src')
@@ -259,6 +367,9 @@ watch(isOpen, (open) => {
     errorMsg.value = ''
     buffering.value = false
     showGestureHint.value = false
+    currentTime.value = 0
+    duration.value = 0
+    isPlaying.value = false
   }
 })
 
@@ -282,6 +393,10 @@ function onCanplay() {
 
 function onTimeUpdate() {
   const v = videoRef.value
+  if (v) {
+    currentTime.value = v.currentTime
+    duration.value = v.duration || 0
+  }
   const now = Date.now()
   if (now - lastProgressSave > PROGRESS_SAVE_INTERVAL_MS) {
     saveProgress()
@@ -361,9 +476,11 @@ function togglePlay() {
   if (!v) return
   if (v.paused) {
     v.play().catch(() => {})
+    isPlaying.value = true
     logInfo('player', 'toggle play')
   } else {
     v.pause()
+    isPlaying.value = false
     logInfo('player', 'toggle pause')
   }
 }
