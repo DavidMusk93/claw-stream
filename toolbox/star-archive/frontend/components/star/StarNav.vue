@@ -1,14 +1,14 @@
 <template>
   <nav class="max-w-7xl mx-auto px-6">
-    <div class="flex items-center gap-2 py-3 overflow-x-auto scrollbar-hide">
+    <div class="flex items-center gap-2.5 py-3.5 overflow-x-auto scrollbar-hide">
       <a
         v-for="star in stars"
         :key="star.code"
         :href="`#${star.code.toLowerCase()}`"
-        class="shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200"
+        class="shrink-0 px-5 py-2 rounded-full text-sm font-medium transition-all duration-300"
         :class="activeStar === star.code
-          ? 'bg-ios-blue text-white'
-          : 'bg-ios-bg-tertiary text-ios-text-secondary hover:bg-ios-gray-4 hover:text-ios-text-primary'"
+          ? 'bg-rose/15 text-rose border border-rose/20 shadow-rose-glow'
+          : 'glass text-foreground-muted hover:text-foreground hover:bg-glass-bg-hover hover:border-glass-border-strong'"
         @click.prevent="scrollToStar(star.code)"
       >
         {{ star.name }}

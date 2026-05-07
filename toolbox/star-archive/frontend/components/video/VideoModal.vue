@@ -2,12 +2,12 @@
   <Teleport to="body">
     <div
       v-if="isOpen"
-      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-sm"
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-void/95 backdrop-blur-md"
       @click.self="close"
     >
       <div
         ref="containerRef"
-        class="relative w-full h-full sm:w-[90vw] sm:max-w-5xl sm:h-auto sm:aspect-video bg-black sm:rounded-xl overflow-hidden"
+        class="relative w-full h-full sm:w-[90vw] sm:max-w-5xl sm:h-auto sm:aspect-video bg-void sm:rounded-glass-lg overflow-hidden ring-1 ring-glass-border"
         @dblclick="onDblClick"
         @touchstart="onTouchStart"
         @touchend="onTouchEnd"
@@ -15,7 +15,7 @@
       >
         <!-- Close button -->
         <button
-          class="absolute top-3 right-3 z-20 w-12 h-12 rounded-full bg-black/60 active:bg-black/80 text-white flex items-center justify-center text-xl transition-colors touch-manipulation"
+          class="absolute top-3 right-3 z-20 w-12 h-12 rounded-full glass-strong active:bg-white/10 text-white flex items-center justify-center text-xl transition-colors touch-manipulation"
           @click="close"
         >
           ✕
@@ -23,7 +23,7 @@
 
         <!-- Fullscreen toggle -->
         <button
-          class="absolute top-3 left-3 z-20 w-12 h-12 rounded-full bg-black/60 active:bg-black/80 text-white flex items-center justify-center text-lg transition-colors touch-manipulation"
+          class="absolute top-3 left-3 z-20 w-12 h-12 rounded-full glass-strong active:bg-white/10 text-white flex items-center justify-center text-lg transition-colors touch-manipulation"
           @click="toggleFullscreen"
         >
           {{ isFullscreen ? '⤓' : '⤢' }}
@@ -64,19 +64,19 @@
           <!-- Progress bar -->
           <div
             ref="progressBarRef"
-            class="relative h-1.5 bg-white/20 rounded-full cursor-pointer group"
+            class="relative h-1.5 bg-white/15 rounded-full cursor-pointer group"
             @click="onProgressClick"
           >
             <!-- Buffered segments -->
             <div
               v-for="(range, i) in bufferedRanges"
               :key="i"
-              class="absolute h-full bg-white/30 rounded-full"
+              class="absolute h-full bg-white/20 rounded-full"
               :style="{ left: range.start + '%', width: range.width + '%' }"
             />
             <!-- Played -->
             <div
-              class="absolute h-full bg-ios-blue rounded-full"
+              class="absolute h-full bg-gradient-to-r from-rose to-violet rounded-full"
               :style="{ width: progressPercent + '%' }"
             />
             <!-- Thumb -->
@@ -90,7 +90,7 @@
           <div class="flex items-center justify-between mt-3">
             <div class="flex items-center gap-3">
               <button
-                class="w-8 h-8 flex items-center justify-center text-white text-lg touch-manipulation"
+                class="w-8 h-8 flex items-center justify-center text-white text-lg touch-manipulation hover:text-rose transition-colors"
                 @click="togglePlay"
               >
                 {{ isPlaying ? '⏸' : '▶' }}
@@ -111,9 +111,9 @@
         <!-- Loading overlay -->
         <div
           v-if="loading"
-          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/80 z-10"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-void/80 z-10"
         >
-          <div class="w-10 h-10 rounded-full border-4 border-white/15 border-t-ios-blue animate-spin" />
+          <div class="w-10 h-10 rounded-full border-4 border-white/10 border-t-rose animate-spin" />
           <p class="text-white text-sm">
             {{ statusText }}
           </p>
@@ -122,7 +122,7 @@
         <!-- Error overlay -->
         <div
           v-if="errorMsg"
-          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/80 z-10"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-void/80 z-10"
         >
           <p class="text-red-400 text-sm">{{ errorMsg }}</p>
         </div>
@@ -130,7 +130,7 @@
         <!-- Buffer status overlay (small, bottom-left) -->
         <div
           v-if="buffering && !loading"
-          class="absolute bottom-20 left-4 z-20 bg-black/60 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs text-white/80"
+          class="absolute bottom-20 left-4 z-20 glass px-3 py-1.5 rounded-glass-sm text-xs text-foreground-muted"
         >
           {{ statusText }}
         </div>
@@ -158,7 +158,7 @@ const props = defineProps<{ hash?: string }>()
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
 const progressBarRef = ref<HTMLDivElement>()
-const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, formatSpeed } = useVideoPlayer()
+const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, reportProgress, formatSpeed } = useVideoPlayer()
 
 const buffering = ref(false)
 const errorMsg = ref('')
@@ -220,7 +220,9 @@ function onProgressClick(e: MouseEvent) {
 // Progress persistence
 const PROGRESS_KEY = 'claw_video_progress'
 const PROGRESS_SAVE_INTERVAL_MS = 5000
+const PROGRESS_REPORT_INTERVAL_MS = 10000
 let lastProgressSave = 0
+let lastProgressReport = 0
 
 interface ProgressRecord {
   currentTime: number
@@ -427,8 +429,11 @@ function onTimeUpdate() {
     saveProgress()
     lastProgressSave = now
   }
-  if (v && v.duration && isFinite(v.duration)) {
-    reportSeek(props.hash || '', v.currentTime, v.duration)
+  if (now - lastProgressReport > PROGRESS_REPORT_INTERVAL_MS) {
+    if (v && v.duration && isFinite(v.duration)) {
+      reportProgress(props.hash || '', v.currentTime, v.duration)
+    }
+    lastProgressReport = now
   }
 }
 
@@ -454,8 +459,12 @@ function onSeeking() {
 function onSeeked() {
   buffering.value = false
   logInfo('player', 'seeked')
+  const v = videoRef.value
+  if (v && v.duration && isFinite(v.duration) && props.hash) {
+    reportSeek(props.hash, v.currentTime, v.duration)
+  }
   // 尝试恢复播放，如果数据不足浏览器会再次进入 waiting
-  videoRef.value?.play().catch(() => {})
+  v?.play().catch(() => {})
 }
 
 function onStalled() {

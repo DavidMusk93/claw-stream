@@ -2,21 +2,21 @@
   <div class="min-h-screen">
     <!-- Top navigation bar -->
     <header
-      class="fixed top-0 left-0 right-0 z-40 backdrop-blur-xl bg-ios-black/80 border-b border-ios-separator/50"
+      class="fixed top-0 left-0 right-0 z-40 glass-strong border-b border-glass-border"
     >
-      <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
-        <h1 class="text-lg font-semibold tracking-tight">
+      <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+        <h1 class="text-xl font-display font-semibold tracking-wide text-gradient-rose">
           Star Archive
         </h1>
-        <div class="flex items-center gap-4 text-xs text-ios-text-secondary">
-          <span class="flex items-center gap-1.5">
+        <div class="flex items-center gap-5 text-xs text-foreground-muted">
+          <span class="flex items-center gap-2">
             <span
-              class="w-1.5 h-1.5 rounded-full"
-              :class="health?.status === 'ok' ? 'bg-ios-green' : 'bg-ios-red'"
+              class="w-2 h-2 rounded-full animate-pulse-slow"
+              :class="health?.status === 'ok' ? 'bg-rose shadow-rose-glow' : 'bg-rose-dark'"
             />
             {{ health?.status ?? '...' }}
           </span>
-          <span v-if="metrics?.used_human" class="font-mono tabular-nums">
+          <span v-if="metrics?.used_human" class="font-mono tabular-nums glass px-3 py-1 rounded-full">
             {{ metrics.used_human }}
           </span>
         </div>
@@ -24,27 +24,28 @@
     </header>
 
     <!-- Star navigation pills -->
-    <div class="fixed top-14 left-0 right-0 z-30 backdrop-blur-lg bg-ios-black/60 border-b border-ios-separator/30">
+    <div class="fixed top-16 left-0 right-0 z-30 glass border-b border-glass-border">
       <StarNav :stars="stars ?? []" />
     </div>
 
     <!-- Main content -->
-    <main class="pt-28 pb-12">
+    <main class="pt-32 pb-20">
       <div class="max-w-7xl mx-auto px-6">
-        <div v-if="pending" class="flex items-center justify-center py-32 gap-3 text-ios-text-secondary">
-          <div class="w-5 h-5 rounded-full border-2 border-ios-separator border-t-ios-blue animate-spin" />
-          <span class="text-sm">Loading...</span>
+        <div v-if="pending" class="flex items-center justify-center py-32 gap-3 text-foreground-muted">
+          <div class="w-5 h-5 rounded-full border-2 border-glass-border border-t-rose animate-spin" />
+          <span class="text-sm font-light">Loading...</span>
         </div>
 
         <div v-else-if="error" class="text-center py-32">
-          <p class="text-ios-red text-sm">Failed to load data</p>
+          <p class="text-rose text-sm">Failed to load data</p>
         </div>
 
-        <div v-else class="space-y-20">
+        <div v-else class="space-y-10 md:space-y-14">
           <StarCard
-            v-for="star in stars"
+            v-for="(star, index) in stars"
             :key="star.code"
             :star="star"
+            :index="index"
             @play="openVideo"
           />
         </div>

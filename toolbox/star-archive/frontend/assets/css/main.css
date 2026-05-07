@@ -2,25 +2,42 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Fonts loaded via nuxt.config.ts head.link for non-blocking performance */
+
 html {
   scroll-behavior: smooth;
+  background: #000000;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background: #000000;
-  color: #FFFFFF;
+  color: #F8FAFC;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  overflow-x: hidden;
 }
 
-/* iOS-style scrollbar */
+/* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 0px;
-  height: 0px;
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.2);
 }
 
 /* Hide scrollbar but keep scrollability */
@@ -30,4 +47,122 @@ body {
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* Ambient light blob animations */
+@keyframes blob {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+}
+
+@keyframes blob-reverse {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-30px, 30px) scale(0.95); }
+  66% { transform: translate(20px, -40px) scale(1.05); }
+}
+
+/* Water ripple scroll effect - applied to images on scroll */
+@keyframes ripple-in {
+  0% {
+    transform: scale(0.92) translateY(40px);
+    filter: brightness(0.6);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    filter: brightness(1);
+    opacity: 1;
+  }
+}
+
+/* Glass morphism utilities */
+@layer components {
+  .glass {
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .glass-strong {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .glass-card {
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 1.25rem;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .glass-card:hover {
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(255,255,255,0.12);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  /* Text gradient for headings */
+  .text-gradient-rose {
+    background: linear-gradient(135deg, #FB7185 0%, #E11D48 50%, #BE123C 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-violet {
+    background: linear-gradient(135deg, #E879F9 0%, #D946EF 50%, #A21CAF 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-amber {
+    background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 50%, #D97706 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Water ripple on scroll - modern browsers only */
+  .ripple-scroll {
+    animation: ripple-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 30%;
+  }
+
+  /* Fallback for browsers without scroll-timeline */
+  @supports not (animation-timeline: view()) {
+    .ripple-scroll {
+      animation: none;
+      opacity: 1;
+      transform: none;
+      filter: none;
+    }
+  }
+
+  /* Glow effect on hover */
+  .glow-rose:hover {
+    box-shadow: 0 0 40px rgba(225,29,72,0.15), 0 0 80px rgba(225,29,72,0.08);
+  }
+
+  .glow-violet:hover {
+    box-shadow: 0 0 40px rgba(217,70,239,0.15), 0 0 80px rgba(217,70,239,0.08);
+  }
+
+  /* Image reveal with subtle distortion */
+  .image-reveal {
+    transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+                filter 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .image-reveal:hover {
+    transform: scale(1.02);
+    filter: brightness(1.1) saturate(1.1);
+  }
 }

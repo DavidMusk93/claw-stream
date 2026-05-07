@@ -108,6 +108,20 @@ export function useVideoPlayer() {
     }
   }
 
+  async function reportProgress(hash: string, time: number, duration: number) {
+    if (!hash || !duration || duration === Infinity) return
+    try {
+      await $fetch('/torrent/progress', {
+        baseURL: config.public.apiBase,
+        method: 'POST',
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        body: { hash, time, duration },
+      })
+    } catch (e: any) {
+      // silent: progress reporting is best-effort
+    }
+  }
+
   function formatSpeed(rate: number): string {
     if (rate > 1024 * 1024) return `${(rate / 1024 / 1024).toFixed(1)} MB/s`
     if (rate > 1024) return `${(rate / 1024).toFixed(1)} KB/s`
@@ -125,6 +139,7 @@ export function useVideoPlayer() {
     stopPolling,
     waitForHeadReady,
     reportSeek,
+    reportProgress,
     formatSpeed,
   }
 }
