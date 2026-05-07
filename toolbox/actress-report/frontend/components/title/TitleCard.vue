@@ -36,16 +36,7 @@
 </template>
 
 <script setup lang="ts">
-interface Title {
-  code: string
-  title?: string
-  date?: string
-  views?: string
-  likes?: string
-  resolution?: string
-  cover_url?: string
-  magnet?: string
-}
+import type { Title } from '~/types/api'
 
 defineProps<{
   title: Title

@@ -15,10 +15,7 @@
 </template>
 
 <script setup lang="ts">
-interface Star {
-  name: string
-  code: string
-}
+import type { Star } from '~/types/api'
 
 defineProps<{
   stars: Star[]

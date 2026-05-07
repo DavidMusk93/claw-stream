@@ -19,24 +19,7 @@
 </template>
 
 <script setup lang="ts">
-interface Title {
-  code: string
-  title?: string
-  date?: string
-  views?: string
-  likes?: string
-  resolution?: string
-  cover_url?: string
-  magnet?: string
-}
-
-interface Star {
-  name: string
-  jp?: string
-  code: string
-  note?: string
-  titles: Title[]
-}
+import type { Star } from '~/types/api'
 
 const props = defineProps<{
   star: Star

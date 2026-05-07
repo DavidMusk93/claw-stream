@@ -34,16 +34,6 @@ export interface CacheMetrics {
   max_human: string
 }
 
-export interface Star {
-  id?: number
-  name: string
-  jp_name?: string
-  handle?: string
-  code?: string
-  type: string
-  note?: string
-}
-
 export interface Title {
   code: string
   title?: string
@@ -53,4 +43,22 @@ export interface Title {
   resolution?: string
   cover_url?: string
   magnet?: string
+}
+
+export interface Post {
+  platform: string
+  content: string
+  url: string
+  posted_at: string
+}
+
+export interface Star {
+  name: string
+  jp?: string
+  handle?: string
+  code: string
+  type?: string
+  note?: string
+  titles: Title[]
+  posts: Post[]
 }

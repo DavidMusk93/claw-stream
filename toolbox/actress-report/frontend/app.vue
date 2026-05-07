@@ -9,7 +9,7 @@
 const { $pwa } = useNuxtApp()
 
 // Log PWA status in dev
-if (process.dev && $pwa) {
+if (import.meta.dev && $pwa) {
   console.log('PWA ready:', $pwa.isPWAInstalled)
 }
 </script>

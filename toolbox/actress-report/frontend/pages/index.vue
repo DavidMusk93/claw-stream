@@ -33,9 +33,15 @@
 </template>
 
 <script setup lang="ts">
+import type { CacheMetrics } from '~/types/api'
+
+interface HealthResponse {
+  status: string
+}
+
 const config = useRuntimeConfig()
-const { data: health } = useFetch('/api/health', { baseURL: config.public.apiBase })
-const { data: metrics } = useFetch('/api/cache/metrics', { baseURL: config.public.apiBase })
+const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase })
+const { data: metrics } = useFetch<CacheMetrics>('/api/cache/metrics', { baseURL: config.public.apiBase })
 const { stars, pending, error } = useStars()
 
 const modalOpen = ref(false)
