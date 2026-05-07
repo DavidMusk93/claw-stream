@@ -10,7 +10,7 @@ from typing import Any
 
 import libtorrent as lt
 
-from logger import get_logger
+from core import get_logger
 
 log = get_logger("torrent-engine")
 

@@ -9,13 +9,26 @@
 import os, sys, json, re, datetime, glob
 import duckdb
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 
 def _conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     return duckdb.connect(DB_PATH)
+
+
+def _date_to_sort(date_str: str | None) -> str | None:
+    """将 MM/DD/YYYY 转为 YYYYMMDD 用于正确排序"""
+    if not date_str:
+        return None
+    try:
+        parts = date_str.split("/")
+        if len(parts) == 3:
+            return f"{parts[2]}{parts[0].zfill(2)}{parts[1].zfill(2)}"
+    except Exception:
+        pass
+    return None
 
 
 def init_schema():
@@ -52,12 +65,18 @@ def init_schema():
             cover_path TEXT,
             jable_m3u8 TEXT,
             jable_cover TEXT,
+            release_date_sort TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             -- FK removed: DuckDB UPDATE bug with FK constraints
             UNIQUE(star_id, code)
         )
     """)
+    # 为已存在表追加 release_date_sort 列
+    try:
+        conn.execute("ALTER TABLE titles ADD COLUMN release_date_sort TEXT")
+    except Exception:
+        pass
     conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_magnet_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS magnets (
@@ -87,7 +106,9 @@ def init_schema():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_star ON titles(star_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_date ON titles(release_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_date ON titles(release_date_sort)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_jable ON titles(jable_m3u8)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_magnets_title ON magnets(title_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_social_star ON social_posts(star_id)")
     conn.commit()
     conn.close()
@@ -141,6 +162,7 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
                 likes=None, resolution=None, download_url=None, cover_url=None,
                 cover_b64=None, cover_path=None):
     """插入或更新 title 信息"""
+    release_date_sort = _date_to_sort(release_date)
     conn = _conn()
     row = conn.execute(
         "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
@@ -155,6 +177,7 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
             UPDATE titles SET
                 title = ?,
                 release_date = ?,
+                release_date_sort = ?,
                 views = ?,
                 likes = ?,
                 resolution = ?,
@@ -164,16 +187,16 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
                 cover_path = ?,
                 updated_at = now()
             WHERE id = ?
-        """, (title, release_date, views, likes, resolution,
+        """, (title, release_date, release_date_sort, views, likes, resolution,
               download_url, cover_url, cover_b64, cover_path, title_id))
         conn.commit()
         conn.close()
         return title_id
     conn.execute("""
-        INSERT INTO titles (star_id, code, title, release_date, views, likes,
+        INSERT INTO titles (star_id, code, title, release_date, release_date_sort, views, likes,
                            resolution, download_url, cover_url, cover_b64, cover_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (star_id, code, title, release_date, views, likes,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (star_id, code, title, release_date, release_date_sort, views, likes,
           resolution, download_url, cover_url, cover_b64, cover_path))
     row = conn.execute(
         "SELECT id FROM titles WHERE star_id = ? AND code = ?",
@@ -270,7 +293,7 @@ def get_titles_without_jable(star_name=None):
             FROM titles w
             JOIN stars a ON w.star_id = a.id
             WHERE a.name = ? AND w.jable_m3u8 IS NULL
-            ORDER BY w.release_date DESC
+            ORDER BY w.release_date_sort DESC NULLS LAST
         """, (star_name,)).fetchall()
     else:
         rows = conn.execute("""
@@ -278,19 +301,19 @@ def get_titles_without_jable(star_name=None):
             FROM titles w
             JOIN stars a ON w.star_id = a.id
             WHERE w.jable_m3u8 IS NULL
-            ORDER BY w.release_date DESC
+            ORDER BY w.release_date_sort DESC NULLS LAST
         """).fetchall()
     conn.close()
     return rows
 
 
 def get_all_titles_json():
-    """导出所有数据为 JSON 格式（兼容旧 generate-report.js）
+    """导出所有数据为 JSON 格式（SQL 层聚合）
 
     返回: { "stars": [ { name, titles: [...] } ] }
     """
     conn = _conn()
-    result = conn.execute("""
+    rows = conn.execute("""
         SELECT
             a.name,
             a.jp_name,
@@ -298,117 +321,146 @@ def get_all_titles_json():
             a.code,
             a.type,
             a.note,
-            w.code as title_code,
-            w.title,
-            w.release_date,
-            w.views,
-            w.likes,
-            w.resolution,
-            w.download_url,
-            w.cover_url,
-            w.cover_b64,
-            w.cover_path,
-            w.jable_m3u8,
-            w.jable_cover,
-            m.magnet
+            COALESCE(array_agg(struct_pack(
+                code := w.code,
+                title := w.title,
+                date := IFNULL(w.release_date, ''),
+                views := IFNULL(CAST(w.views AS VARCHAR), ''),
+                likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
+                resolution := IFNULL(w.resolution, ''),
+                download_url := IFNULL(w.download_url, ''),
+                cover_url := IFNULL(w.cover_url, ''),
+                cover_b64 := IFNULL(w.cover_b64, ''),
+                cover_path := IFNULL(w.cover_path, ''),
+                m3u8_url := IFNULL(w.jable_m3u8, ''),
+                jable_cover := IFNULL(w.jable_cover, ''),
+                magnet := IFNULL(m.magnet, '')
+            ) ORDER BY w.release_date_sort DESC NULLS LAST)
+            FILTER (WHERE w.code IS NOT NULL), []) AS titles
         FROM stars a
         LEFT JOIN titles w ON w.star_id = a.id
         LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
-        ORDER BY a.name, w.release_date DESC
+        GROUP BY a.id, a.name, a.jp_name, a.handle, a.code, a.type, a.note
+        ORDER BY a.name
     """).fetchall()
     conn.close()
 
-    # 聚合成 star -> titles 结构
-    star_map = {}
-    for row in result:
-        name = row[0]
-        if name not in star_map:
-            star_map[name] = {
-                "name": name,
-                "jp_name": row[1],
-                "handle": row[2],
-                "code": row[3],
-                "type": row[4] or "solo",
-                "note": row[5],
-                "titles": []
-            }
-        if row[6]:  # title_code
-            star_map[name]["titles"].append({
-                "code": row[6],
-                "title": row[7],
-                "date": row[8],
-                "views": str(row[9]) if row[9] else "",
-                "likes": str(row[10]) if row[10] else "",
-                "resolution": row[11] or "",
-                "download_url": row[12] or "",
-                "cover_url": row[13] or "",
-                "cover_b64": row[14] or "",
-                "cover_path": row[15] or "",
-                "m3u8_url": row[16] or "",
-                "jable_cover": row[17] or "",
-                "magnet": row[18] or "",
-            })
-
-    return {"stars": list(star_map.values())}
+    return {"stars": [
+        {
+            "name": r[0],
+            "jp_name": r[1],
+            "handle": r[2],
+            "code": r[3],
+            "type": r[4] or "solo",
+            "note": r[5],
+            "titles": r[6],
+        }
+        for r in rows
+    ]}
 
 
 def export_report_json():
-    """导出为 generate-report.js 直接消费的 JSON（stdout）
+    """导出为 JSON（stdout），SQL 层聚合。
 
     格式: { "<star_code>": { "name": "...", "titles": [...] } }
-    每个 title 已合并 ijavtorrent + jable 数据。
     """
     conn = _conn()
-    result = conn.execute("""
+    rows = conn.execute("""
         SELECT
-            a.code as star_code,
+            a.code,
             a.name,
-            w.code as title_code,
-            w.title,
-            w.release_date,
-            w.views,
-            w.likes,
-            w.resolution,
-            w.download_url,
-            w.cover_url,
-            w.cover_b64,
-            w.jable_m3u8,
-            w.jable_cover,
-            m.magnet
+            COALESCE(array_agg(struct_pack(
+                code := w.code,
+                title := w.title,
+                date := IFNULL(w.release_date, ''),
+                views := IFNULL(CAST(w.views AS VARCHAR), ''),
+                likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
+                resolution := IFNULL(w.resolution, ''),
+                download_url := IFNULL(w.download_url, ''),
+                cover_url := IFNULL(w.cover_url, ''),
+                cover_b64 := IFNULL(w.cover_b64, ''),
+                m3u8_url := IFNULL(w.jable_m3u8, ''),
+                jable_cover := IFNULL(w.jable_cover, ''),
+                magnet := IFNULL(m.magnet, '')
+            ) ORDER BY w.release_date_sort DESC NULLS LAST)
+            FILTER (WHERE w.code IS NOT NULL), []) AS titles
         FROM stars a
         LEFT JOIN titles w ON w.star_id = a.id
         LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
-        ORDER BY a.name, w.release_date DESC
+        GROUP BY a.id, a.code, a.name
+        ORDER BY a.name
     """).fetchall()
     conn.close()
 
-    data = {}
-    for row in result:
-        star_code = row[0]
-        if star_code not in data:
-            data[star_code] = {"name": row[1], "titles": []}
-        if row[2]:  # title_code
-            data[star_code]["titles"].append({
-                "code": row[2],
-                "title": row[3],
-                "date": row[4],
-                "views": str(row[5]) if row[5] else "",
-                "likes": str(row[6]) if row[6] else "",
-                "resolution": row[7] or "",
-                "download_url": row[8] or "",
-                "cover_url": row[9] or "",
-                "cover_b64": row[10] or "",
-                "m3u8_url": row[11] or "",
-                "jable_cover": row[12] or "",
-                "magnet": row[13] or "",
-            })
-
+    data = {r[0]: {"name": r[1], "titles": r[2]} for r in rows}
     print(json.dumps(data, ensure_ascii=False))
+
+
+def backfill_release_date_sort():
+    """回填已有数据的 release_date_sort 列"""
+    conn = _conn()
+    conn.execute("""
+        UPDATE titles
+        SET release_date_sort = CONCAT(
+            SPLIT_PART(release_date, '/', 3),
+            LPAD(SPLIT_PART(release_date, '/', 1), 2, '0'),
+            LPAD(SPLIT_PART(release_date, '/', 2), 2, '0')
+        )
+        WHERE release_date_sort IS NULL
+          AND release_date IS NOT NULL
+          AND release_date LIKE '%/%/%'
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_stats() -> dict:
+    """聚合统计：作品总数、jable 覆盖率、动态条数、各 star 作品数"""
+    conn = _conn()
+    total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+    jable = conn.execute("SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL").fetchone()[0]
+    social = conn.execute("SELECT COUNT(*) FROM social_posts").fetchone()[0]
+    stars_count = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]
+    per_star = conn.execute("""
+        SELECT s.code, s.name, COUNT(t.id) as title_count,
+               COUNT(t.jable_m3u8) as jable_count,
+               MIN(t.release_date_sort) as earliest,
+               MAX(t.release_date_sort) as latest
+        FROM stars s
+        LEFT JOIN titles t ON t.star_id = s.id
+        GROUP BY s.id, s.code, s.name
+        ORDER BY title_count DESC
+    """).fetchall()
+    conn.close()
+    return {
+        "stars_count": stars_count,
+        "titles_total": total,
+        "titles_with_jable": jable,
+        "jable_coverage": round(jable / total, 3) if total else 0.0,
+        "social_posts": social,
+        "per_star": [
+            {
+                "code": r[0],
+                "name": r[1],
+                "titles": r[2],
+                "jable": r[3],
+                "earliest": r[4],
+                "latest": r[5],
+            }
+            for r in per_star
+        ],
+    }
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
         print("[db] export_to_tmp removed; generate-report.js reads DuckDB directly via Node.js driver")
+    elif len(sys.argv) > 1 and sys.argv[1] == "backfill":
+        init_schema()
+        backfill_release_date_sort()
+        print("[db] backfill done")
+    elif len(sys.argv) > 1 and sys.argv[1] == "stats":
+        print(json.dumps(get_stats(), ensure_ascii=False, indent=2))
     else:
         init_schema()
         print(f"[db] initialized: {DB_PATH}")

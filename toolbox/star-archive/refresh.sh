@@ -59,11 +59,14 @@ echo ""
 echo "========================================"
 echo "✅ 刷新完成"
 echo "========================================"
-# 统计 DuckDB 中的数据
-WORKS_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles').fetchone()[0]; c.close(); print(n)")
-JABLE_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
-SOCIAL_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM social_posts').fetchone()[0]; c.close(); print(n)")
-echo "作品总数 : $WORKS_COUNT"
-echo "Jable 条 : $JABLE_COUNT"
-echo "动态条数 : $SOCIAL_COUNT"
+python3 -c "
+from core import db
+s = db.get_stats()
+print(f\"Stars    : {s['stars_count']}\")
+print(f\"作品总数 : {s['titles_total']}\")
+print(f\"Jable 条 : {s['titles_with_jable']} ({s['jable_coverage']*100:.1f}%)\")
+print(f\"动态条数 : {s['social_posts']}\")
+for st in s['per_star']:
+    print(f\"  {st['name']:12s} : {st['titles']:3d} titles  (earliest {st['earliest']}  latest {st['latest']})\")
+"
 echo "日志文件 : $REFRESH_LOG"

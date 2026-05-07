@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, stars
 from backend.services.torrent_engine import TorrentEngine
-from logger import get_logger
+from core import get_logger
 
 log = get_logger("backend")
 

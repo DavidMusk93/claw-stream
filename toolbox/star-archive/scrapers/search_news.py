@@ -371,16 +371,19 @@ async def main():
         )
         await random_delay(1.0, 2.5)
 
-    # Stats
+    # Stats (single GROUP BY query)
+    conn = db._conn()
+    rows = conn.execute("""
+        SELECT s.code, s.name, COUNT(t.id) as title_count
+        FROM stars s
+        LEFT JOIN titles t ON t.star_id = s.id
+        GROUP BY s.id, s.code, s.name
+        ORDER BY s.name
+    """).fetchall()
+    conn.close()
     total = 0
-    for a in stars:
-        conn = db._conn()
-        count = conn.execute(
-            "SELECT COUNT(*) FROM titles w JOIN stars act ON w.star_id = act.id WHERE act.code = ?",
-            (a["code"],),
-        ).fetchone()[0]
-        conn.close()
-        log.info(f"{a['name']}: {count} titles")
+    for code, name, count in rows:
+        log.info(f"{name}: {count} titles")
         total += count
     log.info(f"done, total {total} titles")
 
