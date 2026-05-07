@@ -588,11 +588,18 @@ class TorrentEngine:
                 log.error(f"periodic clean error: {e}")
 
     def _cleanup_orphaned(self) -> None:
-        """清理不在引擎管理列表中的孤儿缓存目录。"""
+        """清理不在引擎管理列表中的孤儿缓存目录。
+
+        安全保护：如果 self.torrents 为空（刚启动尚未添加任何 torrent），
+        跳过清理，避免误删用户已有的缓存数据。
+        """
         if not os.path.exists(self.cache_dir):
             return
         with self.lock:
             known = set(self.torrents.keys())
+        if not known:
+            # Engine 刚启动，torrents 字典为空，不要误删缓存
+            return
         freed = 0
         for name in os.listdir(self.cache_dir):
             path = os.path.join(self.cache_dir, name)
