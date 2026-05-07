@@ -12,7 +12,7 @@
 用法: uv run search-news.py <config.json>
 """
 
-import sys, json, os, asyncio, re, random, base64, urllib.parse, html as htmlmod
+import sys, json, os, asyncio, re, random, base64, urllib.parse, html as htmlmod, struct
 from playwright.async_api import async_playwright
 import httpx
 
@@ -25,6 +25,73 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
 ]
+
+
+def _parse_image_size(data: bytes) -> tuple[int, int]:
+    """解析 JPEG/PNG/WebP 图片尺寸，返回 (width, height)。"""
+    if len(data) < 8:
+        return (0, 0)
+    # JPEG
+    if data[:2] == b'\xff\xd8':
+        i = 2
+        while i < len(data) - 1:
+            if data[i] == 0xFF:
+                marker = data[i + 1]
+                if marker == 0xD9:
+                    break
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    if i + 9 < len(data):
+                        h = struct.unpack('>H', data[i + 5:i + 7])[0]
+                        w = struct.unpack('>H', data[i + 7:i + 9])[0]
+                        return (w, h)
+                    break
+                if marker not in (0x00, 0x01, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4,
+                                   0xD5, 0xD6, 0xD7, 0xD8, 0xD9):
+                    if i + 3 < len(data):
+                        seg_len = struct.unpack('>H', data[i + 2:i + 4])[0]
+                        i += 2 + seg_len
+                        continue
+            i += 1
+        return (0, 0)
+    # PNG
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        if len(data) >= 24:
+            w = struct.unpack('>I', data[16:20])[0]
+            h = struct.unpack('>I', data[20:24])[0]
+            return (w, h)
+        return (0, 0)
+    # WebP
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        # VP8 (lossy) - search for keyframe start code in chunk data
+        if data[12:16] == b'VP8 ' and len(data) >= 40:
+            chunk_data = data[20:40]
+            for i in range(len(chunk_data) - 6):
+                if chunk_data[i:i + 3] == b'\x9d\x01\x2a':
+                    w = int.from_bytes(chunk_data[i + 3:i + 5], 'little') & 0x3FFF
+                    h = int.from_bytes(chunk_data[i + 5:i + 7], 'little') & 0x3FFF
+                    return (w, h)
+            return (0, 0)
+        # VP8L (lossless)
+        if data[12:16] == b'VP8L' and len(data) >= 25:
+            bits = struct.unpack('<I', data[21:25])[0]
+            w = (bits & 0x3FFF) + 1
+            h = ((bits >> 14) & 0x3FFF) + 1
+            return (w, h)
+        # VP8X (extended)
+        if data[12:16] == b'VP8X' and len(data) >= 30:
+            w = (data[24] | (data[25] << 8) | (data[26] << 16)) + 1
+            h = (data[27] | (data[28] << 8) | (data[29] << 16)) + 1
+            return (w, h)
+        return (0, 0)
+    return (0, 0)
+
+
+def _is_good_cover(data: bytes) -> bool:
+    """检查封面是否足够高清：>= 15KB 且尺寸 >= 200x200。"""
+    if len(data) < 15 * 1024:
+        return False
+    w, h = _parse_image_size(data)
+    return w >= 200 and h >= 200
 
 
 def _parse_count(s: str) -> int | None:
@@ -73,7 +140,7 @@ def extract_resolution(magnet_url: str) -> str:
 
 
 async def _fetch_jable_cover(code: str) -> str:
-    """从 Jable.tv 抓取封面 URL，返回图片二进制或空"""
+    """从 Jable.tv 抓取封面 URL，返回 base64 或空。优先使用高清封面。"""
     if not code:
         return ""
     try:
@@ -101,9 +168,11 @@ async def _fetch_jable_cover(code: str) -> str:
                 jable_url = m.group(1)
                 async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
                     resp = await client.get(jable_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                    if resp.status_code == 200 and len(resp.content) > 1000:
-                        log.info(f"cover ok: {code} (Jable fallback, {len(resp.content)//1024}KB)")
+                    if resp.status_code == 200 and _is_good_cover(resp.content):
+                        log.info(f"cover ok: {code} (Jable, {len(resp.content)//1024}KB)")
                         return f"data:image/jpeg;base64,{base64.b64encode(resp.content).decode()}"
+                    elif resp.status_code == 200:
+                        log.warning(f"cover small: {code} (Jable, {len(resp.content)//1024}KB)")
             except Exception:
                 pass
             finally:
@@ -114,9 +183,34 @@ async def _fetch_jable_cover(code: str) -> str:
 
 
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
-    """下载封面，尝试 ijavtorrent CDN → DMM CDN → Jable.tv → 返回 base64 或空"""
+    """下载封面，优先高清源：Jable.tv → DMM CDN → ijavtorrent CDN → 返回 base64 或空"""
     tried = set()
 
+    # 1. 优先尝试 Jable.tv 高清封面
+    if code:
+        jable_b64 = await _fetch_jable_cover(code)
+        if jable_b64:
+            return jable_b64
+
+    # 2. DMM CDN fallback
+    if code:
+        c = code.lower().replace("-", "")
+        dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
+        if dmm_url not in tried:
+            tried.add(dmm_url)
+            try:
+                async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+                    resp = await client.get(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
+                    if resp.status_code == 200 and _is_good_cover(resp.content):
+                        b64 = base64.b64encode(resp.content).decode()
+                        log.info(f"cover ok: {code} (DMM, {len(resp.content)//1024}KB)")
+                        return f"data:image/jpeg;base64,{b64}"
+                    elif resp.status_code == 200:
+                        log.warning(f"cover small: {code} (DMM, {len(resp.content)//1024}KB)")
+            except Exception:
+                pass
+
+    # 3. ijavtorrent CDN（可能返回缩略图，需检查尺寸）
     for url in [cover_url] if cover_url else []:
         if url in tried:
             continue
@@ -124,34 +218,16 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
         try:
             async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
                 resp = await client.get(url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                if resp.status_code == 200 and len(resp.content) > 1000:
+                if resp.status_code == 200 and _is_good_cover(resp.content):
                     b64 = base64.b64encode(resp.content).decode()
-                    log.info(f"cover ok: {code} ({len(resp.content)//1024}KB, {url.split('/')[-1][:30]})")
+                    log.info(f"cover ok: {code} (ijavtorrent, {len(resp.content)//1024}KB)")
                     return f"data:image/jpeg;base64,{b64}"
+                elif resp.status_code == 200:
+                    log.warning(f"cover small: {code} (ijavtorrent, {len(resp.content)//1024}KB, skipped)")
         except Exception:
             pass
 
-    if code:
-        c = code.lower().replace("-", "")
-        dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
-        if dmm_url not in tried:
-            try:
-                async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-                    resp = await client.get(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                    if resp.status_code == 200 and len(resp.content) > 1000:
-                        b64 = base64.b64encode(resp.content).decode()
-                        log.info(f"cover ok: {code} (DMM fallback, {len(resp.content)//1024}KB)")
-                        return f"data:image/jpeg;base64,{b64}"
-            except Exception:
-                pass
-
-    # Jable.tv fallback (Playwright bypasses Cloudflare)
-    if code:
-        jable_b64 = await _fetch_jable_cover(code)
-        if jable_b64:
-            return jable_b64
-
-    if cover_url:
+    if cover_url or code:
         log.warning(f"cover missing: {code}")
     return ""
 
