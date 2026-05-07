@@ -32,25 +32,25 @@ echo ""
 # Step 1: 抓取 ijavtorrent 数据 → DuckDB
 echo "[1/3] 抓取 ijavtorrent 数据..."
 if command -v uv >/dev/null 2>&1; then
-    uv run search-news.py "$CONFIG"
+    uv run scrapers/search_news.py "$CONFIG"
 else
-    python3 search-news.py "$CONFIG"
+    python3 scrapers/search_news.py "$CONFIG"
 fi
 echo "      ✓ DuckDB titles 已更新"
 echo ""
 
 # Step 2: 抓取 jable 封面+m3u8 → DuckDB
 echo "[2/3] 抓取 jable.tv 数据..."
-python3 fetch-jable.py "$CONFIG"
+python3 scrapers/fetch_jable.py "$CONFIG"
 echo "      ✓ DuckDB jable 已更新"
 echo ""
 
 # Step 3: 抓取社交动态 → DuckDB
 echo "[3/3] 抓取 X/Twitter 动态..."
 if command -v uv >/dev/null 2>&1; then
-    uv run fetch-social.py "$CONFIG"
+    uv run scrapers/fetch_social.py "$CONFIG"
 else
-    python3 fetch-social.py "$CONFIG"
+    python3 scrapers/fetch_social.py "$CONFIG"
 fi
 echo "      ✓ DuckDB social 已更新"
 echo ""
@@ -60,9 +60,9 @@ echo "========================================"
 echo "✅ 刷新完成"
 echo "========================================"
 # 统计 DuckDB 中的数据
-WORKS_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles').fetchone()[0]; c.close(); print(n)")
-JABLE_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
-SOCIAL_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM social_posts').fetchone()[0]; c.close(); print(n)")
+WORKS_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles').fetchone()[0]; c.close(); print(n)")
+JABLE_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
+SOCIAL_COUNT=$(python3 -c "from core import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM social_posts').fetchone()[0]; c.close(); print(n)")
 echo "作品总数 : $WORKS_COUNT"
 echo "Jable 条 : $JABLE_COUNT"
 echo "动态条数 : $SOCIAL_COUNT"

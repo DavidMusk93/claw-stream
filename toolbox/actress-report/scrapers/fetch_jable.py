@@ -13,9 +13,8 @@
 import sys, json, os, re, asyncio
 import httpx
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logger import get_logger
-import db
+from core import get_logger
+from core import db
 
 log = get_logger("fetch-jable")
 

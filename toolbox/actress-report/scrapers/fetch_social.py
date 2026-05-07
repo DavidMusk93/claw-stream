@@ -11,9 +11,8 @@
 import sys, json, os, asyncio
 from playwright.async_api import async_playwright
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logger import get_logger
-import db
+from core import get_logger
+from core import db
 
 log = get_logger("fetch-social")
 

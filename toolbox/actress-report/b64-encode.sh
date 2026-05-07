@@ -2,8 +2,8 @@
 # b64-encode.sh — 封面图片转 base64 嵌入
 # Usage: ./b64-encode.sh [image-dir]
 
-DIR="${1:-/tmp/actress-covers}"
-OUTDIR="/tmp/actress-b64"
+DIR="${1:-/tmp/star-covers}"
+OUTDIR="/tmp/star-b64"
 mkdir -p "$OUTDIR"
 
 echo "[b64] 编码封面图片..."

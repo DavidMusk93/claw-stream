@@ -3,10 +3,10 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright", "httpx", "duckdb"]
 # ///
-"""search-news.py — 从 ijavtorrent.com 女优个人主页获取单体作品数据
+"""search-news.py — 从 ijavtorrent.com star 个人主页获取单体作品数据
 
-抓取策略：直接访问女优个人主页 /actress/{slug}-{id}，页面只包含该女优的作品。
-单体过滤：通过作品卡片中的 actress 标签数量判断（1 个=单体，>1 个=共演/合集）。
+抓取策略：直接访问star 个人主页 /actress/{slug}-{id}，页面只包含该女优的作品。
+单体过滤：通过作品卡片中的 star 标签数量判断（1 个=单体，>1 个=共演/合集）。
 封面获取策略：ijavtorrent CDN → DMM CDN → placeholder。
 
 用法: uv run search-news.py <config.json>
@@ -16,9 +16,8 @@ import sys, json, os, asyncio, re, random, base64, urllib.parse, html as htmlmod
 from playwright.async_api import async_playwright
 import httpx
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from logger import get_logger
-import db
+from core import get_logger
+from core import db
 
 log = get_logger("search-news")
 
@@ -144,9 +143,9 @@ def _parse_video_items(html: str) -> list[dict]:
 
         # actress count (from mb-1)
         mb1_match = re.search(r'<div class="mb-1">(.*?)<table class="table table-sm mt-2">', block, re.DOTALL)
-        actress_count = 0
+        star_count = 0
         if mb1_match:
-            actress_count = len(re.findall(r'href="/actress/[^"]+"', mb1_match.group(1)))
+            star_count = len(re.findall(r'href="/actress/[^"]+"', mb1_match.group(1)))
 
         # magnets, sizes, seeds, leeches from table rows
         magnets = []
@@ -173,7 +172,7 @@ def _parse_video_items(html: str) -> list[dict]:
             "views": views,
             "downloads": downloads,
             "cover_url": cover_url,
-            "actress_count": actress_count,
+            "star_count": star_count,
             "magnets": magnets,
             "sizes": sizes,
             "seeds": seeds,
@@ -236,8 +235,8 @@ def _pick_best_magnet(item: dict) -> dict:
     }
 
 
-async def fetch_star(name: str, config_code: str, handle: str, actress_url: str):
-    """从女优个人主页获取单体作品数据，写入 DuckDB"""
+async def fetch_star(name: str, config_code: str, handle: str, star_page_url: str):
+    """从star 个人主页获取单体作品数据，写入 DuckDB"""
     star_id = db.upsert_star(name=name, handle=handle, code=config_code)
 
     titles: list[dict] = []
@@ -253,11 +252,11 @@ async def fetch_star(name: str, config_code: str, handle: str, actress_url: str)
         )
         page = await ctx.new_page()
         try:
-            if not actress_url:
-                log.warning(f"no actress_url for {name}, skipping")
+            if not star_page_url:
+                log.warning(f"no star_page_url for {name}, skipping")
                 return {"name": name, "titles": [], "count": 0}
 
-            await page.goto(actress_url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(star_page_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(random.randint(2000, 4000))
 
             html = await page.content()
@@ -265,7 +264,7 @@ async def fetch_star(name: str, config_code: str, handle: str, actress_url: str)
             log.info(f"{name}: {len(raw_items)} total items on page")
 
             # Filter solo works only
-            solo_items = [it for it in raw_items if it["actress_count"] == 1]
+            solo_items = [it for it in raw_items if it["star_count"] == 1]
             log.info(f"{name}: {len(solo_items)} solo items after filtering")
 
             for it in solo_items:
@@ -368,7 +367,7 @@ async def main():
             a["name"],
             a["code"],
             a.get("handle", ""),
-            a.get("actress_url", "")
+            a.get("star_page_url", "")
         )
         await random_delay(1.0, 2.5)
 
