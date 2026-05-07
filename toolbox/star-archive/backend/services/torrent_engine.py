@@ -18,13 +18,25 @@ log = get_logger("torrent-engine")
 _SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(_SCRIPT_DIR, "cache", "torrent")
 
-MAX_CACHE_SIZE_GB = 20
+MAX_CACHE_SIZE_GB = 15
 PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
+CACHE_CLEAN_INTERVAL_SEC = 60  # 后台清理间隔
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
     r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
 ]]
+
+# 常见番号格式匹配器
+_WORK_CODE_RE = re.compile(r"[A-Z]{2,6}-\d{3,5}", re.I)
+
+
+def _extract_work_code(name: str) -> str | None:
+    """从文件名或 torrent 名中提取作品番号（如 ABC-123）。"""
+    if not name:
+        return None
+    m = _WORK_CODE_RE.search(name)
+    return m.group(0).upper() if m else None
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -205,6 +217,11 @@ class TorrentEngine:
         self._stop = False
         self._alert_thread = threading.Thread(target=self._process_alerts, daemon=True)
         self._alert_thread.start()
+        self._clean_thread = threading.Thread(target=self._periodic_clean, daemon=True)
+        self._clean_thread.start()
+        # Startup cleanup: evict orphaned dirs + enforce limit
+        self._cleanup_orphaned()
+        self._enforce_cache_limit()
 
     def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str]:
         """从 torrent 文件中挑选 hhd800.com 主视频文件。"""
@@ -303,6 +320,7 @@ class TorrentEngine:
             "video_size": 0,
             "ready": False,
             "prefetch": prefetch,
+            "work_code": _extract_work_code(magnet) or None,
         }
         with self.lock:
             self.torrents[hash_str] = info
@@ -361,14 +379,14 @@ class TorrentEngine:
         info["video_idx"] = idx
         info["video_path"] = os.path.join(info["handle"].status().save_path, name)
         info["video_size"] = size
+        # 优先从视频文件名提取 code，更准确
+        code_from_file = _extract_work_code(name)
+        if code_from_file:
+            info["work_code"] = code_from_file
 
-        # 设置非视频文件的下载优先级为 0，避免下载 txt/url 等垃圾文件
+        # 只下载选定的主视频文件，其余全部设为 0（避免下载 preview/clip 等附加视频）
         file_prios = [0] * fs.num_files()
-        for i in range(fs.num_files()):
-            f_name = fs.file_path(i)
-            ext = os.path.splitext(f_name)[1].lower()
-            if ext in VIDEO_EXTS and not any(p.search(f_name) for p in SPAM_PATTERNS):
-                file_prios[i] = 4
+        file_prios[idx] = 4
         handle.prioritize_files(file_prios)
 
         num_pieces = ti.num_pieces()
@@ -388,8 +406,15 @@ class TorrentEngine:
 
         info["ready"] = True
 
-    def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:
-        """Apply play priority: head + tail urgent, rest slow (stream while download)"""
+    def _set_stream_window(
+        self,
+        h: lt.torrent_handle,
+        info: dict[str, Any],
+        time_sec: float,
+        duration_sec: float,
+        window_pcs: int = 30,
+    ) -> bool:
+        """严格按需：只下载 head + tail + 播放窗口，其余 piece 设为 0。"""
         if not h.status().has_metadata:
             return False
         ti = h.torrent_file()
@@ -397,37 +422,50 @@ class TorrentEngine:
         idx = info["video_idx"]
         if idx is None:
             return False
+
         num_pieces = ti.num_pieces()
         piece_length = ti.piece_length()
         file_offset = fs.file_offset(idx)
+        file_size = fs.file_size(idx)
         start_piece = file_offset // piece_length
-        end_piece = (file_offset + fs.file_size(idx)) // piece_length
+        end_piece = (file_offset + file_size) // piece_length
 
-        # Head pieces: urgent deadline + priority 7 (for moov-in-head & first frame)
-        head_count = min(30, num_pieces)
-        for p in range(start_piece, min(start_piece + head_count, num_pieces)):
+        # 全部清零 —— 不下载任何不在窗口内的 piece
+        piece_prios = [0] * num_pieces
+
+        # Head urgent (moov-in-head + first frame)
+        head_count = min(30, end_piece - start_piece + 1)
+        for p in range(start_piece, min(start_piece + head_count, end_piece + 1)):
+            piece_prios[p] = 7
             h.set_piece_deadline(p, 0)
 
-        # Tail pieces: priority 7 (for moov-in-tail)
-        tail_count = min(30, num_pieces)
+        # Tail urgent (moov-in-tail)
+        tail_count = min(30, end_piece - start_piece + 1)
+        for p in range(max(start_piece, end_piece - tail_count + 1), end_piece + 1):
+            piece_prios[p] = 7
 
-        piece_prios = [1] * num_pieces
-        # Head
-        for p in range(start_piece, min(start_piece + head_count, num_pieces)):
-            piece_prios[p] = 7
-        # Tail
-        for p in range(max(start_piece, end_piece - tail_count + 1), min(end_piece + 1, num_pieces)):
-            piece_prios[p] = 7
+        # 播放窗口
+        ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
+        target_byte = int(file_size * ratio)
+        target_piece = start_piece + (target_byte // piece_length)
+
+        win_start = max(start_piece, target_piece - window_pcs)
+        win_end = min(end_piece, target_piece + window_pcs)
+        for p in range(win_start, win_end + 1):
+            if piece_prios[p] == 0:
+                piece_prios[p] = 7
+                h.set_piece_deadline(p, 0)
 
         h.prioritize_pieces(piece_prios)
-
-        # Do NOT use sequential_download — it forces head-to-tail order,
-        # which delays tail-moov download for hours. Piece priority alone
-        # lets libtorrent fetch head + tail simultaneously.
         h.set_sequential_download(False)
-
-        log.info(f"play priority: {info['hash'][:12]}... head={head_count}pcs tail={tail_count}pcs seq=false")
         return True
+
+    def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:
+        """开始播放：只下载 head + tail，等待前端报告进度后滑动窗口。"""
+        result = self._set_stream_window(h, info, 0.0, 0.0, window_pcs=0)
+        if result:
+            log.info(f"play priority: {info['hash'][:12]}... head+tail only, waiting for progress")
+        return result
 
     def set_full_priority(self, hash_str: str) -> bool:
         """Play mode: head urgent, rest paused — ensure head ready first"""
@@ -442,53 +480,32 @@ class TorrentEngine:
         return result
 
     def apply_seek_priority(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """根据播放进度动态调整 piece 优先级，确保播放点附近优先下载。"""
+        """Seek：缩小窗口到 ±15 piece，快速定位目标位置。"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
             return False
         h = info["handle"]
-        if not h.status().has_metadata:
+        result = self._set_stream_window(h, info, time_sec, duration_sec, window_pcs=15)
+        if result:
+            log.info(
+                f"seek priority: {hash_str[:12]}... t={time_sec:.1f}s "
+                f"window=±15pcs strict"
+            )
+            info["last_access"] = time.time()
+        return result
+
+    def update_play_progress(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
+        """正常播放中滑动窗口：±30 piece（约 2–4 分钟缓冲），其余不下载。"""
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
             return False
-
-        ti = h.torrent_file()
-        fs = ti.files()
-        idx = info["video_idx"]
-        if idx is None:
-            return False
-
-        piece_length = ti.piece_length()
-        num_pieces = ti.num_pieces()
-        file_offset = fs.file_offset(idx)
-        file_size = fs.file_size(idx)
-        start_piece = file_offset // piece_length
-        end_piece = (file_offset + file_size) // piece_length
-
-        # 线性近似：time -> byte position
-        ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
-        target_byte = int(file_size * ratio)
-        target_piece = start_piece + (target_byte // piece_length)
-
-        # 紧急窗口：播放点前后 15 个 piece（约 1-4MB，取决于 piece size）
-        window = 15
-        urgent_start = max(start_piece, target_piece - window)
-        urgent_end = min(end_piece, target_piece + window)
-
-        # 在现有优先级基础上只提升目标窗口
-        current = h.piece_priorities()
-        new_prios = list(current)
-        for p in range(urgent_start, urgent_end + 1):
-            if p < len(new_prios):
-                new_prios[p] = 7
-                h.set_piece_deadline(p, 0)
-
-        h.prioritize_pieces(new_prios)
-        log.info(
-            f"seek priority: {hash_str[:12]}... t={time_sec:.1f}s "
-            f"target_pc={target_piece} window={urgent_start}-{urgent_end}"
-        )
-        info["last_access"] = time.time()
-        return True
+        h = info["handle"]
+        result = self._set_stream_window(h, info, time_sec, duration_sec, window_pcs=30)
+        if result:
+            info["last_access"] = time.time()
+        return result
 
     def get_status(self, hash_str: str) -> dict[str, Any] | None:
         """获取指定 torrent 的播放和下载状态。"""
@@ -504,6 +521,7 @@ class TorrentEngine:
         return {
             "hash": hash_str,
             "name": s.name,
+            "work_code": info.get("work_code") or _extract_work_code(s.name) or "",
             "ready": info["ready"] and s.has_metadata,
             "cached": local_size > 1024 * 1024,
             "head_ready": head_ready,
@@ -558,7 +576,46 @@ class TorrentEngine:
                     pass
         return total
 
+    def _periodic_clean(self) -> None:
+        """后台线程：定期检查并清理超出限制的缓存。"""
+        while not self._stop:
+            time.sleep(CACHE_CLEAN_INTERVAL_SEC)
+            if self._stop:
+                break
+            try:
+                self._enforce_cache_limit()
+            except Exception as e:
+                log.error(f"periodic clean error: {e}")
+
+    def _cleanup_orphaned(self) -> None:
+        """清理不在引擎管理列表中的孤儿缓存目录。"""
+        if not os.path.exists(self.cache_dir):
+            return
+        with self.lock:
+            known = set(self.torrents.keys())
+        freed = 0
+        for name in os.listdir(self.cache_dir):
+            path = os.path.join(self.cache_dir, name)
+            if not os.path.isdir(path):
+                continue
+            if name in known:
+                continue
+            try:
+                size = sum(
+                    os.stat(os.path.join(dp, f)).st_blocks * 512
+                    for dp, _, files in os.walk(path)
+                    for f in files
+                )
+                shutil.rmtree(path, ignore_errors=True)
+                freed += size
+                log.info(f"cleaned orphaned cache: {name} ({format_size(size)})")
+            except Exception as e:
+                log.warning(f"cleanup orphaned {name} failed: {e}")
+        if freed:
+            log.info(f"orphaned cleanup done: freed {format_size(freed)}")
+
     def shutdown(self) -> None:
         """关闭引擎，停止 alert 处理线程。"""
         self._stop = True
         self._alert_thread.join(timeout=5)
+        self._clean_thread.join(timeout=5)

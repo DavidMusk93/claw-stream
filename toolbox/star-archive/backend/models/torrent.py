@@ -37,7 +37,14 @@ class TorrentAddResponse(BaseModel):
 
 
 class SeekRequest(BaseModel):
-    """播放进度上报请求"""
+    """Seek 进度上报请求"""
+    hash: str
+    time: float
+    duration: float
+
+
+class ProgressRequest(BaseModel):
+    """正常播放中定期进度上报请求"""
     hash: str
     time: float
     duration: float
