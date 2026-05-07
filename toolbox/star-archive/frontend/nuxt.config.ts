@@ -67,5 +67,10 @@ export default defineNuxtConfig({
         changeOrigin: true,
       },
     },
+    routeRules: {
+      '/api/**': { proxy: 'http://127.0.0.1:8765/api/**' },
+      '/stream/**': { proxy: 'http://127.0.0.1:8765/stream/**' },
+      '/torrent/**': { proxy: 'http://127.0.0.1:8765/torrent/**' },
+    },
   },
 })
