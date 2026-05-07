@@ -49,6 +49,9 @@
           @stalled="onStalled"
           @abort="onAbort"
           @error="onError"
+          @timeupdate="onTimeUpdate"
+          @ended="onEnded"
+          @loadedmetadata="onLoadedMetadata"
         />
 
         <!-- Loading overlay -->
@@ -108,6 +111,92 @@ const isFullscreen = ref(false)
 const retryCount = ref(0)
 const MAX_RETRIES = 3
 
+// Progress persistence
+const PROGRESS_KEY = 'claw_video_progress'
+const PROGRESS_SAVE_INTERVAL_MS = 5000
+let lastProgressSave = 0
+
+interface ProgressRecord {
+  currentTime: number
+  duration: number
+  updatedAt: number
+}
+
+function loadProgressMap(): Record<string, ProgressRecord> {
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveProgressMap(map: Record<string, ProgressRecord>) {
+  try {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(map))
+  } catch {
+    // storage full or private mode
+  }
+}
+
+function saveProgress() {
+  const v = videoRef.value
+  const hash = props.hash
+  if (!v || !hash || !v.duration || v.duration === Infinity) return
+  if (v.currentTime < 3) return // don't save very early progress
+  if (v.currentTime / v.duration > 0.95) return // nearly finished
+
+  const map = loadProgressMap()
+  map[hash] = {
+    currentTime: v.currentTime,
+    duration: v.duration,
+    updatedAt: Date.now(),
+  }
+  saveProgressMap(map)
+}
+
+function restoreProgress() {
+  const v = videoRef.value
+  const hash = props.hash
+  if (!v || !hash) return
+  const map = loadProgressMap()
+  const rec = map[hash]
+  if (!rec || !rec.duration) return
+  // Skip if already near the end or if duration changed significantly
+  if (rec.currentTime / rec.duration > 0.95) {
+    delete map[hash]
+    saveProgressMap(map)
+    return
+  }
+  if (v.duration && Math.abs(v.duration - rec.duration) / rec.duration > 0.1) return
+
+  v.currentTime = rec.currentTime
+  logInfo('player', `restored progress ${rec.currentTime.toFixed(1)}s / ${rec.duration.toFixed(1)}s`)
+}
+
+function clearProgress() {
+  const hash = props.hash
+  if (!hash) return
+  const map = loadProgressMap()
+  if (map[hash]) {
+    delete map[hash]
+    saveProgressMap(map)
+  }
+}
+
+function cleanupOldProgress() {
+  const map = loadProgressMap()
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000 // 30 days
+  let changed = false
+  for (const key of Object.keys(map)) {
+    if (map[key].updatedAt < cutoff) {
+      delete map[key]
+      changed = true
+    }
+  }
+  if (changed) saveProgressMap(map)
+}
+
 // Touch gesture state
 const touchStartX = ref(0)
 const touchStartY = ref(0)
@@ -138,12 +227,12 @@ watch(() => props.hash, async (hash) => {
   errorMsg.value = ''
   canplayFired.value = false
   buffering.value = true
-  logInfo(`[player] open video hash=${hash.slice(0, 12)}`)
+  logInfo('player', `open video hash=${hash.slice(0, 12)}`)
 
   const ready = await waitForHeadReady(hash)
   if (!ready) {
     errorMsg.value = error.value || '加载失败'
-    logError(`[player] load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
+    logError('player', `load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
     return
   }
 
@@ -157,6 +246,7 @@ watch(() => props.hash, async (hash) => {
 
 watch(isOpen, (open) => {
   if (!open) {
+    saveProgress()
     stopPolling()
     if (videoRef.value) {
       videoRef.value.pause()
@@ -173,46 +263,64 @@ watch(isOpen, (open) => {
 })
 
 function close() {
-  logInfo('[player] close video')
+  logInfo('player', 'close video')
   isOpen.value = false
+}
+
+function onLoadedMetadata() {
+  cleanupOldProgress()
+  restoreProgress()
 }
 
 function onCanplay() {
   canplayFired.value = true
   buffering.value = false
   retryCount.value = 0
-  logInfo('[player] canplay')
+  logInfo('player', 'canplay')
   videoRef.value?.play().catch(() => {})
+}
+
+function onTimeUpdate() {
+  const now = Date.now()
+  if (now - lastProgressSave > PROGRESS_SAVE_INTERVAL_MS) {
+    saveProgress()
+    lastProgressSave = now
+  }
+}
+
+function onEnded() {
+  logInfo('player', 'ended')
+  clearProgress()
 }
 
 function onWaiting() {
   buffering.value = true
-  logInfo('[player] waiting (buffering)')
+  logInfo('player', 'waiting (buffering)')
 }
 function onPlaying() {
   buffering.value = false
-  logInfo('[player] playing')
+  logInfo('player', 'playing')
 }
 function onSeeking() {
   buffering.value = true
-  logInfo('[player] seeking')
+  logInfo('player', 'seeking')
   // 暂停播放，等待数据就绪，避免 seek 到未缓存区域触发解码错误
   videoRef.value?.pause()
 }
 function onSeeked() {
   buffering.value = false
-  logInfo('[player] seeked')
+  logInfo('player', 'seeked')
   // 尝试恢复播放，如果数据不足浏览器会再次进入 waiting
   videoRef.value?.play().catch(() => {})
 }
 
 function onStalled() {
   buffering.value = true
-  logInfo('[player] stalled (waiting for data)')
+  logInfo('player', 'stalled (waiting for data)')
 }
 
 function onAbort() {
-  logInfo('[player] abort')
+  logInfo('player', 'abort')
   buffering.value = false
 }
 
@@ -220,11 +328,11 @@ function onError() {
   const v = videoRef.value
   const code = v?.error?.code ?? 0
   const message = v?.error?.message ?? 'unknown'
-  logError(`[player] video error code=${code} msg=${message}`)
+  logError('player', `video error code=${code} msg=${message}`)
 
   if (retryCount.value < MAX_RETRIES) {
     retryCount.value++
-    logInfo(`[player] retry ${retryCount.value}/${MAX_RETRIES}`)
+    logInfo('player', `retry ${retryCount.value}/${MAX_RETRIES}`)
     errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
     const currentSrc = v?.src || streamUrl.value
     if (v) {
@@ -249,10 +357,10 @@ function togglePlay() {
   if (!v) return
   if (v.paused) {
     v.play().catch(() => {})
-    logInfo('[player] toggle play')
+    logInfo('player', 'toggle play')
   } else {
     v.pause()
-    logInfo('[player] toggle pause')
+    logInfo('player', 'toggle pause')
   }
 }
 
@@ -261,10 +369,10 @@ function toggleFullscreen() {
   if (!el) return
   if (!isFullscreen.value) {
     enterFullscreen(el)
-    logInfo('[player] enter fullscreen')
+    logInfo('player', 'enter fullscreen')
   } else {
     exitFullscreen()
-    logInfo('[player] exit fullscreen')
+    logInfo('player', 'exit fullscreen')
   }
 }
 
@@ -345,7 +453,7 @@ function onTouchEnd(e: TouchEvent) {
     const seekSeconds = dx > 0 ? 10 : -10
     const prev = v.currentTime
     v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + seekSeconds))
-    logInfo(`[player] swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+    logInfo('player', `swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     showHint(dx > 0 ? '快进 10 秒' : '后退 10 秒')
     return
   }
@@ -356,7 +464,7 @@ function onTouchEnd(e: TouchEvent) {
       const delta = dy < 0 ? 0.1 : -0.1
       const prev = v.volume
       v.volume = Math.max(0, Math.min(1, v.volume + delta))
-      logInfo(`[player] swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
+      logInfo('player', `swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
       showHint(`音量 ${Math.round(v.volume * 100)}%`)
     }
   }
@@ -377,30 +485,30 @@ onMounted(() => {
 
     if (e.key === 'Escape') {
       e.preventDefault()
-      logInfo('[player] key Escape')
+      logInfo('player', 'key Escape')
       close()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
       const prev = v.currentTime
       v.currentTime = Math.max(0, v.currentTime - 10)
-      logInfo(`[player] key ArrowLeft seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      logInfo('player', `key ArrowLeft seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       const prev = v.currentTime
       v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
-      logInfo(`[player] key ArrowRight seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      logInfo('player', `key ArrowRight seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     } else if (e.key === ' ') {
       e.preventDefault()
       if (v.paused) {
         v.play()
-        logInfo('[player] key Space play')
+        logInfo('player', 'key Space play')
       } else {
         v.pause()
-        logInfo('[player] key Space pause')
+        logInfo('player', 'key Space pause')
       }
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault()
-      logInfo('[player] key F fullscreen')
+      logInfo('player', 'key F fullscreen')
       toggleFullscreen()
     }
   }
