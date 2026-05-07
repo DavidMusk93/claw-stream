@@ -207,9 +207,8 @@ class TorrentEngine:
         self._alert_thread.start()
 
     def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str]:
-        """从 torrent 文件中挑选最合适的视频文件。"""
+        """从 torrent 文件中挑选 hhd800.com 主视频文件。"""
         fs = ti.files()
-        candidates = []
         hhd800_candidates = []
         for idx in range(fs.num_files()):
             name = fs.file_path(idx)
@@ -219,22 +218,13 @@ class TorrentEngine:
                 continue
             if any(p.search(name) for p in SPAM_PATTERNS):
                 continue
-            # hhd800.com@ prefix indicates main video file (not spam)
-            if "hhd800" in name.lower() or "hdd800" in name.lower():
+            if "hhd800" in name.lower():
                 hhd800_candidates.append((size, idx, name))
-            candidates.append((size, idx, name))
-        # Prefer hhd800/hdd800 main video files
         if hhd800_candidates:
             hhd800_candidates.sort(reverse=True)
             return hhd800_candidates[0]
-        if candidates:
-            candidates.sort(reverse=True)
-            return candidates[0]
-        # Fallback: any file
-        for idx in range(fs.num_files()):
-            candidates.append((fs.file_size(idx), idx, fs.file_path(idx)))
-        candidates.sort(reverse=True)
-        return candidates[0] if candidates else (0, 0, "")
+        # 没有 hhd800 视频文件，返回空标记
+        return (0, -1, "")
 
     def _calc_prefetch_pieces(self, ti: lt.torrent_info, video_idx: int) -> tuple[int, int]:
         """计算预下载的 piece 范围（前 2%）。"""
@@ -363,9 +353,23 @@ class TorrentEngine:
         fs = ti.files()
 
         size, idx, name = self._pick_video_file(ti)
+        if idx == -1:
+            log.warning(f"metadata: {hash_str[:12]}... no hhd800 video file found")
+            info["ready"] = False
+            return
+
         info["video_idx"] = idx
         info["video_path"] = os.path.join(info["handle"].status().save_path, name)
         info["video_size"] = size
+
+        # 设置非视频文件的下载优先级为 0，避免下载 txt/url 等垃圾文件
+        file_prios = [0] * fs.num_files()
+        for i in range(fs.num_files()):
+            f_name = fs.file_path(i)
+            ext = os.path.splitext(f_name)[1].lower()
+            if ext in VIDEO_EXTS and not any(p.search(f_name) for p in SPAM_PATTERNS):
+                file_prios[i] = 4
+        handle.prioritize_files(file_prios)
 
         num_pieces = ti.num_pieces()
         if info.get("prefetch"):
