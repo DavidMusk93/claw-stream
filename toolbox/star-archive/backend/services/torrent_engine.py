@@ -437,6 +437,55 @@ class TorrentEngine:
             info["last_access"] = time.time()
         return result
 
+    def apply_seek_priority(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
+        """根据播放进度动态调整 piece 优先级，确保播放点附近优先下载。"""
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return False
+        h = info["handle"]
+        if not h.status().has_metadata:
+            return False
+
+        ti = h.torrent_file()
+        fs = ti.files()
+        idx = info["video_idx"]
+        if idx is None:
+            return False
+
+        piece_length = ti.piece_length()
+        num_pieces = ti.num_pieces()
+        file_offset = fs.file_offset(idx)
+        file_size = fs.file_size(idx)
+        start_piece = file_offset // piece_length
+        end_piece = (file_offset + file_size) // piece_length
+
+        # 线性近似：time -> byte position
+        ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
+        target_byte = int(file_size * ratio)
+        target_piece = start_piece + (target_byte // piece_length)
+
+        # 紧急窗口：播放点前后 15 个 piece（约 1-4MB，取决于 piece size）
+        window = 15
+        urgent_start = max(start_piece, target_piece - window)
+        urgent_end = min(end_piece, target_piece + window)
+
+        # 在现有优先级基础上只提升目标窗口
+        current = h.piece_priorities()
+        new_prios = list(current)
+        for p in range(urgent_start, urgent_end + 1):
+            if p < len(new_prios):
+                new_prios[p] = 7
+                h.set_piece_deadline(p, 0)
+
+        h.prioritize_pieces(new_prios)
+        log.info(
+            f"seek priority: {hash_str[:12]}... t={time_sec:.1f}s "
+            f"target_pc={target_piece} window={urgent_start}-{urgent_end}"
+        )
+        info["last_access"] = time.time()
+        return True
+
     def get_status(self, hash_str: str) -> dict[str, Any] | None:
         """获取指定 torrent 的播放和下载状态。"""
         with self.lock:

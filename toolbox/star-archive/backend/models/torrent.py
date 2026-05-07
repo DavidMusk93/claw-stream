@@ -34,3 +34,10 @@ class TorrentAddResponse(BaseModel):
     ready: bool = False
     peers: int = 0
     progress: float = 0.0
+
+
+class SeekRequest(BaseModel):
+    """播放进度上报请求"""
+    hash: str
+    time: float
+    duration: float

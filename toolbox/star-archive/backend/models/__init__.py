@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .star import Star, StarWithTitles
 from .work import Work, WorkWithMagnets
-from .torrent import TorrentStatus, TorrentAddRequest, TorrentAddResponse
+from .torrent import TorrentStatus, TorrentAddRequest, TorrentAddResponse, SeekRequest
 from .stream import StreamCheckResponse
 from .cache import CacheStatus, CacheMetrics
 

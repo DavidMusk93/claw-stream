@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, Request, Depends, HTTPException
 from typing import Any
 
-from backend.models import TorrentStatus, TorrentAddRequest, TorrentAddResponse
+from backend.models import TorrentStatus, TorrentAddRequest, TorrentAddResponse, SeekRequest
 
 router = APIRouter(prefix="/torrent", tags=["torrents"])
 
@@ -51,3 +51,12 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
         peers=status["peers"] if status else 0,
         progress=status["progress"] if status else 0.0,
     )
+
+
+@router.post("/seek")
+async def seek_torrent(req: SeekRequest, engine: Any = Depends(get_engine)):
+    """Report current playback position so engine can prioritize pieces ahead of playhead."""
+    ok = engine.apply_seek_priority(req.hash, req.time, req.duration)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Torrent not found or not ready")
+    return {"ok": True}
