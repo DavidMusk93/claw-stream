@@ -2,8 +2,10 @@
 
 import json
 from .connection import _conn
+from .ops_log import trace_db
 
 
+@trace_db
 def get_social_posts(star_id, limit=3):
     """获取 star 最近动态"""
     conn = _conn()
@@ -18,6 +20,7 @@ def get_social_posts(star_id, limit=3):
     return rows
 
 
+@trace_db
 def get_titles_without_jable(star_name=None):
     """获取缺少 jable 数据的 title 列表"""
     conn = _conn()
@@ -41,6 +44,7 @@ def get_titles_without_jable(star_name=None):
     return rows
 
 
+@trace_db
 def get_all_titles_json():
     """导出所有数据为 JSON 格式（SQL 层聚合）
 
@@ -93,6 +97,7 @@ def get_all_titles_json():
     ]}
 
 
+@trace_db
 def export_report_json():
     """导出为 JSON（stdout），SQL 层聚合。
 
@@ -130,6 +135,7 @@ def export_report_json():
     print(json.dumps(data, ensure_ascii=False))
 
 
+@trace_db
 def get_stats() -> dict:
     """聚合统计：作品总数、jable 覆盖率、动态条数、各 star 作品数"""
     conn = _conn()

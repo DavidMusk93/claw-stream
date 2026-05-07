@@ -2,6 +2,7 @@
 
 import re
 from .connection import _conn, _date_to_sort
+from .ops_log import trace_db
 
 
 def _extract_hash(magnet):
@@ -9,6 +10,7 @@ def _extract_hash(magnet):
     return m.group(1).lower() if m else None
 
 
+@trace_db
 def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None):
     """插入或更新 star 信息，返回 id"""
     conn = _conn()
@@ -37,6 +39,7 @@ def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None
     return row[0]
 
 
+@trace_db
 def title_exists(star_id, code):
     """检查 title 是否已存在"""
     conn = _conn()
@@ -48,6 +51,7 @@ def title_exists(star_id, code):
     return row is not None
 
 
+@trace_db
 def upsert_title(star_id, code, title=None, release_date=None, views=None,
                 likes=None, resolution=None, download_url=None, cover_url=None,
                 cover_b64=None, cover_path=None):
@@ -97,6 +101,7 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
     return row[0]
 
 
+@trace_db
 def upsert_magnet(title_id, magnet, is_primary=True):
     """插入或更新磁力链接"""
     h = _extract_hash(magnet)
@@ -121,6 +126,7 @@ def upsert_magnet(title_id, magnet, is_primary=True):
     conn.close()
 
 
+@trace_db
 def update_jable(title_id, m3u8_url=None, cover_url=None):
     """更新 jable 数据"""
     conn = _conn()
@@ -132,6 +138,7 @@ def update_jable(title_id, m3u8_url=None, cover_url=None):
     conn.close()
 
 
+@trace_db
 def upsert_social_post(star_id, platform, content, post_url=None, posted_at=None):
     """插入或更新社交动态"""
     conn = _conn()

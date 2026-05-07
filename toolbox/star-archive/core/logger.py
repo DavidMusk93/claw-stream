@@ -15,7 +15,8 @@
 import os, sys, json, datetime, logging
 from logging.handlers import RotatingFileHandler
 
-DEFAULT_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 
 # 回收策略：单个日志文件 10MB，保留 5 个备份
 LOG_MAX_BYTES = 10 * 1024 * 1024
@@ -34,6 +35,9 @@ class _JsonFormatter(logging.Formatter):
             "ts": datetime.datetime.fromtimestamp(record.created, tz=datetime.timezone.utc).isoformat(),
             "name": record.name,
             "level": record.levelname,
+            "file": record.filename,
+            "line": record.lineno,
+            "func": record.funcName,
             "msg": record.getMessage(),
         }
         if hasattr(record, "extra"):
@@ -45,7 +49,7 @@ class _JsonFormatter(logging.Formatter):
 
 class _TextFormatter(logging.Formatter):
     def format(self, record):
-        base = f"{self.formatTime(record)} [{record.name}] {record.levelname} {record.getMessage()}"
+        base = f"{self.formatTime(record)} [{record.name}] {record.levelname} {record.filename}:{record.lineno} {record.getMessage()}"
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
         return base
@@ -78,12 +82,17 @@ class LoggerWrapper:
     def __init__(self, logger):
         self._log = logger
 
-    def _log_with_extra(self, level, msg, extra=None, **kwargs):
+    def _log_with_extra(self, level, msg, extra=None, exc_info=False, **kwargs):
         if extra is None:
             extra = {}
         if kwargs:
             extra.update(kwargs)
-        self._log.log(level, msg, extra={"extra": extra} if extra else None)
+        self._log.log(
+            level, msg,
+            extra={"extra": extra} if extra else None,
+            exc_info=exc_info,
+            stacklevel=3,
+        )
 
     def debug(self, msg, extra=None, **kwargs):
         self._log_with_extra(logging.DEBUG, msg, extra, **kwargs)
@@ -95,11 +104,7 @@ class LoggerWrapper:
         self._log_with_extra(logging.WARNING, msg, extra, **kwargs)
 
     def error(self, msg, extra=None, exc_info=False, **kwargs):
-        if extra is None:
-            extra = {}
-        if kwargs:
-            extra.update(kwargs)
-        self._log.log(logging.ERROR, msg, extra={"extra": extra} if extra else None, exc_info=exc_info)
+        self._log_with_extra(logging.ERROR, msg, extra, exc_info=exc_info, **kwargs)
 
     def exception(self, msg, extra=None, **kwargs):
         self.error(msg, extra=extra, exc_info=True, **kwargs)
