@@ -74,10 +74,8 @@
         </button>
       </div>
 
-      <!-- 底部提示 -->
-      <p class="text-[12px] text-neutral-700 text-center mt-8 tracking-wide">
-        格式: rn + 年月日 + 奇偶 (1/0)
-      </p>
+      <!-- 底部留白 -->
+      <div class="h-8" />
     </div>
   </div>
 </template>
