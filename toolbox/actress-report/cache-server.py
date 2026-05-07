@@ -675,8 +675,11 @@ function check(){
                     if not buf:
                         break
                     # Hole detection: all zeros means piece not downloaded
-                    # Sending 0 causes browser parse failure, seek stuck
-                    if not any(buf):
+                    # Sending 0 causes browser parse failure, seek stuck.
+                    # Only treat as hole if we read a full chunk (>=16384).
+                    # Small ranges (e.g. Safari probe bytes=0-1) may legitimately
+                    # start with zero bytes (MP4 size field) and must not be dropped.
+                    if len(buf) >= 16384 and not any(buf):
                         break
                     self.wfile.write(buf)
                     remaining -= len(buf)
@@ -692,7 +695,7 @@ function check(){
                     buf = f.read(16384)
                     if not buf:
                         break
-                    if not any(buf):
+                    if len(buf) >= 16384 and not any(buf):
                         break
                     self.wfile.write(buf)
 
