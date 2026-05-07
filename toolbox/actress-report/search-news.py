@@ -3,9 +3,10 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright", "httpx", "duckdb"]
 # ///
-"""search-news.py — 从 ijavtorrent.com 获取作品数据（含封面 base64、magnet、清晰度）
+"""search-news.py — 从 ijavtorrent.com 女优个人主页获取单体作品数据
 
-自动过滤：排除共演/合集/写真，只保留单体作品。
+抓取策略：直接访问女优个人主页 /actress/{slug}-{id}，页面只包含该女优的作品。
+单体过滤：通过作品卡片中的 actress 标签数量判断（1 个=单体，>1 个=共演/合集）。
 封面获取策略：ijavtorrent CDN → DMM CDN → placeholder。
 
 用法: uv run search-news.py <config.json>
@@ -20,38 +21,6 @@ from logger import get_logger
 import db
 
 log = get_logger("search-news")
-
-SEARCH_TERMS = {
-    "白峰ミウ": "miu+shiromine",
-    "夢実かなえ": "kanae+yumemi",
-    "柏木ふみか": "fumika+kashiwagi",
-    "森日菜子": "hinako+mori",
-    "miru": "miru",
-    "金松季歩": "kiho+kanematsu",
-    "神木玲": "rei+kamiki",
-    "瀧本雫葉": "shizuha+kitamoto",
-    "天宮響": "hibiki+amamiya",
-    "楓カレン": "karen+kaede",
-    "美ノ瀬すずめ": "suzume+mino",
-    "涼森れむ": "remu+suzumori",
-    "瀬戸環奈": "kanna+seto",
-}
-
-KNOWN_NAMES = {
-    "白峰ミウ": "Miu Shiromine",
-    "夢実かなえ": "Kanae Yumemi",
-    "柏木ふみか": "Fumika Kashiwagi",
-    "森日菜子": "Mori Hinako",
-    "miru": "miru",
-    "金松季歩": "Kiho Kanematsu",
-    "神木玲": "Rei Kamiki",
-    "瀧本雫葉": "Shizuha Kitamoto",
-    "天宮響": "Hibiki Amamiya",
-    "楓カレン": "Karen Kaede",
-    "美ノ瀬すずめ": "Suzume Mino",
-    "涼森れむ": "Remu Suzumori",
-    "瀬戸環奈": "Kanna Seto",
-}
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0",
@@ -96,20 +65,6 @@ def extract_resolution(magnet_url: str) -> str:
     return ""
 
 
-def is_solo_work(text_line: str) -> bool:
-    if "blu-ray" in text_line.lower() or "bluray" in text_line.lower():
-        return False
-    if "monster" in text_line.lower():
-        return False
-    names = re.findall(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?", text_line)
-    if len(names) <= 2:
-        return True
-    tags = ["Top", "Daily", "Solowork", "Creampie", "Big Tits", "Slut", "Slender", "Titty", "Blow", "Squirting", "Masturbation"]
-    if any(t.lower() in text_line.lower() for t in tags):
-        return True
-    return False
-
-
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
     """下载封面，尝试 ijavtorrent CDN → DMM CDN → 返回 base64 或空"""
     tried = set()
@@ -147,84 +102,184 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
     return ""
 
 
-async def fetch_star(name: str, config_code: str, handle: str):
-    """获取单个女优的作品数据，写入 DuckDB"""
+def _parse_video_items(html: str) -> list[dict]:
+    """从 actress 个人主页 HTML 中解析所有作品卡片，返回原始块列表"""
+    # 找到所有 video-item 的起始位置，用位置切片避免贪婪匹配问题
+    starts = [m.start() for m in re.finditer(r'<div class="col-md-4 mb-4 video-item"', html)]
+    items = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else start + 8000
+        block = html[start:end]
+
+        # movie_id
+        mid_match = re.search(r'data-movie-id="(\d+)"', block)
+        movie_id = mid_match.group(1) if mid_match else ""
+
+        # code
+        code_match = re.search(r'href="/movie/([a-z0-9-]+)-\d+"', block)
+        code = code_match.group(1).upper() if code_match else ""
+        if not code or code.startswith("OAE") or code.startswith("FWAY") or code.startswith("OF") or code.startswith("REBD"):
+            continue
+
+        # title (from alt attribute)
+        title_match = re.search(r'alt="([^"]+)"', block)
+        title = title_match.group(1) if title_match else ""
+        # Remove code prefix from title if present
+        if title.upper().startswith(code + " "):
+            title = title[len(code) + 1:]
+
+        # date from mb-2
+        date_match = re.search(r'<div class="mb-2">.*?([0-9]{2}/[0-9]{2}/[0-9]{4})', block, re.DOTALL)
+        date_str = date_match.group(1) if date_match else ""
+
+        # views / downloads
+        views_match = re.search(r'pageview-value">([0-9,]+)', block)
+        views = views_match.group(1).replace(",", "") if views_match else ""
+        downloads_match = re.search(r'download-value">([0-9,]+)', block)
+        downloads = downloads_match.group(1).replace(",", "") if downloads_match else ""
+
+        # cover
+        cover_match = re.search(r'data-link="(https?://[^"]+)"', block)
+        cover_url = cover_match.group(1) if cover_match else ""
+
+        # actress count (from mb-1)
+        mb1_match = re.search(r'<div class="mb-1">(.*?)<table class="table table-sm mt-2">', block, re.DOTALL)
+        actress_count = 0
+        if mb1_match:
+            actress_count = len(re.findall(r'href="/actress/[^"]+"', mb1_match.group(1)))
+
+        # magnets, sizes, seeds, leeches from table rows
+        magnets = []
+        sizes = []
+        seeds = []
+        leeches = []
+        for row_match in re.finditer(r'<tr style="vertical-align: middle">(.*?)</tr>', block, re.DOTALL):
+            row = row_match.group(1)
+            magnet_match = re.search(r'href="(magnet:\?xt=[^"]+)"', row)
+            if magnet_match:
+                magnets.append(htmlmod.unescape(magnet_match.group(1)))
+                size_match = re.search(r'fa-weight-hanging"></i>\s*([0-9.]+gb)', row, re.I)
+                sizes.append(size_match.group(1) if size_match else "")
+                seed_match = re.search(r'<strong>S:</strong>\s*(\d+)', row)
+                seeds.append(seed_match.group(1) if seed_match else "0")
+                leech_match = re.search(r'<strong>L:</strong>\s*(\d+)', row)
+                leeches.append(leech_match.group(1) if leech_match else "0")
+
+        items.append({
+            "movie_id": movie_id,
+            "code": code,
+            "title": title,
+            "date": date_str,
+            "views": views,
+            "downloads": downloads,
+            "cover_url": cover_url,
+            "actress_count": actress_count,
+            "magnets": magnets,
+            "sizes": sizes,
+            "seeds": seeds,
+            "leeches": leeches,
+        })
+
+    return items
+
+
+def _pick_best_magnet(item: dict) -> dict:
+    """从多个磁力链接中挑选最佳的一个：优先 FHD/4K，否则按种子数，否则按大小"""
+    magnets = item.get("magnets", [])
+    if not magnets:
+        return {"magnet": "", "resolution": "", "size": ""}
+
+    # Score each magnet
+    scored = []
+    for i, m in enumerate(magnets):
+        res = extract_resolution(m)
+        size_str = item["sizes"][i] if i < len(item["sizes"]) else ""
+        seed_str = item["seeds"][i] if i < len(item["seeds"]) else "0"
+        seed = int(seed_str) if seed_str.isdigit() else 0
+        size_mb = 0
+        if size_str:
+            try:
+                size_mb = float(size_str.lower().replace("gb", "").strip()) * 1024
+            except ValueError:
+                pass
+
+        # Resolution priority: 4K > FHDC > FHD > 1080p > HD > 720p
+        res_score = 0
+        if "[4K]" in res or "4k" in res.lower():
+            res_score = 600
+        elif "[FHDC]" in res:
+            res_score = 500
+        elif "[FHD]" in res:
+            res_score = 400
+        elif "1080p" in res:
+            res_score = 300
+        elif "[HD]" in res:
+            res_score = 200
+        elif "720p" in res:
+            res_score = 100
+
+        scored.append({
+            "magnet": m,
+            "resolution": res,
+            "size": size_str,
+            "seed": seed,
+            "size_mb": size_mb,
+            "score": res_score + seed + size_mb / 100,
+        })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    best = scored[0]
+    return {
+        "magnet": best["magnet"],
+        "resolution": best["resolution"],
+        "size": best["size"],
+    }
+
+
+async def fetch_star(name: str, config_code: str, handle: str, actress_url: str):
+    """从女优个人主页获取单体作品数据，写入 DuckDB"""
     star_id = db.upsert_star(name=name, handle=handle, code=config_code)
 
-    search_term = SEARCH_TERMS.get(name, handle.replace("_", "+"))
-    target_name = KNOWN_NAMES.get(name, name)
-    target_parts = target_name.lower().split()
-    titles = []
+    titles: list[dict] = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, chromium_sandbox=False, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        ctx = await browser.new_context(user_agent=random.choice(USER_AGENTS), viewport={"width": 1400, "height": 900})
+        browser = await p.chromium.launch(
+            headless=True, chromium_sandbox=False,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        ctx = await browser.new_context(
+            user_agent=random.choice(USER_AGENTS),
+            viewport={"width": 1400, "height": 900}
+        )
         page = await ctx.new_page()
         try:
-            url = f"https://ijavtorrent.com/?searchTerm={search_term}&sortby=created"
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(random.randint(1500, 3000))
+            if not actress_url:
+                log.warning(f"no actress_url for {name}, skipping")
+                return {"name": name, "titles": [], "count": 0}
+
+            await page.goto(actress_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(random.randint(2000, 4000))
 
             html = await page.content()
-            body = await page.inner_text("body")
-            stripped = [l.strip() for l in body.split("\n")]
+            raw_items = _parse_video_items(html)
+            log.info(f"{name}: {len(raw_items)} total items on page")
 
-            movies = {}
-            for m in re.finditer(r"sendEvent\('Cover Click','Main List Movie','(\d+)'\).*?data-link=\"(https?://[^\"]+)\"", html, re.DOTALL):
-                mid = m.group(1)
-                movies[mid] = {"cover": m.group(2), "magnets": [], "downloads": []}
-            for m in re.finditer(r"sendEvent\('Magnet Click','Main List Movie','(\d+)'\).*?href=\"(magnet:\?xt=urn:btih:[^\"]+)\"", html, re.DOTALL):
-                mid = m.group(1)
-                if mid in movies:
-                    movies[mid]["magnets"].append(m.group(2))
-            for m in re.finditer(r"sendEvent\('Torrent Click','Main List Movie','(\d+)'\).*?href=\"(/download/\d+)\"", html, re.DOTALL):
-                mid = m.group(1)
-                if mid in movies:
-                    movies[mid]["downloads"].append("https://ijavtorrent.com" + m.group(2))
+            # Filter solo works only
+            solo_items = [it for it in raw_items if it["actress_count"] == 1]
+            log.info(f"{name}: {len(solo_items)} solo items after filtering")
 
-            code_re = re.compile(r"\b([A-Z]{2,8}-\d+)\b", re.I)
-            text_entries = []
-            for i, line in enumerate(stripped):
-                cm = code_re.search(line)
-                if not cm:
-                    continue
-                c = cm.group(1).upper()
-                title = line[cm.end():].strip()
-                date_str = views = likes = ""
-                name_line = ""
-                for j in range(i + 1, min(i + 5, len(stripped))):
-                    nl = stripped[j]
-                    dm = re.search(r"(\d{2}/\d{2}/\d{4})", nl)
-                    if dm:
-                        parts = nl.split("|")
-                        date_str = parts[0].strip()
-                        if len(parts) > 1:
-                            views = parts[1].strip()
-                        if len(parts) > 2:
-                            likes = parts[2].strip()
-                    if target_parts and all(p in nl.lower() for p in target_parts):
-                        name_line = nl
-                text_entries.append({"code": c, "title": title[:200], "date": date_str, "views": views, "likes": likes, "name_line": name_line})
-
-            movie_ids = list(movies.keys())
-            for idx, entry in enumerate(text_entries):
-                if entry["name_line"] and not is_solo_work(entry["name_line"]):
-                    continue
-                c = entry["code"]
-                if c.startswith("OAE") or c.startswith("FWAY") or c.startswith("OF") or c.startswith("REBD"):
-                    continue
-                movie = movies.get(movie_ids[idx] if idx < len(movie_ids) else "", {})
-                magnet = htmlmod.unescape((movie.get("magnets") or [""])[0])
+            for it in solo_items:
+                best = _pick_best_magnet(it)
                 titles.append({
-                    "code": c,
-                    "title": entry["title"],
-                    "date": entry["date"],
-                    "views": entry["views"],
-                    "likes": entry["likes"],
-                    "cover_url": movie.get("cover", ""),
-                    "magnet": magnet,
-                    "resolution": extract_resolution(magnet),
-                    "download_url": (movie.get("downloads") or [""])[0],
+                    "code": it["code"],
+                    "title": it["title"],
+                    "date": it["date"],
+                    "views": it["views"],
+                    "likes": it["downloads"],
+                    "cover_url": it["cover_url"],
+                    "magnet": best["magnet"],
+                    "resolution": best["resolution"],
+                    "download_url": "",
                 })
 
         except Exception as e:
@@ -232,24 +287,30 @@ async def fetch_star(name: str, config_code: str, handle: str):
         finally:
             await browser.close()
 
-    # 去重 + 排序 + 取最新3
+    # Deduplicate + sort by date desc + take latest 3
     seen = set()
     unique = []
     for w in titles:
         if w["code"] not in seen:
             seen.add(w["code"])
             unique.append(w)
-    unique.sort(key=lambda w: (w["date"].split("/")[2] + w["date"].split("/")[1] + w["date"].split("/")[0]) if w["date"] else "00000000", reverse=True)
+
+    unique.sort(
+        key=lambda w: (
+            w["date"].split("/")[2] + w["date"].split("/")[0] + w["date"].split("/")[1]
+        ) if w["date"] else "00000000",
+        reverse=True
+    )
     titles = unique[:3]
 
-    # 写入 DuckDB
+    # Write to DuckDB
     for w in titles:
         code = w["code"]
         views_int = _parse_count(w["views"])
         likes_int = _parse_count(w["likes"])
 
         if db.title_exists(star_id, code):
-            # 仅更新元数据，保留已有封面
+            # Update metadata only, preserve existing cover
             conn = db._conn()
             row = conn.execute(
                 "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
@@ -269,13 +330,13 @@ async def fetch_star(name: str, config_code: str, handle: str):
                 cover_url=w["cover_url"],
                 cover_b64=existing_cover_b64,
             )
-            if w["magnet"] and work_id:
+            if w["magnet"] and title_id:
                 db.upsert_magnet(title_id, w["magnet"])
             continue
 
-        # 新作品：下载封面后写入
+        # New title: download cover then insert
         cover_b64 = await download_cover_b64(w.get("cover_url", ""), code)
-        work_id = db.upsert_title(
+        title_id = db.upsert_title(
             star_id=star_id,
             code=code,
             title=w["title"],
@@ -291,7 +352,7 @@ async def fetch_star(name: str, config_code: str, handle: str):
             db.upsert_magnet(title_id, w["magnet"])
 
     log.info(f"done: {name}: {len(titles)} titles")
-    return {"name": name, "target_name": target_name, "titles": titles, "count": len(titles)}
+    return {"name": name, "titles": titles, "count": len(titles)}
 
 
 async def main():
@@ -300,13 +361,18 @@ async def main():
     config = json.load(open(config_file))
     stars = config.get("stars", [])
 
-    log.info("fetching titles data...")
+    log.info("fetching titles from actress pages...")
     for a in stars:
         log.info(f"fetching: {a['name']}...")
-        await fetch_star(a["name"], a["code"], a["handle"])
+        await fetch_star(
+            a["name"],
+            a["code"],
+            a.get("handle", ""),
+            a.get("actress_url", "")
+        )
         await random_delay(1.0, 2.5)
 
-    # 统计
+    # Stats
     total = 0
     for a in stars:
         conn = db._conn()
