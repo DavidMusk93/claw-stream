@@ -91,6 +91,8 @@
 </template>
 
 <script setup lang="ts">
+import { logInfo, logError } from '~/composables/useLogger'
+
 const isOpen = defineModel<boolean>('open', { default: false })
 const props = defineProps<{ hash?: string }>()
 
@@ -132,12 +134,12 @@ watch(() => props.hash, async (hash) => {
   errorMsg.value = ''
   canplayFired.value = false
   buffering.value = true
-  console.log(`[player] open video hash=${hash.slice(0, 12)}`)
+  logInfo(`[player] open video hash=${hash.slice(0, 12)}`)
 
   const ready = await waitForHeadReady(hash)
   if (!ready) {
     errorMsg.value = error.value || '加载失败'
-    console.error(`[player] load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
+    logError(`[player] load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
     return
   }
 
@@ -167,37 +169,37 @@ watch(isOpen, (open) => {
 })
 
 function close() {
-  console.log('[player] close video')
+  logInfo('[player] close video')
   isOpen.value = false
 }
 
 function onCanplay() {
   canplayFired.value = true
   buffering.value = false
-  console.log('[player] canplay')
+  logInfo('[player] canplay')
   videoRef.value?.play().catch(() => {})
 }
 
 function onWaiting() {
   buffering.value = true
-  console.log('[player] waiting (buffering)')
+  logInfo('[player] waiting (buffering)')
 }
 function onPlaying() {
   buffering.value = false
-  console.log('[player] playing')
+  logInfo('[player] playing')
 }
 function onSeeking() {
   buffering.value = true
-  console.log('[player] seeking')
+  logInfo('[player] seeking')
 }
 function onSeeked() {
   buffering.value = false
-  console.log('[player] seeked')
+  logInfo('[player] seeked')
 }
 
 function onError() {
   errorMsg.value = '播放失败，文件可能不完整'
-  console.error('[player] video error:', errorMsg.value)
+  logError('[player] video error:', errorMsg.value)
   stopPolling()
 }
 
@@ -206,10 +208,10 @@ function togglePlay() {
   if (!v) return
   if (v.paused) {
     v.play().catch(() => {})
-    console.log('[player] toggle play')
+    logInfo('[player] toggle play')
   } else {
     v.pause()
-    console.log('[player] toggle pause')
+    logInfo('[player] toggle pause')
   }
 }
 
@@ -218,10 +220,10 @@ function toggleFullscreen() {
   if (!el) return
   if (!isFullscreen.value) {
     enterFullscreen(el)
-    console.log('[player] enter fullscreen')
+    logInfo('[player] enter fullscreen')
   } else {
     exitFullscreen()
-    console.log('[player] exit fullscreen')
+    logInfo('[player] exit fullscreen')
   }
 }
 
@@ -302,7 +304,7 @@ function onTouchEnd(e: TouchEvent) {
     const seekSeconds = dx > 0 ? 10 : -10
     const prev = v.currentTime
     v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + seekSeconds))
-    console.log(`[player] swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+    logInfo(`[player] swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     showHint(dx > 0 ? '快进 10 秒' : '后退 10 秒')
     return
   }
@@ -313,7 +315,7 @@ function onTouchEnd(e: TouchEvent) {
       const delta = dy < 0 ? 0.1 : -0.1
       const prev = v.volume
       v.volume = Math.max(0, Math.min(1, v.volume + delta))
-      console.log(`[player] swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
+      logInfo(`[player] swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
       showHint(`音量 ${Math.round(v.volume * 100)}%`)
     }
   }
@@ -334,30 +336,30 @@ onMounted(() => {
 
     if (e.key === 'Escape') {
       e.preventDefault()
-      console.log('[player] key Escape')
+      logInfo('[player] key Escape')
       close()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
       const prev = v.currentTime
       v.currentTime = Math.max(0, v.currentTime - 10)
-      console.log(`[player] key ArrowLeft seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      logInfo(`[player] key ArrowLeft seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       const prev = v.currentTime
       v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
-      console.log(`[player] key ArrowRight seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      logInfo(`[player] key ArrowRight seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     } else if (e.key === ' ') {
       e.preventDefault()
       if (v.paused) {
         v.play()
-        console.log('[player] key Space play')
+        logInfo('[player] key Space play')
       } else {
         v.pause()
-        console.log('[player] key Space pause')
+        logInfo('[player] key Space pause')
       }
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault()
-      console.log('[player] key F fullscreen')
+      logInfo('[player] key F fullscreen')
       toggleFullscreen()
     }
   }

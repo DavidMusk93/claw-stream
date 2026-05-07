@@ -12,8 +12,19 @@
     LOG_JSON    1=JSON 格式, 0=文本格式 (默认: 0)
 """
 
-import os, sys, json, datetime, logging
+import os, sys, json, datetime, logging, contextvars
 from logging.handlers import RotatingFileHandler
+
+# ── Trace ID 链路追踪 ──
+trace_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="-")
+
+
+def set_trace_id(tid: str) -> None:
+    trace_id_ctx.set(tid)
+
+
+def get_trace_id() -> str:
+    return trace_id_ctx.get()
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
@@ -33,6 +44,7 @@ class _JsonFormatter(logging.Formatter):
     def format(self, record):
         obj = {
             "ts": datetime.datetime.fromtimestamp(record.created, tz=datetime.timezone.utc).isoformat(),
+            "trace_id": trace_id_ctx.get(),
             "name": record.name,
             "level": record.levelname,
             "file": record.filename,
@@ -49,7 +61,9 @@ class _JsonFormatter(logging.Formatter):
 
 class _TextFormatter(logging.Formatter):
     def format(self, record):
-        base = f"{self.formatTime(record)} [{record.name}] {record.levelname} {record.filename}:{record.lineno} {record.getMessage()}"
+        tid = trace_id_ctx.get()
+        tid_str = f"[{tid}] " if tid != "-" else ""
+        base = f"{self.formatTime(record)} {tid_str}[{record.name}] {record.levelname} {record.filename}:{record.lineno} {record.getMessage()}"
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
         return base

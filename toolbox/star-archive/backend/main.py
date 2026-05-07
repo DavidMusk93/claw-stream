@@ -12,10 +12,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
+import uuid
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, stars
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, stars
 from backend.services.torrent_engine import TorrentEngine
-from core import get_logger
+from core import get_logger, set_trace_id
 
 log = get_logger("backend")
 access_log = get_logger("backend-access")
@@ -31,12 +32,14 @@ def _get_engine() -> TorrentEngine:
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
-    """记录每个 HTTP 请求的访问日志（方法、URL、状态码、耗时、客户端 IP）"""
+    """记录每个 HTTP 请求的访问日志（方法、URL、状态码、耗时、客户端 IP、trace_id）"""
     async def dispatch(self, request: Request, call_next):
         start = time.perf_counter()
         client = request.client.host if request.client else "-"
         method = request.method
         path = request.url.path
+        tid = request.headers.get("x-trace-id") or uuid.uuid4().hex[:16]
+        set_trace_id(tid)
 
         try:
             response = await call_next(request)
@@ -51,6 +54,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
 
         elapsed = (time.perf_counter() - start) * 1000
         access_log.info(f"{method} {path} {client} -> {status_code} ({elapsed:.1f}ms)")
+        response.headers["x-trace-id"] = tid
         return response
 
 
@@ -111,6 +115,7 @@ app.include_router(check_router)
 app.include_router(torrents_router)
 app.include_router(cache_router)
 app.include_router(auth_router)
+app.include_router(log_router)
 app.include_router(stars.router)
 
 # Static files

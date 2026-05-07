@@ -1,43 +1,67 @@
+import { getTraceId, syncTraceIdFromResponse } from './useLogger'
+
+function _headers() {
+  return { 'x-trace-id': getTraceId() }
+}
+
 export function useApi() {
   const config = useRuntimeConfig()
 
   async function checkStream(hash: string) {
-    return $fetch(`/api/check/${hash}`, {
+    const res = await $fetch.raw(`/api/check/${hash}`, {
       baseURL: config.public.apiBase,
+      headers: _headers(),
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   async function getTorrentStatus(hash: string) {
-    return $fetch(`/torrent/status/${hash}`, {
+    const res = await $fetch.raw(`/torrent/status/${hash}`, {
       baseURL: config.public.apiBase,
+      headers: _headers(),
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   async function addTorrent(magnet: string) {
-    return $fetch('/torrent/add', {
+    const res = await $fetch.raw('/torrent/add', {
       baseURL: config.public.apiBase,
       method: 'POST',
+      headers: _headers(),
       body: { magnet },
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   async function getCacheMetrics() {
-    return $fetch('/api/cache/metrics', {
+    const res = await $fetch.raw('/api/cache/metrics', {
       baseURL: config.public.apiBase,
+      headers: _headers(),
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   async function getCacheItems() {
-    return $fetch('/api/cache', {
+    const res = await $fetch.raw('/api/cache', {
       baseURL: config.public.apiBase,
+      headers: _headers(),
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   async function deleteCache(hash: string) {
-    return $fetch(`/api/cache/${hash}`, {
+    const res = await $fetch.raw(`/api/cache/${hash}`, {
       baseURL: config.public.apiBase,
       method: 'DELETE',
+      headers: _headers(),
     })
+    syncTraceIdFromResponse(res.response)
+    return res._data
   }
 
   return {

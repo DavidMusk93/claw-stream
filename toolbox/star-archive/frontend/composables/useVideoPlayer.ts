@@ -1,4 +1,5 @@
 import type { TorrentStatus } from '~/types/api'
+import { logInfo, logError } from './useLogger'
 
 export function useVideoPlayer() {
   const config = useRuntimeConfig()
@@ -13,12 +14,13 @@ export function useVideoPlayer() {
     try {
       const res = await $fetch(`/api/check/${hash}`, {
         baseURL: config.public.apiBase,
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
       }) as any
       const ok = res.head_ready === true
-      console.log(`[player] checkHeadReady ${hash.slice(0, 12)} -> ${ok} (${(performance.now() - t0).toFixed(0)}ms)`)
+      logInfo('player', `checkHeadReady ${hash.slice(0, 12)} -> ${ok} (${(performance.now() - t0).toFixed(0)}ms)`)
       return ok
     } catch (e: any) {
-      console.error(`[player] checkHeadReady ${hash.slice(0, 12)} failed:`, e.message || e)
+      logError('player', `checkHeadReady ${hash.slice(0, 12)} failed: ${e.message || e}`)
       return false
     }
   }
@@ -27,23 +29,23 @@ export function useVideoPlayer() {
     try {
       const res = await $fetch(`/torrent/status/${hash}`, {
         baseURL: config.public.apiBase,
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
       }) as TorrentStatus
       const prev = status.value
       status.value = res
-      // Log state transitions
       if (!prev?.head_ready && res.head_ready) {
-        console.log(`[player] status ${hash.slice(0, 12)} head_ready=true progress=${res.progress.toFixed(1)}%`)
+        logInfo('player', `status ${hash.slice(0, 12)} head_ready=true progress=${res.progress.toFixed(1)}%`)
       }
       return res
     } catch (e: any) {
-      console.error(`[player] pollStatus ${hash.slice(0, 12)} failed:`, e.message || e)
+      logError('player', `pollStatus ${hash.slice(0, 12)} failed: ${e.message || e}`)
       throw e
     }
   }
 
   function startPolling(hash: string) {
     stopPolling()
-    console.log(`[player] startPolling ${hash.slice(0, 12)}`)
+    logInfo('player', `startPolling ${hash.slice(0, 12)}`)
     pollTimer = setInterval(async () => {
       try {
         await pollStatus(hash)
@@ -55,7 +57,7 @@ export function useVideoPlayer() {
 
   function stopPolling() {
     if (pollTimer) {
-      console.log('[player] stopPolling')
+      logInfo('player', 'stopPolling')
       clearInterval(pollTimer)
       pollTimer = null
     }
@@ -65,19 +67,19 @@ export function useVideoPlayer() {
     loading.value = true
     error.value = ''
     const start = Date.now()
-    console.log(`[player] waitForHeadReady ${hash.slice(0, 12)} start`)
+    logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} start`)
 
     while (Date.now() - start < timeoutSec * 1000) {
       if (await checkHeadReady(hash)) {
         loading.value = false
-        console.log(`[player] waitForHeadReady ${hash.slice(0, 12)} success in ${((Date.now() - start) / 1000).toFixed(1)}s`)
+        logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} success in ${((Date.now() - start) / 1000).toFixed(1)}s`)
         return true
       }
-      // try to add torrent if not present
       try {
         await $fetch('/torrent/add', {
           baseURL: config.public.apiBase,
           method: 'POST',
+          headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
           body: { magnet: `magnet:?xt=urn:btih:${hash}` },
         })
       } catch {
@@ -88,7 +90,7 @@ export function useVideoPlayer() {
 
     loading.value = false
     error.value = '加载超时，请检查文件完整性'
-    console.error(`[player] waitForHeadReady ${hash.slice(0, 12)} timeout after ${timeoutSec}s`)
+    logError('player', `waitForHeadReady ${hash.slice(0, 12)} timeout after ${timeoutSec}s`)
     return false
   }
 
