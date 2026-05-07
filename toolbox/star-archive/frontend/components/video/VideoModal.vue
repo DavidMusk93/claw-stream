@@ -489,14 +489,26 @@ onMounted(() => {
       close()
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
+      const delta = e.shiftKey ? 5 : 10
       const prev = v.currentTime
-      v.currentTime = Math.max(0, v.currentTime - 10)
-      logInfo('player', `key ArrowLeft seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      v.currentTime = Math.max(0, v.currentTime - delta)
+      logInfo('player', `key ArrowLeft${e.shiftKey ? '+Shift' : ''} seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
+      const delta = e.shiftKey ? 5 : 10
       const prev = v.currentTime
-      v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
-      logInfo('player', `key ArrowRight seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+      v.currentTime = Math.min(v.duration || Infinity, v.currentTime + delta)
+      logInfo('player', `key ArrowRight${e.shiftKey ? '+Shift' : ''} seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      const prev = v.volume
+      v.volume = Math.min(1, v.volume + 0.1)
+      logInfo('player', `key ArrowUp volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      const prev = v.volume
+      v.volume = Math.max(0, v.volume - 0.1)
+      logInfo('player', `key ArrowDown volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
     } else if (e.key === ' ') {
       e.preventDefault()
       if (v.paused) {
@@ -510,6 +522,18 @@ onMounted(() => {
       e.preventDefault()
       logInfo('player', 'key F fullscreen')
       toggleFullscreen()
+    } else if (e.key === 'm' || e.key === 'M') {
+      e.preventDefault()
+      v.muted = !v.muted
+      logInfo('player', `key M muted=${v.muted}`)
+    } else if (e.key >= '0' && e.key <= '9') {
+      e.preventDefault()
+      const pct = parseInt(e.key) / 10
+      if (v.duration && isFinite(v.duration)) {
+        const prev = v.currentTime
+        v.currentTime = v.duration * pct
+        logInfo('player', `key ${e.key} seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)} (${pct * 100}%)`)
+      }
     }
   }
   window.addEventListener('keydown', handler)
