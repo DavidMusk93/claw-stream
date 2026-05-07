@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.parse
 from fastapi import APIRouter
 from typing import Any
 
@@ -111,6 +112,12 @@ def _build_stars_response() -> list[dict[str, Any]]:
         code = a["code"]
         data = db_data.get(code, {"titles": [], "posts": []})
 
+        # Rewrite cover_url to proxy URL (bypass CDN referer restriction)
+        titles = data.get("titles", [])
+        for t in titles:
+            if t.get("cover_url"):
+                t["cover_url"] = f"/api/cover-proxy?url={urllib.parse.quote(t['cover_url'], safe='')}"
+
         # Deduplicate posts by content (defensive)
         seen = set()
         posts = []
@@ -128,7 +135,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
             "code": code,
             "type": a.get("type", "solo"),
             "note": a.get("note", ""),
-            "titles": data.get("titles", []),
+            "titles": titles,
             "posts": posts,
         })
 

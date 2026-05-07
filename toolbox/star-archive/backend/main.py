@@ -8,11 +8,14 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
 import uuid
+import urllib.parse
+
+import httpx
 
 from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, stars
 from backend.services.torrent_engine import TorrentEngine
@@ -130,6 +133,37 @@ if os.path.exists(CACHE_DIR):
 async def health():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/api/cover-proxy")
+async def cover_proxy(url: str):
+    """代理外部封面图片，绕过防盗链 referer 限制"""
+    decoded = urllib.parse.unquote(url)
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        try:
+            resp = await client.get(
+                decoded,
+                headers={
+                    "Referer": "https://ijavtorrent.com/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                },
+            )
+            resp.raise_for_status()
+            return Response(
+                content=resp.content,
+                media_type=resp.headers.get("content-type", "image/jpeg"),
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        except httpx.HTTPStatusError as e:
+            return JSONResponse(
+                status_code=e.response.status_code,
+                content={"detail": f"Upstream error: {e.response.status_code}"},
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                content={"detail": f"Proxy failed: {type(e).__name__}"},
+            )
 
 
 if __name__ == "__main__":
