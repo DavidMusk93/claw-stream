@@ -154,25 +154,29 @@ function onError() {
 }
 
 // Keyboard shortcuts
-useEventListener('keydown', (e: KeyboardEvent) => {
-  if (!isOpen.value) return
-  const v = videoRef.value
-  if (!v) return
+onMounted(() => {
+  const handler = (e: KeyboardEvent) => {
+    if (!isOpen.value) return
+    const v = videoRef.value
+    if (!v) return
 
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    close()
-  } else if (e.key === 'ArrowLeft') {
-    e.preventDefault()
-    v.currentTime = Math.max(0, v.currentTime - 10)
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault()
-    v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
-  } else if (e.key === ' ') {
-    e.preventDefault()
-    if (v.paused) v.play()
-    else v.pause()
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      close()
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      v.currentTime = Math.max(0, v.currentTime - 10)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
+    } else if (e.key === ' ') {
+      e.preventDefault()
+      if (v.paused) v.play()
+      else v.pause()
+    }
   }
+  window.addEventListener('keydown', handler)
+  onUnmounted(() => window.removeEventListener('keydown', handler))
 })
 </script>
 

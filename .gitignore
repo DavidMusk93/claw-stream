@@ -27,6 +27,7 @@ __pycache__/
 cache/
 *.ts
 !cache-server.py
+!toolbox/actress-report/frontend/**/*.ts
 
 # Test files
 test-*.mjs
