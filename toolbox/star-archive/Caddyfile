@@ -1,0 +1,40 @@
+# Caddy 反向代理配置
+# 443 HTTPS 服务，自动申请 Let's Encrypt 证书
+#
+# 路由规则：
+#   /api/*     → FastAPI backend (localhost:8765)
+#   /stream/*  → FastAPI backend (localhost:8765)
+#   /torrent/* → FastAPI backend (localhost:8765)
+#   /cache/*   → FastAPI backend (localhost:8765)
+#   /*         → Nuxt frontend (localhost:3000)
+
+rn.guohuasun.com {
+    # API / stream / torrent → FastAPI backend
+    handle_path /api/* {
+        reverse_proxy localhost:8765
+    }
+    handle_path /stream/* {
+        reverse_proxy localhost:8765
+    }
+    handle_path /torrent/* {
+        reverse_proxy localhost:8765
+    }
+    handle_path /cache/* {
+        reverse_proxy localhost:8765
+    }
+
+    # Everything else → Nuxt frontend
+    reverse_proxy localhost:3000
+
+    log {
+        output file /root/.openclaw/workspace/toolbox/star-archive/logs/caddy-access.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+    }
+}
+
+# 自动处理 Let's Encrypt HTTP-01 挑战
+:80 {
+    respond /health "OK" 200
+}

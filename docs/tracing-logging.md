@@ -264,7 +264,7 @@ ls -lt /tmp/actress-news/*.json | head -5
 ls -lt /tmp/actress-jable/*.json | head -5
 
 # 检查 torrent 缓存状态
-du -sh toolbox/actress-report/cache/torrent/* 2>/dev/null | sort -rh | head -10
+du -sh toolbox/star-archive/cache/torrent/* 2>/dev/null | sort -rh | head -10
 
 # 检查 cache-server 是否运行
 curl -s http://localhost:8765/api/cache | python3 -m json.tool
@@ -273,7 +273,7 @@ curl -s http://localhost:8765/api/cache | python3 -m json.tool
 curl -s http://localhost:8765/torrent/status/<40位hash>
 
 # 手动执行刷新（观察完整输出）
-cd toolbox/actress-report && bash -x refresh.sh
+cd toolbox/star-archive && bash -x refresh.sh
 
 # 检查 libtorrent 版本
 python3 -c "import libtorrent; print(libtorrent.version)"

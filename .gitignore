@@ -27,7 +27,7 @@ __pycache__/
 cache/
 *.ts
 !cache-server.py
-!toolbox/actress-report/frontend/**/*.ts
+!toolbox/star-archive/frontend/**/*.ts
 
 # Test files
 test-*.mjs
@@ -36,4 +36,4 @@ test-*.js
 # OS
 .DS_Store
 __pycache__/
-toolbox/actress-report/logs/
+toolbox/star-archive/logs/

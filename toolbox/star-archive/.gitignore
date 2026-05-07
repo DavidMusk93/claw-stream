@@ -1,0 +1,12 @@
+data/
+*.duckdb
+.nuxt/
+node_modules/
+.output/
+dist/
+logs/
+*.log
+__pycache__/
+*.pyc
+.venv/
+cache/

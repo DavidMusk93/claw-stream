@@ -115,7 +115,7 @@ refresh.sh (一键串联以上步骤)
 ## 快速开始
 
 ```bash
-cd toolbox/actress-report
+cd toolbox/star-archive
 
 # 1. 启动缓存服务器
 python3 cache-server.py --port 8765
@@ -134,7 +134,7 @@ systemctl start caddy-claw
 ## 目录结构
 
 ```
-toolbox/actress-report/
+toolbox/star-archive/
 ├── cache-server.py        # libtorrent + HTTP 服务器
 ├── generate-report.js     # HTML 报告生成器
 ├── search-news.py         # ijavtorrent 抓取

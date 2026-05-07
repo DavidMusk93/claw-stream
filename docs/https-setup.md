@@ -38,7 +38,7 @@ s-ui (:8444) ──→ 独立运行，与 Web 服务无交集
 
 - **版本**: v2.11.2（静态编译二进制）
 - **安装路径**: `/usr/local/bin/caddy`
-- **配置路径**: `toolbox/actress-report/Caddyfile`
+- **配置路径**: `toolbox/star-archive/Caddyfile`
 - **systemd 服务**: `caddy-claw`
 - **数据目录**: `/root/.local/share/caddy/`（证书、ACME 账户）
 
@@ -147,7 +147,7 @@ ss -tlnp | grep -E ":80|:443|:8443|:8765"
 
 ```bash
 pkill -f "cache-server.py"
-cd toolbox/actress-report && nohup python3 cache-server.py --port 8765 > /dev/null 2>&1 &
+cd toolbox/star-archive && nohup python3 cache-server.py --port 8765 > /dev/null 2>&1 &
 ```
 
 **修改 Caddyfile 后重启：**
@@ -155,17 +155,17 @@ cd toolbox/actress-report && nohup python3 cache-server.py --port 8765 > /dev/nu
 ```bash
 systemctl restart caddy-claw
 # 或验证配置后热重载
-caddy reload --config toolbox/actress-report/Caddyfile
+caddy reload --config toolbox/star-archive/Caddyfile
 ```
 
 ### 5.3 日志查看
 
 ```bash
 # Caddy 访问日志
-tail -f toolbox/actress-report/logs/caddy-access.log
+tail -f toolbox/star-archive/logs/caddy-access.log
 
 # cache-server 日志
-tail -f toolbox/actress-report/logs/cache-server.log
+tail -f toolbox/star-archive/logs/cache-server.log
 
 # 系统日志
 journalctl -u caddy-claw -f
@@ -195,7 +195,7 @@ journalctl -u caddy-claw -f
 
 排查：
 1. cache-server 是否在运行：`curl http://localhost:8765/`
-2. Caddy 反向代理配置是否正确：`grep reverse_proxy toolbox/actress-report/Caddyfile`
+2. Caddy 反向代理配置是否正确：`grep reverse_proxy toolbox/star-archive/Caddyfile`
 3. actresses-report.html 是否存在：`ls -la actresses-report.html`
 
 ### 6.3 Caddy 无法获取证书
@@ -267,7 +267,7 @@ Caddy 此时仍监听 `:8443`，但用户访问 `https://rn.guohuasun.com/`（�
 | 查看 Caddy 状态 | `systemctl status caddy-claw` |
 | 重启 Caddy | `systemctl restart caddy-claw` |
 | 查看 cache-server | `ps aux \| grep cache-server` |
-| 重启 cache-server | `pkill -f cache-server.py && cd toolbox/actress-report && nohup python3 cache-server.py --port 8765 &` |
+| 重启 cache-server | `pkill -f cache-server.py && cd toolbox/star-archive && nohup python3 cache-server.py --port 8765 &` |
 | 测试 HTTPS | `curl -s https://rn.guohuasun.com/ \| head` |
 | 检查证书 | `echo \| openssl s_client -connect rn.guohuasun.com:443` |
 | 查看访问日志 | `tail -f logs/caddy-access.log` |

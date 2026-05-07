@@ -21,7 +21,7 @@
 ## 目录结构
 
 ```
-toolbox/actress-report/
+toolbox/star-archive/
 ├── cache-server.py          # 一体化服务器
 ├── cache/
 │   └── torrent/
@@ -107,7 +107,7 @@ head_ready 检查：
 ## 启动
 
 ```bash
-cd toolbox/actress-report
+cd toolbox/star-archive
 python3 cache-server.py --port 8765
 ```
 
