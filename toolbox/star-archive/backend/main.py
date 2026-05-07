@@ -13,9 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
 import uuid
-import urllib.parse
+import base64
 
-import httpx
+import duckdb
 
 from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, stars
 from backend.services.torrent_engine import TorrentEngine
@@ -135,35 +135,45 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/cover-proxy")
-async def cover_proxy(url: str):
-    """代理外部封面图片，绕过防盗链 referer 限制"""
-    decoded = urllib.parse.unquote(url)
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        try:
-            resp = await client.get(
-                decoded,
-                headers={
-                    "Referer": "https://ijavtorrent.com/",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                },
-            )
-            resp.raise_for_status()
-            return Response(
-                content=resp.content,
-                media_type=resp.headers.get("content-type", "image/jpeg"),
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-        except httpx.HTTPStatusError as e:
-            return JSONResponse(
-                status_code=e.response.status_code,
-                content={"detail": f"Upstream error: {e.response.status_code}"},
-            )
-        except Exception as e:
-            return JSONResponse(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                content={"detail": f"Proxy failed: {type(e).__name__}"},
-            )
+DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
+
+# 持久化只读 DuckDB 连接（封面查询复用）
+_cover_db: duckdb.DuckDBPyConnection | None = None
+
+
+def _get_cover_db() -> duckdb.DuckDBPyConnection:
+    global _cover_db
+    if _cover_db is None:
+        _cover_db = duckdb.connect(DB_PATH, read_only=True)
+    return _cover_db
+
+
+@app.get("/api/cover/{code}")
+async def cover_image(code: str):
+    """从 DuckDB cover_b64 字段读取封面并返回二进制图片"""
+    conn = _get_cover_db()
+    row = conn.execute(
+        "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
+        (code.upper(),),
+    ).fetchone()
+    if not row or not row[0]:
+        return JSONResponse(status_code=404, content={"detail": "Cover not found"})
+
+    b64_data = row[0]
+    # 去掉 data:image/jpeg;base64, 前缀（如果存在）
+    if b64_data.startswith("data:image/"):
+        b64_data = b64_data.split(",", 1)[1]
+
+    try:
+        image_bytes = base64.b64decode(b64_data)
+    except Exception:
+        return JSONResponse(status_code=500, content={"detail": "Invalid base64"})
+
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
 
 
 if __name__ == "__main__":
