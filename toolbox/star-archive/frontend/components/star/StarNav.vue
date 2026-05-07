@@ -1,14 +1,17 @@
 <template>
-  <nav class="fixed left-0 top-0 h-screen w-16 bg-[#111] border-r border-white/5 overflow-y-auto py-4 z-50">
-    <div class="flex flex-col items-center gap-3">
+  <nav class="max-w-7xl mx-auto px-6">
+    <div class="flex items-center gap-2 py-3 overflow-x-auto scrollbar-hide">
       <a
         v-for="star in stars"
         :key="star.code"
         :href="`#${star.code.toLowerCase()}`"
-        class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xs font-medium transition-colors"
-        :title="star.name"
+        class="shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200"
+        :class="activeStar === star.code
+          ? 'bg-ios-blue text-white'
+          : 'bg-ios-bg-tertiary text-ios-text-secondary hover:bg-ios-gray-4 hover:text-ios-text-primary'"
+        @click.prevent="scrollToStar(star.code)"
       >
-        {{ star.name.charAt(0) }}
+        {{ star.name }}
       </a>
     </div>
   </nav>
@@ -17,7 +20,38 @@
 <script setup lang="ts">
 import type { Star } from '~/types/api'
 
-defineProps<{
+const props = defineProps<{
   stars: Star[]
 }>()
+
+const activeStar = ref('')
+
+function scrollToStar(code: string) {
+  activeStar.value = code
+  const el = document.getElementById(code.toLowerCase())
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
+// Update active star on scroll
+onMounted(() => {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          activeStar.value = entry.target.id.toUpperCase()
+        }
+      })
+    },
+    { rootMargin: '-30% 0px -60% 0px' }
+  )
+
+  props.stars.forEach((star) => {
+    const el = document.getElementById(star.code.toLowerCase())
+    if (el) observer.observe(el)
+  })
+
+  onUnmounted(() => observer.disconnect())
+})
 </script>

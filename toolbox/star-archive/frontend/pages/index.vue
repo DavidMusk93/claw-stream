@@ -1,31 +1,55 @@
 <template>
-  <div class="pl-16 min-h-screen">
-    <div class="p-8 max-w-7xl mx-auto">
-      <header class="mb-8">
-        <h1 class="text-3xl font-bold mb-2">Star Archive</h1>
-        <p class="text-sm text-neutral-500">
-          Backend: {{ health?.status ?? '...' }} | Cache: {{ metrics?.used_human ?? '...' }}
-        </p>
-      </header>
-
-      <div v-if="pending" class="text-center py-20 text-neutral-500">
-        Loading...
+  <div class="min-h-screen">
+    <!-- Top navigation bar -->
+    <header
+      class="fixed top-0 left-0 right-0 z-40 backdrop-blur-xl bg-ios-black/80 border-b border-ios-separator/50"
+    >
+      <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+        <h1 class="text-lg font-semibold tracking-tight">
+          Star Archive
+        </h1>
+        <div class="flex items-center gap-4 text-xs text-ios-text-secondary">
+          <span class="flex items-center gap-1.5">
+            <span
+              class="w-1.5 h-1.5 rounded-full"
+              :class="health?.status === 'ok' ? 'bg-ios-green' : 'bg-ios-red'"
+            />
+            {{ health?.status ?? '...' }}
+          </span>
+          <span v-if="metrics?.used_human" class="font-mono tabular-nums">
+            {{ metrics.used_human }}
+          </span>
+        </div>
       </div>
+    </header>
 
-      <div v-else-if="error" class="text-center py-20 text-red-400">
-        Failed to load data
-      </div>
-
-      <div v-else>
-        <StarNav :stars="stars ?? []" />
-        <StarCard
-          v-for="star in stars"
-          :key="star.code"
-          :star="star"
-          @play="openVideo"
-        />
-      </div>
+    <!-- Star navigation pills -->
+    <div class="fixed top-14 left-0 right-0 z-30 backdrop-blur-lg bg-ios-black/60 border-b border-ios-separator/30">
+      <StarNav :stars="stars ?? []" />
     </div>
+
+    <!-- Main content -->
+    <main class="pt-28 pb-12">
+      <div class="max-w-7xl mx-auto px-6">
+        <div v-if="pending" class="flex items-center justify-center py-32 gap-3 text-ios-text-secondary">
+          <div class="w-5 h-5 rounded-full border-2 border-ios-separator border-t-ios-blue animate-spin" />
+          <span class="text-sm">Loading...</span>
+        </div>
+
+        <div v-else-if="error" class="text-center py-32">
+          <p class="text-ios-red text-sm">Failed to load data</p>
+        </div>
+
+        <div v-else class="space-y-16">
+          <StarCard
+            v-for="star in stars"
+            :key="star.code"
+            :star="star"
+            @play="openVideo"
+          />
+        </div>
+      </div>
+    </main>
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
     <CachePanel />

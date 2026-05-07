@@ -76,7 +76,7 @@
             />
             <!-- Played -->
             <div
-              class="absolute h-full bg-orange-500 rounded-full"
+              class="absolute h-full bg-ios-blue rounded-full"
               :style="{ width: progressPercent + '%' }"
             />
             <!-- Thumb -->
@@ -113,7 +113,7 @@
           v-if="loading"
           class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/80 z-10"
         >
-          <div class="w-10 h-10 rounded-full border-4 border-white/15 border-t-orange-500 animate-spin" />
+          <div class="w-10 h-10 rounded-full border-4 border-white/15 border-t-ios-blue animate-spin" />
           <p class="text-white text-sm">
             {{ statusText }}
           </p>
