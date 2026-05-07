@@ -77,30 +77,3 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     return bytes(data)
 
 
-def read_video_full(hash_str: str, engine: Any) -> bytes:
-    """Read video from start, stopping at first hole."""
-    path, real_size, head_ready, mime = find_video_state(hash_str)
-    if not path:
-        return b""
-
-    with engine.lock:
-        info = engine.torrents.get(hash_str)
-    if info:
-        h = info["handle"]
-        if h.status().has_metadata and info.get("prefetch"):
-            info["prefetch"] = False
-            engine._apply_play_priority(h, info)
-        elif h.status().has_metadata:
-            engine._apply_play_priority(h, info)
-
-    data = bytearray()
-    with open(path, "rb") as f:
-        while True:
-            buf = f.read(16384)
-            if not buf:
-                break
-            if len(buf) >= 16384 and not any(buf):
-                break
-            data.extend(buf)
-
-    return bytes(data)

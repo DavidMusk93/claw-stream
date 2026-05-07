@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from typing import Any
 
 from backend.services.torrent_engine import find_video_state
-from backend.services.video_stream import read_video_range, read_video_full
+from backend.services.video_stream import read_video_range
 from backend.models import StreamCheckResponse
 
 stream_router = APIRouter(prefix="/stream", tags=["stream"])
@@ -17,40 +18,63 @@ def get_engine(request: Request) -> Any:
     return request.app.state.engine
 
 
+def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
+    """解析 Range 请求头，返回 (start, end)。格式无效时抛出 ValueError。"""
+    if not range_hdr.startswith("bytes="):
+        raise ValueError("Invalid range unit")
+    parts = range_hdr.replace("bytes=", "").split("-")
+    if len(parts) != 2:
+        raise ValueError("Invalid range format")
+
+    start = int(parts[0]) if parts[0] else 0
+    end = int(parts[1]) if parts[1] else total_size - 1
+
+    if start < 0 or end >= total_size or start > end:
+        raise ValueError("Invalid range values")
+
+    return start, end
+
+
 @stream_router.get("/{hash_str}")
 async def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
-    """Serve video stream with Range support."""
+    """Serve video stream with Range support.
+
+    大文件流式播放强制要求 Range 头，避免一次性加载整段视频到内存。
+    文件读取使用线程池执行，避免阻塞 FastAPI 事件循环。
+    """
     path, real_size, head_ready, mime = find_video_state(hash_str)
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    range_hdr = request.headers.get("Range")
     total_size = os.path.getsize(path)
+    range_hdr = request.headers.get("Range")
 
-    if range_hdr:
-        parts = range_hdr.replace("bytes=", "").split("-")
-        start = int(parts[0])
-        end = int(parts[1]) if parts[1] else total_size - 1
-        chunk_size = (end - start) + 1
-
-        data = read_video_range(hash_str, start, end, engine)
-        actual_size = len(data)
-
-        headers = {
-            "Content-Range": f"bytes {start}-{start + actual_size - 1}/{total_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(actual_size),
-            "Content-Type": mime,
-        }
-        return Response(content=data, status_code=206, headers=headers)
-    else:
-        data = read_video_full(hash_str, engine)
+    if not range_hdr:
+        # 强制 Range 请求：返回 416，提示客户端使用分片请求
         headers = {
             "Accept-Ranges": "bytes",
-            "Content-Length": str(len(data)),
             "Content-Type": mime,
+            "Content-Length": str(total_size),
         }
-        return Response(content=data, status_code=200, headers=headers)
+        raise HTTPException(status_code=416, headers=headers, detail="Range header required")
+
+    try:
+        start, end = _parse_range(range_hdr, total_size)
+    except ValueError:
+        headers = {"Accept-Ranges": "bytes", "Content-Type": mime}
+        raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
+
+    # 将同步文件 I/O 放到线程池，避免阻塞事件循环
+    data = await asyncio.to_thread(read_video_range, hash_str, start, end, engine)
+    actual_size = len(data)
+
+    headers = {
+        "Content-Range": f"bytes {start}-{start + actual_size - 1}/{total_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(actual_size),
+        "Content-Type": mime,
+    }
+    return Response(content=data, status_code=206, headers=headers)
 
 
 @check_router.get("/{hash_str}", response_model=StreamCheckResponse)
