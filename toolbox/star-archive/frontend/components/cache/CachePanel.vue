@@ -137,15 +137,14 @@ function extractCode(name?: string): string | null {
 const hashToInfo = computed(() => {
   const map: Record<string, { code: string; number: number }> = {}
   for (const star of (props.stars || [])) {
-    for (let i = 0; i < (star.titles || []).length; i++) {
-      const t = star.titles[i]
+    for (const t of (star.titles || [])) {
       if (t.magnet) {
         const match = t.magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
         if (match) {
           const hash = match[1].toLowerCase()
           // 合作作品可能出现在多个 star 中，保留第一个映射（避免覆盖导致编号乱跳）
           if (!map[hash]) {
-            map[hash] = { code: t.code, number: i + 1 }
+            map[hash] = { code: t.code, number: t.number || 0 }
           }
         }
       }

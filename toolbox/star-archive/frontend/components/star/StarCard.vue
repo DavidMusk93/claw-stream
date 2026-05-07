@@ -27,7 +27,7 @@
         :title="title"
         :star-code="star.code"
         :index="idx"
-        :number="idx + 1"
+        :number="title.number ?? idx + 1"
         @play="$emit('play', $event)"
       />
     </div>
