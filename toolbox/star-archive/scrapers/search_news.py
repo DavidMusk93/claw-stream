@@ -61,12 +61,6 @@ def _extract_dn(magnet_url: str) -> str:
         return ""
 
 
-def is_hhd800_magnet(magnet_url: str) -> bool:
-    """检查 magnet 的 dn 参数是否包含 hhd800.com 前缀"""
-    dn = _extract_dn(magnet_url)
-    return "hhd800.com" in dn.lower()
-
-
 def extract_resolution(magnet_url: str) -> str:
     """从 magnet dn 参数中提取清晰度（含 HTML entity 解码）"""
     decoded = _extract_dn(magnet_url)
@@ -197,10 +191,8 @@ def _parse_video_items(html: str) -> list[dict]:
 
 
 def _pick_best_magnet(item: dict) -> dict:
-    """从多个磁力链接中挑选最佳的一个：前置过滤只保留 hhd800.com，再按清晰度/种子数/大小排序"""
+    """从多个磁力链接中挑选最佳的一个：优先 FHD/4K，否则按种子数，否则按大小"""
     magnets = item.get("magnets", [])
-    # 前置过滤：只保留 dn 中包含 hhd800.com 的 magnet，不存储垃圾来源
-    magnets = [m for m in magnets if is_hhd800_magnet(m)]
     if not magnets:
         return {"magnet": "", "resolution": "", "size": ""}
 
