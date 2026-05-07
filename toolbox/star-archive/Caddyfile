@@ -10,16 +10,16 @@
 
 rn.guohuasun.com {
     # API / stream / torrent → FastAPI backend
-    handle_path /api/* {
+    handle /api/* {
         reverse_proxy localhost:8765
     }
-    handle_path /stream/* {
+    handle /stream/* {
         reverse_proxy localhost:8765
     }
-    handle_path /torrent/* {
+    handle /torrent/* {
         reverse_proxy localhost:8765
     }
-    handle_path /cache/* {
+    handle /cache/* {
         reverse_proxy localhost:8765
     }
 
