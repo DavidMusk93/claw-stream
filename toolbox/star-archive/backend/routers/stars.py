@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from fastapi import APIRouter
 from typing import Any
 
@@ -13,9 +14,15 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 
+# 持久化 DuckDB 连接（避免每次请求 36ms 连接开销）
+_db_conn: duckdb.DuckDBPyConnection | None = None
+
 
 def _get_db() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(DB_PATH)
+    global _db_conn
+    if _db_conn is None:
+        _db_conn = duckdb.connect(DB_PATH, read_only=True)
+    return _db_conn
 
 
 def _load_config() -> dict[str, Any]:
@@ -23,9 +30,13 @@ def _load_config() -> dict[str, Any]:
         return json.load(f)
 
 
-@router.get("")
-async def get_stars():
-    """Get all stars with their latest titles and posts (SQL-aggregated)."""
+# 内存缓存: { data, ts }
+_stars_cache: dict[str, Any] = {"data": None, "ts": 0}
+CACHE_TTL = 60  # 秒
+
+
+def _build_stars_response() -> list[dict[str, Any]]:
+    """构建 stars 响应（无缓存逻辑，纯数据组装）"""
     config = _load_config()
     solo = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
@@ -52,7 +63,6 @@ async def get_stars():
                 resolution := IFNULL(r.resolution, ''),
                 download_url := IFNULL(r.download_url, ''),
                 cover_url := IFNULL(r.cover_url, ''),
-                cover_b64 := IFNULL(r.cover_b64, ''),
                 m3u8_url := IFNULL(r.jable_m3u8, ''),
                 jable_cover := IFNULL(r.jable_cover, ''),
                 magnet := IFNULL(m.magnet, '')
@@ -86,8 +96,6 @@ async def get_stars():
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 3
         GROUP BY s.id, s.code, s.name
     """).fetchall()
-
-    conn.close()
 
     db_data: dict[str, dict[str, Any]] = {}
     for row in title_rows:
@@ -136,3 +144,16 @@ async def get_stars():
 
     result.sort(key=_latest_date)
     return result
+
+
+@router.get("")
+async def get_stars():
+    """Get all stars with their latest titles and posts (cached, TTL=60s)."""
+    global _stars_cache
+    now = time.time()
+    if _stars_cache["data"] is not None and (now - _stars_cache["ts"]) < CACHE_TTL:
+        return _stars_cache["data"]
+
+    data = _build_stars_response()
+    _stars_cache = {"data": data, "ts": now}
+    return data
