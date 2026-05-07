@@ -72,8 +72,49 @@ def extract_resolution(magnet_url: str) -> str:
     return ""
 
 
+async def _fetch_jable_cover(code: str) -> str:
+    """从 Jable.tv 抓取封面 URL，返回图片二进制或空"""
+    if not code:
+        return ""
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, chromium_sandbox=False,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
+            )
+            ctx = await browser.new_context(
+                user_agent=random.choice(USER_AGENTS),
+                viewport={"width": 1400, "height": 900},
+                locale="en-US",
+            )
+            page = await ctx.new_page()
+            try:
+                await page.goto(
+                    f"https://en.jable.tv/videos/{code.lower()}/",
+                    wait_until="domcontentloaded", timeout=15000
+                )
+                await page.wait_for_timeout(2000)
+                html = await page.content()
+                m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
+                if not m:
+                    return ""
+                jable_url = m.group(1)
+                async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+                    resp = await client.get(jable_url, headers={"User-Agent": random.choice(USER_AGENTS)})
+                    if resp.status_code == 200 and len(resp.content) > 1000:
+                        log.info(f"cover ok: {code} (Jable fallback, {len(resp.content)//1024}KB)")
+                        return f"data:image/jpeg;base64,{base64.b64encode(resp.content).decode()}"
+            except Exception:
+                pass
+            finally:
+                await browser.close()
+    except Exception:
+        pass
+    return ""
+
+
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
-    """下载封面，尝试 ijavtorrent CDN → DMM CDN → 返回 base64 或空"""
+    """下载封面，尝试 ijavtorrent CDN → DMM CDN → Jable.tv → 返回 base64 或空"""
     tried = set()
 
     for url in [cover_url] if cover_url else []:
@@ -103,6 +144,12 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                         return f"data:image/jpeg;base64,{b64}"
             except Exception:
                 pass
+
+    # Jable.tv fallback (Playwright bypasses Cloudflare)
+    if code:
+        jable_b64 = await _fetch_jable_cover(code)
+        if jable_b64:
+            return jable_b64
 
     if cover_url:
         log.warning(f"cover missing: {code}")
