@@ -24,7 +24,13 @@ rn.guohuasun.com {
     }
 
     # Everything else → Nuxt frontend
-    reverse_proxy localhost:3000
+    # 增加超时，避免 Nuxt SSR 渲染慢导致 502
+    reverse_proxy localhost:3000 {
+        transport http {
+            dial_timeout 10s
+            response_header_timeout 30s
+        }
+    }
 
     log {
         output file /root/.openclaw/workspace/toolbox/star-archive/logs/caddy-access.log {
