@@ -307,6 +307,12 @@ class TorrentEngine:
 
         params = lt.parse_magnet_uri(magnet)
         params.save_path = save_path
+        # Disable auto_managed: we control piece priorities strictly.
+        # Otherwise libtorrent overrides our sliding-window strategy.
+        params.flags &= ~lt.torrent_flags.auto_managed
+        # Also disable seed_mode to prevent progress from jumping to 100%
+        # when sparse files already exist on disk.
+        params.flags &= ~lt.torrent_flags.seed_mode
 
         handle = self.session.add_torrent(params)
         info = {
