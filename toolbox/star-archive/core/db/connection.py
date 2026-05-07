@@ -14,13 +14,14 @@ def _conn():
 
 
 def _date_to_sort(date_str: str | None) -> str | None:
-    """将 MM/DD/YYYY 转为 YYYYMMDD 用于正确排序"""
+    """将 dd/mm/YYYY 转为 YYYYMMDD 用于正确排序"""
     if not date_str:
         return None
     try:
         parts = date_str.split("/")
         if len(parts) == 3:
-            return f"{parts[2]}{parts[0].zfill(2)}{parts[1].zfill(2)}"
+            # parts[0]=dd, parts[1]=mm, parts[2]=YYYY
+            return f"{parts[2]}{parts[1].zfill(2)}{parts[0].zfill(2)}"
     except Exception:
         pass
     return None

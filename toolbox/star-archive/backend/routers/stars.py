@@ -67,7 +67,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 m3u8_url := IFNULL(r.jable_m3u8, ''),
                 jable_cover := IFNULL(r.jable_cover, ''),
                 magnet := IFNULL(m.magnet, '')
-            )) FILTER (WHERE r.code IS NOT NULL), []) AS titles
+            ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 3
         LEFT JOIN magnets m ON m.title_id = r.id AND m.is_primary = true
@@ -92,7 +92,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 content := r.content,
                 url := IFNULL(r.post_url, ''),
                 posted_at := IFNULL(CAST(r.posted_at AS VARCHAR), '')
-            )) FILTER (WHERE r.content IS NOT NULL), []) AS posts
+            ) ORDER BY r.rn) FILTER (WHERE r.content IS NOT NULL), []) AS posts
         FROM stars s
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 3
         GROUP BY s.id, s.code, s.name
@@ -146,10 +146,11 @@ def _build_stars_response() -> list[dict[str, Any]]:
             d = titles[0]["date"]
             if d and "/" in d:
                 parts = d.split("/")
-                return f"{parts[2]}{parts[0].zfill(2)}{parts[1].zfill(2)}"
+                # parts[0]=dd, parts[1]=mm, parts[2]=YYYY (ijavtorrent format)
+                return f"{parts[2]}{parts[1].zfill(2)}{parts[0].zfill(2)}"
         return "99999999"
 
-    result.sort(key=_latest_date)
+    result.sort(key=_latest_date, reverse=True)
     return result
 
 
