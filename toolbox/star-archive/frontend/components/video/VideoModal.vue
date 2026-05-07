@@ -103,7 +103,7 @@ const props = defineProps<{ hash?: string }>()
 
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
-const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, formatSpeed } = useVideoPlayer()
+const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, formatSpeed } = useVideoPlayer()
 
 const buffering = ref(false)
 const errorMsg = ref('')
@@ -281,10 +281,14 @@ function onCanplay() {
 }
 
 function onTimeUpdate() {
+  const v = videoRef.value
   const now = Date.now()
   if (now - lastProgressSave > PROGRESS_SAVE_INTERVAL_MS) {
     saveProgress()
     lastProgressSave = now
+  }
+  if (v && v.duration && isFinite(v.duration)) {
+    reportSeek(props.hash || '', v.currentTime, v.duration)
   }
 }
 
