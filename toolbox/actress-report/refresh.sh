@@ -1,16 +1,13 @@
 #!/bin/bash
-# refresh.sh — 一键抓取最新数据并重排生成报告
+# refresh.sh — 一键抓取最新数据
 #
 # 用法: ./refresh.sh [config.json]
 # 流程:
 #   1. search-news.py → DuckDB (ijavtorrent 抓取)
 #   2. fetch-jable.py → DuckDB (jable 封面+m3u8)
 #   3. fetch-social.py → DuckDB (X/Twitter 最新动态)
-#   4. generate-report.js → ../../actresses-report.html (直接从 DuckDB 读取)
 #
-# 日志:
-#   设置 LOG_DIR 环境变量后，各组件日志自动汇聚。
-#   本脚本的完整终端输出同时写入 logs/YYYY-MM-DD/refresh.log
+# 前端通过 /api/actresses 实时读取 DuckDB，无需生成静态 HTML。
 
 set -euo pipefail
 
@@ -24,19 +21,16 @@ REFRESH_LOG="$LOG_DIR/refresh.log"
 exec > >(tee -a "$REFRESH_LOG") 2>&1
 
 CONFIG="${1:-config.json}"
-REPORT_DIR="$(cd ../.. && pwd)"
-REPORT_OUT="${REPORT_DIR}/actresses-report.html"
 
 echo "========================================"
-echo "🔄 开始刷新 actress report"
+echo "🔄 开始刷新数据"
 echo "========================================"
 echo "Config : $CONFIG"
-echo "Output : $REPORT_OUT"
 echo "LogDir : $LOG_DIR"
 echo ""
 
 # Step 1: 抓取 ijavtorrent 数据 → DuckDB
-echo "[1/4] 抓取 ijavtorrent 数据..."
+echo "[1/3] 抓取 ijavtorrent 数据..."
 if command -v uv >/dev/null 2>&1; then
     uv run search-news.py "$CONFIG"
 else
@@ -46,26 +40,19 @@ echo "      ✓ DuckDB works 已更新"
 echo ""
 
 # Step 2: 抓取 jable 封面+m3u8 → DuckDB
-echo "[2/4] 抓取 jable.tv 数据..."
+echo "[2/3] 抓取 jable.tv 数据..."
 python3 fetch-jable.py "$CONFIG"
 echo "      ✓ DuckDB jable 已更新"
 echo ""
 
 # Step 3: 抓取社交动态 → DuckDB
-echo "[3/4] 抓取 X/Twitter 动态..."
+echo "[3/3] 抓取 X/Twitter 动态..."
 if command -v uv >/dev/null 2>&1; then
     uv run fetch-social.py "$CONFIG"
 else
     python3 fetch-social.py "$CONFIG"
 fi
 echo "      ✓ DuckDB social 已更新"
-echo ""
-
-# Step 4: 生成报告
-echo "[4/4] 生成 HTML 报告..."
-export LOG_DIR  # 传递给 generate-report.js
-node generate-report.js "$CONFIG" "$REPORT_OUT"
-echo "      ✓ $REPORT_OUT 已生成"
 echo ""
 
 # 统计

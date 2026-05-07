@@ -12,6 +12,7 @@
         :key="work.code"
         :work="work"
         :actress-code="actress.code"
+        @play="$emit('play', $event)"
       />
     </div>
   </section>

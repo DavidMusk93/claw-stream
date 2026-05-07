@@ -28,6 +28,7 @@
     </div>
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
+    <CachePanel />
   </div>
 </template>
 
