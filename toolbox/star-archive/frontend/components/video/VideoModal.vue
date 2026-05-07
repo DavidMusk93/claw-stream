@@ -46,6 +46,8 @@
           @playing="onPlaying"
           @seeking="onSeeking"
           @seeked="onSeeked"
+          @stalled="onStalled"
+          @abort="onAbort"
           @error="onError"
         />
 
@@ -103,6 +105,8 @@ const { status, loading, error, canplayFired, startPolling, stopPolling, waitFor
 const buffering = ref(false)
 const errorMsg = ref('')
 const isFullscreen = ref(false)
+const retryCount = ref(0)
+const MAX_RETRIES = 3
 
 // Touch gesture state
 const touchStartX = ref(0)
@@ -176,6 +180,7 @@ function close() {
 function onCanplay() {
   canplayFired.value = true
   buffering.value = false
+  retryCount.value = 0
   logInfo('[player] canplay')
   videoRef.value?.play().catch(() => {})
 }
@@ -191,15 +196,51 @@ function onPlaying() {
 function onSeeking() {
   buffering.value = true
   logInfo('[player] seeking')
+  // 暂停播放，等待数据就绪，避免 seek 到未缓存区域触发解码错误
+  videoRef.value?.pause()
 }
 function onSeeked() {
   buffering.value = false
   logInfo('[player] seeked')
+  // 尝试恢复播放，如果数据不足浏览器会再次进入 waiting
+  videoRef.value?.play().catch(() => {})
+}
+
+function onStalled() {
+  buffering.value = true
+  logInfo('[player] stalled (waiting for data)')
+}
+
+function onAbort() {
+  logInfo('[player] abort')
+  buffering.value = false
 }
 
 function onError() {
+  const v = videoRef.value
+  const code = v?.error?.code ?? 0
+  const message = v?.error?.message ?? 'unknown'
+  logError(`[player] video error code=${code} msg=${message}`)
+
+  if (retryCount.value < MAX_RETRIES) {
+    retryCount.value++
+    logInfo(`[player] retry ${retryCount.value}/${MAX_RETRIES}`)
+    errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
+    const currentSrc = v?.src || streamUrl.value
+    if (v) {
+      v.src = ''
+      v.load()
+    }
+    setTimeout(() => {
+      if (videoRef.value) {
+        videoRef.value.src = currentSrc
+        videoRef.value.load()
+      }
+    }, 1000)
+    return
+  }
+
   errorMsg.value = '播放失败，文件可能不完整'
-  logError('[player] video error:', errorMsg.value)
   stopPolling()
 }
 
