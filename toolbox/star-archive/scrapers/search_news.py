@@ -190,49 +190,52 @@ def _parse_video_items(html: str) -> list[dict]:
     return items
 
 
+def _score_magnet(magnet: str, size_str: str, seed_str: str) -> dict:
+    """对单个 magnet 评分，返回评分字典"""
+    res = extract_resolution(magnet)
+    seed = int(seed_str) if seed_str and seed_str.isdigit() else 0
+    size_mb = 0
+    if size_str:
+        try:
+            size_mb = float(size_str.lower().replace("gb", "").strip()) * 1024
+        except ValueError:
+            pass
+
+    # Resolution priority: 4K > FHDC > FHD > 1080p > HD > 720p
+    res_score = 0
+    if "[4K]" in res or "4k" in res.lower():
+        res_score = 600
+    elif "[FHDC]" in res:
+        res_score = 500
+    elif "[FHD]" in res:
+        res_score = 400
+    elif "1080p" in res:
+        res_score = 300
+    elif "[HD]" in res:
+        res_score = 200
+    elif "720p" in res:
+        res_score = 100
+
+    return {
+        "magnet": magnet,
+        "resolution": res,
+        "size": size_str,
+        "seed": seed,
+        "score": res_score + seed + size_mb / 100,
+    }
+
+
 def _pick_best_magnet(item: dict) -> dict:
     """从多个磁力链接中挑选最佳的一个：优先 FHD/4K，否则按种子数，否则按大小"""
     magnets = item.get("magnets", [])
     if not magnets:
-        return {"magnet": "", "resolution": "", "size": ""}
+        return {"magnet": "", "resolution": "", "size": "", "all_magnets": []}
 
-    # Score each magnet
     scored = []
     for i, m in enumerate(magnets):
-        res = extract_resolution(m)
         size_str = item["sizes"][i] if i < len(item["sizes"]) else ""
         seed_str = item["seeds"][i] if i < len(item["seeds"]) else "0"
-        seed = int(seed_str) if seed_str.isdigit() else 0
-        size_mb = 0
-        if size_str:
-            try:
-                size_mb = float(size_str.lower().replace("gb", "").strip()) * 1024
-            except ValueError:
-                pass
-
-        # Resolution priority: 4K > FHDC > FHD > 1080p > HD > 720p
-        res_score = 0
-        if "[4K]" in res or "4k" in res.lower():
-            res_score = 600
-        elif "[FHDC]" in res:
-            res_score = 500
-        elif "[FHD]" in res:
-            res_score = 400
-        elif "1080p" in res:
-            res_score = 300
-        elif "[HD]" in res:
-            res_score = 200
-        elif "720p" in res:
-            res_score = 100
-
-        scored.append({
-            "magnet": m,
-            "resolution": res,
-            "size": size_str,
-            "seed": seed,
-            "size_mb": size_mb,
-            "score": res_score + seed + size_mb / 100,
-        })
+        scored.append(_score_magnet(m, size_str, seed_str))
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     best = scored[0]
@@ -240,6 +243,7 @@ def _pick_best_magnet(item: dict) -> dict:
         "magnet": best["magnet"],
         "resolution": best["resolution"],
         "size": best["size"],
+        "all_magnets": [s["magnet"] for s in scored],
     }
 
 
@@ -287,6 +291,7 @@ async def fetch_star(name: str, config_code: str, handle: str, star_page_url: st
                     "magnet": best["magnet"],
                     "resolution": best["resolution"],
                     "download_url": "",
+                    "all_magnets": best["all_magnets"],
                 })
 
         except Exception as e:
@@ -337,8 +342,10 @@ async def fetch_star(name: str, config_code: str, handle: str, star_page_url: st
                 cover_url=w["cover_url"],
                 cover_b64=existing_cover_b64,
             )
-            if w["magnet"] and title_id:
-                db.upsert_magnet(title_id, w["magnet"])
+            # 存储所有 magnet：最佳标为 primary，其余备用
+            for idx, m in enumerate(w.get("all_magnets", [])):
+                if m:
+                    db.upsert_magnet(title_id, m, is_primary=(idx == 0))
             continue
 
         # New title: download cover then insert
@@ -355,8 +362,9 @@ async def fetch_star(name: str, config_code: str, handle: str, star_page_url: st
             cover_url=w["cover_url"],
             cover_b64=cover_b64,
         )
-        if w["magnet"]:
-            db.upsert_magnet(title_id, w["magnet"])
+        for idx, m in enumerate(w.get("all_magnets", [])):
+            if m:
+                db.upsert_magnet(title_id, m, is_primary=(idx == 0))
 
     log.info(f"done: {name}: {len(titles)} titles")
     return {"name": name, "titles": titles, "count": len(titles)}
