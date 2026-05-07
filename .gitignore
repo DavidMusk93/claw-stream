@@ -24,7 +24,7 @@ __pycache__/
 *.pyc
 
 # Cache
-cache/
+/cache/
 *.ts
 !cache-server.py
 !toolbox/star-archive/frontend/**/*.ts
