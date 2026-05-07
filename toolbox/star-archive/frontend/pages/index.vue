@@ -40,7 +40,7 @@
           <p class="text-ios-red text-sm">Failed to load data</p>
         </div>
 
-        <div v-else class="space-y-16">
+        <div v-else class="space-y-20">
           <StarCard
             v-for="star in stars"
             :key="star.code"

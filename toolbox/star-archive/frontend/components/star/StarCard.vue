@@ -1,18 +1,18 @@
 <template>
   <section :id="id" class="scroll-mt-36">
-    <!-- Section header -->
-    <div class="flex items-end justify-between mb-5">
+    <!-- Section header: 更极简 -->
+    <div class="flex items-end justify-between mb-6">
       <div class="flex items-baseline gap-3">
-        <h2 class="text-2xl font-bold tracking-tight">{{ star.name }}</h2>
-        <span v-if="star.jp" class="text-sm text-ios-text-secondary">{{ star.jp }}</span>
+        <h2 class="text-xl font-semibold tracking-tight">{{ star.name }}</h2>
+        <span v-if="star.jp" class="text-sm text-neutral-500">{{ star.jp }}</span>
       </div>
-      <span v-if="star.note" class="text-xs text-ios-text-tertiary bg-ios-bg-tertiary px-3 py-1 rounded-full">
+      <span v-if="star.note" class="text-[11px] text-neutral-500 bg-neutral-900/60 px-3 py-1 rounded-full border border-white/5">
         {{ star.note }}
       </span>
     </div>
 
-    <!-- Horizontal scrolling title cards -->
-    <div class="flex gap-4 overflow-x-auto scrollbar-hide pb-2 -mx-6 px-6">
+    <!-- Horizontal scrolling title cards: 更大间距 -->
+    <div class="flex gap-6 overflow-x-auto scrollbar-hide pb-4 -mx-6 px-6">
       <TitleCard
         v-for="title in star.titles"
         :key="title.code"

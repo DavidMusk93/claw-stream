@@ -35,6 +35,7 @@ def init_schema():
             cover_url TEXT,
             cover_b64 TEXT,
             cover_path TEXT,
+            charming_intro TEXT,
             jable_m3u8 TEXT,
             jable_cover TEXT,
             release_date_sort TEXT,
@@ -46,6 +47,10 @@ def init_schema():
     # 为已存在表追加 release_date_sort 列
     try:
         conn.execute("ALTER TABLE titles ADD COLUMN release_date_sort TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE titles ADD COLUMN charming_intro TEXT")
     except Exception:
         pass
     conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_magnet_id START 1")

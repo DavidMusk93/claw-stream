@@ -66,6 +66,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 cover_url := IFNULL(r.cover_url, ''),
                 m3u8_url := IFNULL(r.jable_m3u8, ''),
                 jable_cover := IFNULL(r.jable_cover, ''),
+                charming_intro := IFNULL(r.charming_intro, ''),
                 magnet := IFNULL(m.magnet, '')
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s

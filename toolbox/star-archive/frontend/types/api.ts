@@ -37,6 +37,7 @@ export interface CacheMetrics {
 export interface Title {
   code: string
   title?: string
+  charming_intro?: string
   date?: string
   views?: string
   likes?: string
