@@ -1,0 +1,15 @@
+[Unit]
+Description=Star Archive Backend (FastAPI + BitTorrent)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/workspace/toolbox/star-archive
+Environment=PYTHONPATH=/root/.openclaw/workspace/toolbox/star-archive
+ExecStart=/root/.openclaw/workspace/toolbox/star-archive/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --log-level info
+Restart=on-failure
+RestartSec=5s
+User=root
+
+[Install]
+WantedBy=multi-user.target
