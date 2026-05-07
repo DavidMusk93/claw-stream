@@ -111,7 +111,7 @@ const touchStartTime = ref(0)
 const showGestureHint = ref(false)
 const gestureHintText = ref('')
 
-const streamUrl = computed(() => props.hash ? `http://localhost:8765/stream/${props.hash}` : '')
+const streamUrl = computed(() => props.hash ? `/stream/${props.hash}` : '')
 
 const statusText = computed(() => {
   if (!status.value) return '连接种子...'
