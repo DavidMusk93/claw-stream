@@ -52,7 +52,7 @@
     </main>
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
-    <CachePanel />
+    <CachePanel :stars="stars ?? []" />
   </div>
 </template>
 
@@ -67,9 +67,11 @@ const config = useRuntimeConfig()
 const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase })
 const { data: metrics } = useFetch<CacheMetrics>('/api/cache/metrics', { baseURL: config.public.apiBase })
 const { stars, pending, error } = useStars()
+const { preheat } = useCachePreheat()
 
 const modalOpen = ref(false)
 const activeHash = ref('')
+const preheated = ref(false)
 
 function openVideo(magnet: string) {
   const match = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
@@ -78,4 +80,12 @@ function openVideo(magnet: string) {
     modalOpen.value = true
   }
 }
+
+// 页面加载完成后预热缓存（每个 star 第 1,4,7... 个作品）
+watch(() => stars.value, (val) => {
+  if (val && val.length > 0 && !preheated.value) {
+    preheated.value = true
+    preheat(val)
+  }
+}, { immediate: true })
 </script>

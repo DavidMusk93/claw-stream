@@ -24,7 +24,7 @@ export default defineNuxtConfig({
       globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
       runtimeCaching: [
         {
-          urlPattern: /^https?:\/\/localhost:8765\/api\/.*/,
+          urlPattern: /^\/api\/.*/,
           handler: 'NetworkFirst',
           options: {
             cacheName: 'api-cache',
@@ -32,7 +32,7 @@ export default defineNuxtConfig({
           },
         },
         {
-          urlPattern: /^https?:\/\/localhost:8765\/images\/.*/,
+          urlPattern: /^\/(images|api\/cover)\/.*/,
           handler: 'CacheFirst',
           options: {
             cacheName: 'image-cache',
@@ -47,9 +47,9 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
-    apiBase: 'http://localhost:8765',
+    apiBase: '',
     public: {
-      apiBase: 'http://localhost:8765',
+      apiBase: '',
     },
   },
   nitro: {

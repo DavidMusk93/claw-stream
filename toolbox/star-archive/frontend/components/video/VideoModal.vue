@@ -312,18 +312,43 @@ const gestureHintText = ref('')
 
 const streamUrl = computed(() => props.hash ? `/stream/${props.hash}` : '')
 
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${Math.ceil(seconds)}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.ceil(seconds % 60)}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
 const statusText = computed(() => {
   if (!status.value) return '连接种子...'
   const s = status.value
   if (!s.ready) return '连接种子...'
+  const peers = s.peers > 0 ? `${s.peers} peers` : ''
   if (!s.head_ready) {
     const speed = formatSpeed(s.download_rate)
     const pct = s.progress.toFixed(1)
     const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
-    return `缓冲中 | ${speed} | 已缓存 ${buf} (${pct}%)`
+    const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
+    const eta = s.download_rate > 0 && s.video_size > s.local_size
+      ? formatEta((s.video_size - s.local_size) / s.download_rate)
+      : ''
+    const parts = ['缓冲中']
+    if (peers) parts.push(peers)
+    parts.push(speed)
+    if (buf) parts.push(`已缓存 ${buf}`)
+    if (total) parts.push(`/ ${total}`)
+    parts.push(`(${pct}%)`)
+    if (eta) parts.push(`ETA ${eta}`)
+    return parts.join(' | ')
   }
   if (s.download_rate > 0) {
-    return `缓冲中 | ${formatSpeed(s.download_rate)} | 已缓存 ${(s.local_size / 1024 / 1024).toFixed(0)}MB`
+    const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
+    const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
+    const parts = ['播放中']
+    if (peers) parts.push(peers)
+    parts.push(formatSpeed(s.download_rate))
+    if (buf) parts.push(`已缓存 ${buf}`)
+    if (total) parts.push(`/ ${total}`)
+    return parts.join(' | ')
   }
   return '准备播放...'
 })
