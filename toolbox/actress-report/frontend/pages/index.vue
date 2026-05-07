@@ -2,7 +2,7 @@
   <div class="pl-16 min-h-screen">
     <div class="p-8 max-w-7xl mx-auto">
       <header class="mb-8">
-        <h1 class="text-3xl font-bold mb-2">Actress Report</h1>
+        <h1 class="text-3xl font-bold mb-2">Star Archive</h1>
         <p class="text-sm text-neutral-500">
           Backend: {{ health?.status ?? '...' }} | Cache: {{ metrics?.used_human ?? '...' }}
         </p>
@@ -17,11 +17,11 @@
       </div>
 
       <div v-else>
-        <ActressNav :actresses="actresses ?? []" />
-        <ActressCard
-          v-for="actress in actresses"
-          :key="actress.code"
-          :actress="actress"
+        <StarNav :stars="stars ?? []" />
+        <StarCard
+          v-for="star in stars"
+          :key="star.code"
+          :star="star"
           @play="openVideo"
         />
       </div>
@@ -36,7 +36,7 @@
 const config = useRuntimeConfig()
 const { data: health } = useFetch('/api/health', { baseURL: config.public.apiBase })
 const { data: metrics } = useFetch('/api/cache/metrics', { baseURL: config.public.apiBase })
-const { actresses, pending, error } = useActresses()
+const { stars, pending, error } = useStars()
 
 const modalOpen = ref(false)
 const activeHash = ref('')

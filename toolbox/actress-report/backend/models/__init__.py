@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from .actress import Actress, ActressWithWorks
+from .star import Star, StarWithWorks
 from .work import Work, WorkWithMagnets
 from .torrent import TorrentStatus, TorrentAddRequest, TorrentAddResponse
 from .stream import StreamCheckResponse
 from .cache import CacheStatus, CacheMetrics
 
 __all__ = [
-    "Actress",
-    "ActressWithWorks",
+    "Star",
+    "StarWithWorks",
     "Work",
     "WorkWithMagnets",
     "TorrentStatus",

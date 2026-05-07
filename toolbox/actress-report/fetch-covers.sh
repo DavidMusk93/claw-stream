@@ -5,12 +5,12 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="${1:-$DIR/config.json}"
-OUTDIR="/tmp/actress-covers"
+OUTDIR="/tmp/star-covers"
 mkdir -p "$OUTDIR"
 
 echo "[covers] 开始获取封面..."
 
-CODES=($(jq -r '.actresses[].code' "$CONFIG"))
+CODES=($(jq -r '.stars[].code' "$CONFIG"))
 WORKFILE=$(mktemp)
 
 for code in "${CODES[@]}"; do
@@ -25,7 +25,7 @@ done
 xargs -P4 -I{} sh -c '
   code="$1"
   c=$(echo "$code" | tr -d "-" | tr "A-Z" "a-z")
-  out="/tmp/actress-covers/cover_${code}.jpg"
+  out="/tmp/star-covers/cover_${code}.jpg"
 
   # Try multiple DMM URL patterns
   for url in \

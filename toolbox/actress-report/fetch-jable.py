@@ -19,7 +19,7 @@ import db
 
 log = get_logger("fetch-jable")
 
-OUTDIR = "/tmp/actress-jable"
+OUTDIR = "/tmp/star-jable"
 COVERS_DIR = os.path.join(OUTDIR, "covers")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 
@@ -180,24 +180,24 @@ async def fetch_video_meta(client: httpx.AsyncClient, code: str) -> dict:
     return {"m3u8_url": "", "cover_url": ""}
 
 
-async def fetch_actress(name: str, code: str, works: list):
-    """为指定女优的待补充作品抓取 jable 数据"""
+async def fetch_star(name: str, code: str, titles: list):
+    """为指定 star 的待补充 titles 抓取 jable 数据"""
     os.makedirs(OUTDIR, exist_ok=True)
     os.makedirs(os.path.join(COVERS_DIR, code.lower()), exist_ok=True)
 
-    if not works:
+    if not titles:
         return
 
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         sem = asyncio.Semaphore(3)
 
-        async def fetch_one(work: dict):
-            work_id = work["id"]
-            c = work["code"].upper()
+        async def fetch_one(title: dict):
+            title_id = title["id"]
+            c = title["code"].upper()
             async with sem:
                 meta = await fetch_video_meta(client, c)
                 if meta["m3u8_url"] or meta["cover_url"]:
-                    db.update_jable(work_id, meta["m3u8_url"], meta["cover_url"])
+                    db.update_jable(title_id, meta["m3u8_url"], meta["cover_url"])
                 if meta["cover_url"]:
                     out = os.path.join(COVERS_DIR, code.lower(), f"{c.lower()}.jpg")
                     await download_cover(client, meta["cover_url"], out)
@@ -206,10 +206,10 @@ async def fetch_actress(name: str, code: str, works: list):
                     await cache_m3u8_segments(client, meta["m3u8_url"], c)
                 return {"code": c, **meta}
 
-        results = await asyncio.gather(*[fetch_one(w) for w in works])
-        successful = [w for w in results if w.get("m3u8_url") or w.get("cover_url")]
+        results = await asyncio.gather(*[fetch_one(t) for t in titles])
+        successful = [r for r in results if r.get("m3u8_url") or r.get("cover_url")]
 
-    log.info(f"done: {name}: {len(successful)}/{len(works)} works with jable data")
+    log.info(f"done: {name}: {len(successful)}/{len(titles)} titles with jable data")
 
 
 async def main():
@@ -218,24 +218,24 @@ async def main():
     with open(config_file) as f:
         config = json.load(f)
 
-    actresses = [a for a in config.get("actresses", []) if not a.get("type") or a.get("type") == "solo"]
+    stars = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
     # 从 DuckDB 获取缺少 jable 数据的作品
-    works_without_jable = db.get_works_without_jable()
-    actress_works_map: dict[str, list] = {}
-    for work_id, code, title, actress_name in works_without_jable:
-        actress_works_map.setdefault(actress_name, []).append({"id": work_id, "code": code, "title": title})
+    titles_without_jable = db.get_titles_without_jable()
+    star_titles_map: dict[str, list] = {}
+    for title_id, code, title, star_name in titles_without_jable:
+        star_titles_map.setdefault(star_name, []).append({"id": title_id, "code": code, "title": title})
 
     log.info("start fetching...")
-    for a in actresses:
+    for a in stars:
         name = a["name"]
         code = a["code"]
-        works = actress_works_map.get(name, [])
-        if not works:
-            log.info(f"skipping {name}: all works have jable data")
+        titles = star_titles_map.get(name, [])
+        if not titles:
+            log.info(f"skipping {name}: all titles have jable data")
             continue
-        log.info(f"fetching: {name} ({len(works)} works)...")
-        await fetch_actress(name, code, works)
+        log.info(f"fetching: {name} ({len(titles)} titles)...")
+        await fetch_star(name, code, titles)
         await asyncio.sleep(0.5)
     log.info("done")
 

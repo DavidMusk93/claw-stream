@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """db.py — DuckDB 持久化层
 
-存储 actress、works、magnets 的完整数据，避免重复抓取。
+存储 star、titles、magnets 的完整数据，避免重复抓取。
 不变数据（作品信息、封面 base64、jable 数据）写入后永驻，
 增量刷新只抓取新增作品。
 """
@@ -21,10 +21,10 @@ def _conn():
 def init_schema():
     """初始化表结构（幂等）"""
     conn = _conn()
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_actress_id START 1")
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_star_id START 1")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS actresses (
-            id INTEGER PRIMARY KEY DEFAULT nextval('seq_actress_id'),
+        CREATE TABLE IF NOT EXISTS stars (
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_star_id'),
             name TEXT NOT NULL UNIQUE,
             jp_name TEXT,
             handle TEXT,
@@ -35,11 +35,11 @@ def init_schema():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_work_id START 1")
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_title_id START 1")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS works (
-            id INTEGER PRIMARY KEY DEFAULT nextval('seq_work_id'),
-            actress_id INTEGER NOT NULL,
+        CREATE TABLE IF NOT EXISTS titles (
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_title_id'),
+            star_id INTEGER NOT NULL,
             code TEXT NOT NULL,
             title TEXT,
             release_date TEXT,
@@ -55,40 +55,40 @@ def init_schema():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             -- FK removed: DuckDB UPDATE bug with FK constraints
-            UNIQUE(actress_id, code)
+            UNIQUE(star_id, code)
         )
     """)
     conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_magnet_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS magnets (
             id INTEGER PRIMARY KEY DEFAULT nextval('seq_magnet_id'),
-            work_id INTEGER NOT NULL,
+            title_id INTEGER NOT NULL,
             magnet TEXT NOT NULL,
             hash TEXT,
             is_primary BOOLEAN DEFAULT true,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             -- FK removed: DuckDB UPDATE bug with FK constraints
-            UNIQUE(work_id, hash)
+            UNIQUE(title_id, hash)
         )
     """)
     conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_social_id START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS social_posts (
             id INTEGER PRIMARY KEY DEFAULT nextval('seq_social_id'),
-            actress_id INTEGER NOT NULL,
+            star_id INTEGER NOT NULL,
             platform TEXT NOT NULL DEFAULT 'x',
             content TEXT NOT NULL,
             post_url TEXT,
             posted_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (actress_id) REFERENCES actresses(id),
-            UNIQUE(actress_id, platform, content)
+            FOREIGN KEY (star_id) REFERENCES stars(id),
+            UNIQUE(star_id, platform, content)
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_works_actress ON works(actress_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_works_code ON works(code)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_works_date ON works(release_date)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_social_actress ON social_posts(actress_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_star ON titles(star_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_date ON titles(release_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_social_star ON social_posts(star_id)")
     conn.commit()
     conn.close()
 
@@ -98,13 +98,13 @@ def _extract_hash(magnet):
     return m.group(1).lower() if m else None
 
 
-def upsert_actress(name, jp_name=None, handle=None, code=None, type=None, note=None):
-    """插入或更新演员信息，返回 id"""
+def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None):
+    """插入或更新 star 信息，返回 id"""
     conn = _conn()
-    row = conn.execute("SELECT id FROM actresses WHERE name = ?", (name,)).fetchone()
+    row = conn.execute("SELECT id FROM stars WHERE name = ?", (name,)).fetchone()
     if row:
         conn.execute("""
-            UPDATE actresses SET
+            UPDATE stars SET
                 jp_name = ?,
                 handle = ?,
                 code = ?,
@@ -117,42 +117,42 @@ def upsert_actress(name, jp_name=None, handle=None, code=None, type=None, note=N
         conn.close()
         return row[0]
     conn.execute("""
-        INSERT INTO actresses (name, jp_name, handle, code, type, note)
+        INSERT INTO stars (name, jp_name, handle, code, type, note)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (name, jp_name, handle, code, type, note))
-    row = conn.execute("SELECT id FROM actresses WHERE name = ?", (name,)).fetchone()
+    row = conn.execute("SELECT id FROM stars WHERE name = ?", (name,)).fetchone()
     conn.commit()
     conn.close()
     return row[0]
 
 
-def work_exists(actress_id, code):
-    """检查作品是否已存在"""
+def title_exists(star_id, code):
+    """检查 title 是否已存在"""
     conn = _conn()
     row = conn.execute(
-        "SELECT 1 FROM works WHERE actress_id = ? AND code = ?",
-        (actress_id, code)
+        "SELECT 1 FROM titles WHERE star_id = ? AND code = ?",
+        (star_id, code)
     ).fetchone()
     conn.close()
     return row is not None
 
 
-def upsert_work(actress_id, code, title=None, release_date=None, views=None,
+def upsert_title(star_id, code, title=None, release_date=None, views=None,
                 likes=None, resolution=None, download_url=None, cover_url=None,
                 cover_b64=None, cover_path=None):
-    """插入或更新作品信息"""
+    """插入或更新 title 信息"""
     conn = _conn()
     row = conn.execute(
-        "SELECT id, cover_b64 FROM works WHERE actress_id = ? AND code = ?",
-        (actress_id, code)
+        "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
+        (star_id, code)
     ).fetchone()
     if row:
-        work_id, existing_cover = row[0], row[1]
+        title_id, existing_cover = row[0], row[1]
         # 保留已有 cover_b64（增量刷新时不覆盖）
         if existing_cover and cover_b64 is None:
             cover_b64 = existing_cover
         conn.execute("""
-            UPDATE works SET
+            UPDATE titles SET
                 title = ?,
                 release_date = ?,
                 views = ?,
@@ -165,66 +165,66 @@ def upsert_work(actress_id, code, title=None, release_date=None, views=None,
                 updated_at = now()
             WHERE id = ?
         """, (title, release_date, views, likes, resolution,
-              download_url, cover_url, cover_b64, cover_path, work_id))
+              download_url, cover_url, cover_b64, cover_path, title_id))
         conn.commit()
         conn.close()
-        return work_id
+        return title_id
     conn.execute("""
-        INSERT INTO works (actress_id, code, title, release_date, views, likes,
+        INSERT INTO titles (star_id, code, title, release_date, views, likes,
                            resolution, download_url, cover_url, cover_b64, cover_path)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (actress_id, code, title, release_date, views, likes,
+    """, (star_id, code, title, release_date, views, likes,
           resolution, download_url, cover_url, cover_b64, cover_path))
     row = conn.execute(
-        "SELECT id FROM works WHERE actress_id = ? AND code = ?",
-        (actress_id, code)
+        "SELECT id FROM titles WHERE star_id = ? AND code = ?",
+        (star_id, code)
     ).fetchone()
     conn.commit()
     conn.close()
     return row[0]
 
 
-def upsert_magnet(work_id, magnet, is_primary=True):
+def upsert_magnet(title_id, magnet, is_primary=True):
     """插入或更新磁力链接"""
     h = _extract_hash(magnet)
     if not h:
         return
     conn = _conn()
     row = conn.execute(
-        "SELECT 1 FROM magnets WHERE work_id = ? AND hash = ?",
-        (work_id, h)
+        "SELECT 1 FROM magnets WHERE title_id = ? AND hash = ?",
+        (title_id, h)
     ).fetchone()
     if row:
         conn.execute("""
             UPDATE magnets SET magnet = ?, is_primary = ?
-            WHERE work_id = ? AND hash = ?
-        """, (magnet, is_primary, work_id, h))
+            WHERE title_id = ? AND hash = ?
+        """, (magnet, is_primary, title_id, h))
     else:
         conn.execute("""
-            INSERT INTO magnets (work_id, magnet, hash, is_primary)
+            INSERT INTO magnets (title_id, magnet, hash, is_primary)
             VALUES (?, ?, ?, ?)
-        """, (work_id, magnet, h, is_primary))
+        """, (title_id, magnet, h, is_primary))
     conn.commit()
     conn.close()
 
 
-def update_jable(work_id, m3u8_url=None, cover_url=None):
+def update_jable(title_id, m3u8_url=None, cover_url=None):
     """更新 jable 数据"""
     conn = _conn()
     conn.execute("""
-        UPDATE works SET jable_m3u8 = ?, jable_cover = ?, updated_at = CURRENT_TIMESTAMP
+        UPDATE titles SET jable_m3u8 = ?, jable_cover = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-    """, (m3u8_url, cover_url, work_id))
+    """, (m3u8_url, cover_url, title_id))
     conn.commit()
     conn.close()
 
 
-def upsert_social_post(actress_id, platform, content, post_url=None, posted_at=None):
+def upsert_social_post(star_id, platform, content, post_url=None, posted_at=None):
     """插入或更新社交动态"""
     conn = _conn()
     row = conn.execute(
-        "SELECT id FROM social_posts WHERE actress_id = ? AND platform = ? AND content = ?",
-        (actress_id, platform, content)
+        "SELECT id FROM social_posts WHERE star_id = ? AND platform = ? AND content = ?",
+        (star_id, platform, content)
     ).fetchone()
     if row:
         conn.execute("""
@@ -235,48 +235,48 @@ def upsert_social_post(actress_id, platform, content, post_url=None, posted_at=N
         conn.close()
         return row[0]
     conn.execute("""
-        INSERT INTO social_posts (actress_id, platform, content, post_url, posted_at)
+        INSERT INTO social_posts (star_id, platform, content, post_url, posted_at)
         VALUES (?, ?, ?, ?, ?)
-    """, (actress_id, platform, content, post_url, posted_at))
+    """, (star_id, platform, content, post_url, posted_at))
     row = conn.execute(
-        "SELECT id FROM social_posts WHERE actress_id = ? AND platform = ? AND content = ?",
-        (actress_id, platform, content)
+        "SELECT id FROM social_posts WHERE star_id = ? AND platform = ? AND content = ?",
+        (star_id, platform, content)
     ).fetchone()
     conn.commit()
     conn.close()
     return row[0]
 
 
-def get_social_posts(actress_id, limit=3):
-    """获取女演员最近动态"""
+def get_social_posts(star_id, limit=3):
+    """获取 star 最近动态"""
     conn = _conn()
     rows = conn.execute("""
         SELECT platform, content, post_url, posted_at
         FROM social_posts
-        WHERE actress_id = ?
+        WHERE star_id = ?
         ORDER BY COALESCE(posted_at, created_at) DESC
         LIMIT ?
-    """, (actress_id, limit)).fetchall()
+    """, (star_id, limit)).fetchall()
     conn.close()
     return rows
 
 
-def get_works_without_jable(actress_name=None):
-    """获取缺少 jable 数据的作品列表"""
+def get_titles_without_jable(star_name=None):
+    """获取缺少 jable 数据的 title 列表"""
     conn = _conn()
-    if actress_name:
+    if star_name:
         rows = conn.execute("""
             SELECT w.id, w.code, w.title, a.name
-            FROM works w
-            JOIN actresses a ON w.actress_id = a.id
+            FROM titles w
+            JOIN stars a ON w.star_id = a.id
             WHERE a.name = ? AND w.jable_m3u8 IS NULL
             ORDER BY w.release_date DESC
-        """, (actress_name,)).fetchall()
+        """, (star_name,)).fetchall()
     else:
         rows = conn.execute("""
             SELECT w.id, w.code, w.title, a.name
-            FROM works w
-            JOIN actresses a ON w.actress_id = a.id
+            FROM titles w
+            JOIN stars a ON w.star_id = a.id
             WHERE w.jable_m3u8 IS NULL
             ORDER BY w.release_date DESC
         """).fetchall()
@@ -284,10 +284,10 @@ def get_works_without_jable(actress_name=None):
     return rows
 
 
-def get_all_works_json():
+def get_all_titles_json():
     """导出所有数据为 JSON 格式（兼容旧 generate-report.js）
 
-    返回: { "actresses": [ { name, works: [...] } ] }
+    返回: { "stars": [ { name, titles: [...] } ] }
     """
     conn = _conn()
     result = conn.execute("""
@@ -298,7 +298,7 @@ def get_all_works_json():
             a.code,
             a.type,
             a.note,
-            w.code as work_code,
+            w.code as title_code,
             w.title,
             w.release_date,
             w.views,
@@ -311,29 +311,29 @@ def get_all_works_json():
             w.jable_m3u8,
             w.jable_cover,
             m.magnet
-        FROM actresses a
-        LEFT JOIN works w ON w.actress_id = a.id
-        LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
+        FROM stars a
+        LEFT JOIN titles w ON w.star_id = a.id
+        LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
         ORDER BY a.name, w.release_date DESC
     """).fetchall()
     conn.close()
 
-    # 聚合成 actress -> works 结构
-    actress_map = {}
+    # 聚合成 star -> titles 结构
+    star_map = {}
     for row in result:
         name = row[0]
-        if name not in actress_map:
-            actress_map[name] = {
+        if name not in star_map:
+            star_map[name] = {
                 "name": name,
                 "jp_name": row[1],
                 "handle": row[2],
                 "code": row[3],
                 "type": row[4] or "solo",
                 "note": row[5],
-                "works": []
+                "titles": []
             }
-        if row[6]:  # work_code
-            actress_map[name]["works"].append({
+        if row[6]:  # title_code
+            star_map[name]["titles"].append({
                 "code": row[6],
                 "title": row[7],
                 "date": row[8],
@@ -349,21 +349,21 @@ def get_all_works_json():
                 "magnet": row[18] or "",
             })
 
-    return {"actresses": list(actress_map.values())}
+    return {"stars": list(star_map.values())}
 
 
 def export_report_json():
     """导出为 generate-report.js 直接消费的 JSON（stdout）
 
-    格式: { "<actress_code>": { "name": "...", "works": [...] } }
-    每个 work 已合并 ijavtorrent + jable 数据。
+    格式: { "<star_code>": { "name": "...", "titles": [...] } }
+    每个 title 已合并 ijavtorrent + jable 数据。
     """
     conn = _conn()
     result = conn.execute("""
         SELECT
-            a.code as actress_code,
+            a.code as star_code,
             a.name,
-            w.code as work_code,
+            w.code as title_code,
             w.title,
             w.release_date,
             w.views,
@@ -375,20 +375,20 @@ def export_report_json():
             w.jable_m3u8,
             w.jable_cover,
             m.magnet
-        FROM actresses a
-        LEFT JOIN works w ON w.actress_id = a.id
-        LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
+        FROM stars a
+        LEFT JOIN titles w ON w.star_id = a.id
+        LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
         ORDER BY a.name, w.release_date DESC
     """).fetchall()
     conn.close()
 
     data = {}
     for row in result:
-        actress_code = row[0]
-        if actress_code not in data:
-            data[actress_code] = {"name": row[1], "works": []}
-        if row[2]:  # work_code
-            data[actress_code]["works"].append({
+        star_code = row[0]
+        if star_code not in data:
+            data[star_code] = {"name": row[1], "titles": []}
+        if row[2]:  # title_code
+            data[star_code]["titles"].append({
                 "code": row[2],
                 "title": row[3],
                 "date": row[4],

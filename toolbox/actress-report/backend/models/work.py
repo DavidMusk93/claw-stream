@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class Work(BaseModel):
     """作品基本信息"""
     id: int | None = None
-    actress_id: int
+    star_id: int
     code: str
     title: str | None = None
     release_date: str | None = None

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
-class Actress(BaseModel):
+class Star(BaseModel):
     """演员基本信息"""
     id: int | None = None
     name: str
@@ -14,7 +14,7 @@ class Actress(BaseModel):
     note: str | None = None
 
 
-class ActressWithWorks(Actress):
+class StarWithTitles(Star):
     """演员及其作品列表"""
-    works: list[dict] = []
+    titles: list[dict] = []
     posts: list[dict] = []

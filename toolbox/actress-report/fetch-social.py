@@ -82,15 +82,15 @@ async def main():
 
     db.init_schema()
 
-    # 建立 name -> actress_id 映射
+    # 建立 name -> star_id 映射
     conn = db._conn()
     name_to_id = {}
-    for row in conn.execute("SELECT id, name FROM actresses").fetchall():
+    for row in conn.execute("SELECT id, name FROM stars").fetchall():
         name_to_id[row[1]] = row[0]
     conn.close()
 
     total = 0
-    for a in config.get("actresses", []):
+    for a in config.get("stars", []):
         name = a.get("name")
         handle = a.get("handle")
         if not handle:
@@ -101,10 +101,10 @@ async def main():
             continue
 
         posts = await fetch_x_posts(handle)
-        actress_id = name_to_id[name]
+        star_id = name_to_id[name]
         for p in posts:
             db.upsert_social_post(
-                actress_id=actress_id,
+                star_id=star_id,
                 platform="x",
                 content=p["content"],
                 post_url=p["url"] if p["url"].startswith("http") else f"https://x.com{p['url']}",

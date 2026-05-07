@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-router = APIRouter(prefix="/api/actresses", tags=["actresses"])
+router = APIRouter(prefix="/api/stars", tags=["stars"])
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
@@ -24,17 +24,17 @@ def _load_config() -> dict[str, Any]:
 
 
 @router.get("")
-async def get_actresses():
-    """Get all actresses with their latest works."""
+async def get_stars():
+    """Get all stars with their latest titles."""
     config = _load_config()
-    solo = [a for a in config.get("actresses", []) if not a.get("type") or a.get("type") == "solo"]
+    solo = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
     conn = _get_db()
     rows = conn.execute("""
         SELECT
-            a.code as actress_code,
+            a.code as star_code,
             a.name,
-            w.code as work_code,
+            w.code as title_code,
             w.title,
             w.release_date,
             w.views,
@@ -46,9 +46,9 @@ async def get_actresses():
             w.jable_m3u8,
             w.jable_cover,
             m.magnet
-        FROM actresses a
-        LEFT JOIN works w ON w.actress_id = a.id
-        LEFT JOIN magnets m ON m.work_id = w.id AND m.is_primary = true
+        FROM stars a
+        LEFT JOIN titles w ON w.star_id = a.id
+        LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
         ORDER BY a.name, w.release_date DESC
     """).fetchall()
     conn.close()
@@ -57,9 +57,9 @@ async def get_actresses():
     for row in rows:
         code = row[0]
         if code not in db_data:
-            db_data[code] = {"name": row[1], "works": [], "posts": []}
-        if row[2]:
-            db_data[code]["works"].append({
+            db_data[code] = {"name": row[1], "titles": [], "posts": []}
+        if row[2]:  # title_code
+            db_data[code]["titles"].append({
                 "code": row[2],
                 "title": row[3],
                 "date": row[4] or "",
@@ -77,9 +77,9 @@ async def get_actresses():
     # Query social posts
     conn = _get_db()
     post_rows = conn.execute("""
-        SELECT a.code as actress_code, s.platform, s.content, s.post_url, s.posted_at
+        SELECT a.code as star_code, s.platform, s.content, s.post_url, s.posted_at
         FROM social_posts s
-        JOIN actresses a ON s.actress_id = a.id
+        JOIN stars a ON s.star_id = a.id
         ORDER BY COALESCE(s.posted_at, s.created_at) DESC
     """).fetchall()
     conn.close()
@@ -87,7 +87,7 @@ async def get_actresses():
     for row in post_rows:
         code = row[0]
         if code not in db_data:
-            db_data[code] = {"name": "", "works": [], "posts": []}
+            db_data[code] = {"name": "", "titles": [], "posts": []}
         db_data[code]["posts"].append({
             "platform": row[1],
             "content": row[2],
@@ -98,11 +98,11 @@ async def get_actresses():
     result = []
     for a in solo:
         code = a["code"]
-        data = db_data.get(code, {"works": [], "posts": []})
-        works = data.get("works", [])
+        data = db_data.get(code, {"titles": [], "posts": []})
+        titles = data.get("titles", [])
         # Sort by date desc and limit to 3
-        works.sort(key=lambda w: w.get("date", "").split("/")[::-1] if w.get("date") else "", reverse=True)
-        works = works[:3]
+        titles.sort(key=lambda w: w.get("date", "").split("/")[::-1] if w.get("date") else "", reverse=True)
+        latest_titles = titles[:3]
 
         # Deduplicate posts, max 3
         seen = set()
@@ -121,15 +121,15 @@ async def get_actresses():
             "code": code,
             "type": a.get("type", "solo"),
             "note": a.get("note", ""),
-            "works": works,
+            "titles": latest_titles,
             "posts": posts,
         })
 
     # Sort by latest work date ascending
-    def _latest_date(actress):
-        works = actress.get("works", [])
-        if works and works[0].get("date"):
-            return works[0]["date"].split("/")[::-1]
+    def _latest_date(star):
+        titles = star.get("titles", [])
+        if titles and titles[0].get("date"):
+            return titles[0]["date"].split("/")[::-1]
         return "99999999"
 
     result.sort(key=_latest_date)

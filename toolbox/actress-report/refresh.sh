@@ -7,7 +7,7 @@
 #   2. fetch-jable.py → DuckDB (jable 封面+m3u8)
 #   3. fetch-social.py → DuckDB (X/Twitter 最新动态)
 #
-# 前端通过 /api/actresses 实时读取 DuckDB，无需生成静态 HTML。
+# 前端通过 /api/stars 实时读取 DuckDB，无需生成静态 HTML。
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ if command -v uv >/dev/null 2>&1; then
 else
     python3 search-news.py "$CONFIG"
 fi
-echo "      ✓ DuckDB works 已更新"
+echo "      ✓ DuckDB titles 已更新"
 echo ""
 
 # Step 2: 抓取 jable 封面+m3u8 → DuckDB
@@ -60,8 +60,8 @@ echo "========================================"
 echo "✅ 刷新完成"
 echo "========================================"
 # 统计 DuckDB 中的数据
-WORKS_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM works').fetchone()[0]; c.close(); print(n)")
-JABLE_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM works WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
+WORKS_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles').fetchone()[0]; c.close(); print(n)")
+JABLE_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL').fetchone()[0]; c.close(); print(n)")
 SOCIAL_COUNT=$(python3 -c "import db; c=db._conn(); n=c.execute('SELECT COUNT(*) FROM social_posts').fetchone()[0]; c.close(); print(n)")
 echo "作品总数 : $WORKS_COUNT"
 echo "Jable 条 : $JABLE_COUNT"

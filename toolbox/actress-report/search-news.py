@@ -96,16 +96,16 @@ def extract_resolution(magnet_url: str) -> str:
     return ""
 
 
-def is_solo_work(actress_line: str) -> bool:
-    if "blu-ray" in actress_line.lower() or "bluray" in actress_line.lower():
+def is_solo_work(text_line: str) -> bool:
+    if "blu-ray" in text_line.lower() or "bluray" in text_line.lower():
         return False
-    if "monster" in actress_line.lower():
+    if "monster" in text_line.lower():
         return False
-    names = re.findall(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?", actress_line)
+    names = re.findall(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?", text_line)
     if len(names) <= 2:
         return True
     tags = ["Top", "Daily", "Solowork", "Creampie", "Big Tits", "Slut", "Slender", "Titty", "Blow", "Squirting", "Masturbation"]
-    if any(t.lower() in actress_line.lower() for t in tags):
+    if any(t.lower() in text_line.lower() for t in tags):
         return True
     return False
 
@@ -147,14 +147,14 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
     return ""
 
 
-async def fetch_actress(name: str, config_code: str, handle: str):
+async def fetch_star(name: str, config_code: str, handle: str):
     """获取单个女优的作品数据，写入 DuckDB"""
-    actress_id = db.upsert_actress(name=name, handle=handle, code=config_code)
+    star_id = db.upsert_star(name=name, handle=handle, code=config_code)
 
     search_term = SEARCH_TERMS.get(name, handle.replace("_", "+"))
     target_name = KNOWN_NAMES.get(name, name)
     target_parts = target_name.lower().split()
-    works = []
+    titles = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, chromium_sandbox=False, args=["--no-sandbox", "--disable-setuid-sandbox"])
@@ -215,7 +215,7 @@ async def fetch_actress(name: str, config_code: str, handle: str):
                     continue
                 movie = movies.get(movie_ids[idx] if idx < len(movie_ids) else "", {})
                 magnet = htmlmod.unescape((movie.get("magnets") or [""])[0])
-                works.append({
+                titles.append({
                     "code": c,
                     "title": entry["title"],
                     "date": entry["date"],
@@ -235,30 +235,30 @@ async def fetch_actress(name: str, config_code: str, handle: str):
     # 去重 + 排序 + 取最新3
     seen = set()
     unique = []
-    for w in works:
+    for w in titles:
         if w["code"] not in seen:
             seen.add(w["code"])
             unique.append(w)
     unique.sort(key=lambda w: (w["date"].split("/")[2] + w["date"].split("/")[1] + w["date"].split("/")[0]) if w["date"] else "00000000", reverse=True)
-    works = unique[:3]
+    titles = unique[:3]
 
     # 写入 DuckDB
-    for w in works:
+    for w in titles:
         code = w["code"]
         views_int = _parse_count(w["views"])
         likes_int = _parse_count(w["likes"])
 
-        if db.work_exists(actress_id, code):
+        if db.title_exists(star_id, code):
             # 仅更新元数据，保留已有封面
             conn = db._conn()
             row = conn.execute(
-                "SELECT id, cover_b64 FROM works WHERE actress_id = ? AND code = ?",
-                (actress_id, code),
+                "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
+                (star_id, code),
             ).fetchone()
-            work_id, existing_cover_b64 = row if row else (None, None)
+            title_id, existing_cover_b64 = row if row else (None, None)
             conn.close()
-            db.upsert_work(
-                actress_id=actress_id,
+            db.upsert_title(
+                star_id=star_id,
                 code=code,
                 title=w["title"],
                 release_date=w["date"],
@@ -270,13 +270,13 @@ async def fetch_actress(name: str, config_code: str, handle: str):
                 cover_b64=existing_cover_b64,
             )
             if w["magnet"] and work_id:
-                db.upsert_magnet(work_id, w["magnet"])
+                db.upsert_magnet(title_id, w["magnet"])
             continue
 
         # 新作品：下载封面后写入
         cover_b64 = await download_cover_b64(w.get("cover_url", ""), code)
-        work_id = db.upsert_work(
-            actress_id=actress_id,
+        work_id = db.upsert_title(
+            star_id=star_id,
             code=code,
             title=w["title"],
             release_date=w["date"],
@@ -288,36 +288,36 @@ async def fetch_actress(name: str, config_code: str, handle: str):
             cover_b64=cover_b64,
         )
         if w["magnet"]:
-            db.upsert_magnet(work_id, w["magnet"])
+            db.upsert_magnet(title_id, w["magnet"])
 
-    log.info(f"done: {name}: {len(works)} works")
-    return {"name": name, "target_name": target_name, "works": works, "count": len(works)}
+    log.info(f"done: {name}: {len(titles)} titles")
+    return {"name": name, "target_name": target_name, "titles": titles, "count": len(titles)}
 
 
 async def main():
     db.init_schema()
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.json"
     config = json.load(open(config_file))
-    actresses = config.get("actresses", [])
+    stars = config.get("stars", [])
 
-    log.info("fetching works data...")
-    for a in actresses:
+    log.info("fetching titles data...")
+    for a in stars:
         log.info(f"fetching: {a['name']}...")
-        await fetch_actress(a["name"], a["code"], a["handle"])
+        await fetch_star(a["name"], a["code"], a["handle"])
         await random_delay(1.0, 2.5)
 
     # 统计
     total = 0
-    for a in actresses:
+    for a in stars:
         conn = db._conn()
         count = conn.execute(
-            "SELECT COUNT(*) FROM works w JOIN actresses act ON w.actress_id = act.id WHERE act.code = ?",
+            "SELECT COUNT(*) FROM titles w JOIN stars act ON w.star_id = act.id WHERE act.code = ?",
             (a["code"],),
         ).fetchone()[0]
         conn.close()
-        log.info(f"{a['name']}: {count} works")
+        log.info(f"{a['name']}: {count} titles")
         total += count
-    log.info(f"done, total {total} works")
+    log.info(f"done, total {total} titles")
 
 
 if __name__ == "__main__":

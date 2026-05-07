@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, actresses
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, stars
 from backend.services.torrent_engine import TorrentEngine
 from logger import get_logger
 
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(
-    title="Actress Report Backend",
+    title="Star Archive Backend",
     description="BitTorrent cache + video streaming API",
     version="1.0.0",
     lifespan=lifespan,
@@ -65,7 +65,7 @@ app.include_router(check_router)
 app.include_router(torrents_router)
 app.include_router(cache_router)
 app.include_router(auth_router)
-app.include_router(actresses.router)
+app.include_router(stars.router)
 
 # Static files
 if os.path.exists(IMAGES_DIR):
