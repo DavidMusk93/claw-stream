@@ -314,6 +314,16 @@ class TorrentEngine:
         # when sparse files already exist on disk.
         params.flags &= ~lt.torrent_flags.seed_mode
 
+        # Load cached metadata if available (skips peer discovery + metadata download)
+        torrent_path = os.path.join(save_path, f"{hash_str}.torrent")
+        if os.path.exists(torrent_path):
+            try:
+                ti = lt.torrent_info(torrent_path)
+                params.ti = ti
+                log.info(f"metadata cache hit: {hash_str[:12]}... ({ti.name()})")
+            except Exception as e:
+                log.warning(f"metadata cache load failed: {hash_str[:12]}... {e}")
+
         handle = self.session.add_torrent(params)
         info = {
             "handle": handle,
@@ -394,6 +404,17 @@ class TorrentEngine:
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4
         handle.prioritize_files(file_prios)
+
+        # 持久化 metadata，下次播放时无需重新寻找 peers 下载 metadata
+        try:
+            torrent_path = os.path.join(info["handle"].status().save_path, f"{hash_str}.torrent")
+            info_sec = ti.info_section()
+            entry = {"info": lt.bdecode(info_sec)}
+            with open(torrent_path, "wb") as f:
+                f.write(lt.bencode(entry))
+            log.info(f"metadata saved: {hash_str[:12]}... ({ti.name()})")
+        except Exception as e:
+            log.warning(f"metadata save failed: {hash_str[:12]}... {e}")
 
         num_pieces = ti.num_pieces()
         if info.get("prefetch"):
