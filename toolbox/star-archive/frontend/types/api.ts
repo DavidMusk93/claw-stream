@@ -10,6 +10,7 @@ export interface StreamCheckResponse {
 export interface TorrentStatus {
   hash: string
   name?: string
+  work_code?: string
   ready: boolean
   cached: boolean
   head_ready: boolean
