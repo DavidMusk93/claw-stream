@@ -8,7 +8,7 @@
       <div
         ref="containerRef"
         class="relative w-full h-full sm:w-[90vw] sm:max-w-5xl sm:h-auto sm:aspect-video bg-black sm:rounded-xl overflow-hidden"
-        @dblclick="togglePlay"
+        @dblclick="onDblClick"
         @touchstart="onTouchStart"
         @touchend="onTouchEnd"
         @touchmove="onTouchMove"
@@ -438,6 +438,31 @@ function onTouchMove(e: TouchEvent) {
   }
 }
 
+function onDblClick(e: MouseEvent) {
+  const v = videoRef.value
+  if (!v) return
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const width = rect.width
+
+  if (x < width / 3) {
+    // 左侧双击：后退 10 秒
+    const prev = v.currentTime
+    v.currentTime = Math.max(0, v.currentTime - 10)
+    logInfo('player', `dblclick left seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+    showHint('后退 10 秒')
+  } else if (x > width * 2 / 3) {
+    // 右侧双击：快进 10 秒
+    const prev = v.currentTime
+    v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
+    logInfo('player', `dblclick right seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
+    showHint('快进 10 秒')
+  } else {
+    // 中间双击：播放/暂停
+    togglePlay()
+  }
+}
+
 function onTouchEnd(e: TouchEvent) {
   const t = e.changedTouches[0]
   const dx = t.clientX - touchStartX.value
@@ -452,24 +477,35 @@ function onTouchEnd(e: TouchEvent) {
     return
   }
 
-  // Horizontal swipe: seek
+  // Horizontal swipe: seek proportional to swipe distance (3s per px)
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
-    const seekSeconds = dx > 0 ? 10 : -10
+    const SWIPE_PX_PER_SECOND = 3
+    const seekSeconds = Math.round(dx * SWIPE_PX_PER_SECOND)
     const prev = v.currentTime
     v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + seekSeconds))
+    const absSec = Math.abs(seekSeconds)
+    let hint = ''
+    if (absSec >= 60) {
+      hint = `${seekSeconds > 0 ? '快进' : '后退'} ${Math.floor(absSec / 60)}分${absSec % 60}秒`
+    } else {
+      hint = `${seekSeconds > 0 ? '快进' : '后退'} ${absSec}秒`
+    }
     logInfo('player', `swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
-    showHint(dx > 0 ? '快进 10 秒' : '后退 10 秒')
+    showHint(hint)
     return
   }
 
-  // Vertical swipe: volume (right side) or brightness (left side)
+  // Vertical swipe: volume (right side) or brightness hint (left side)
   if (Math.abs(dy) > 60) {
     if (touchStartX.value > window.innerWidth / 2) {
-      const delta = dy < 0 ? 0.1 : -0.1
+      const delta = dy < 0 ? 0.05 : -0.05
       const prev = v.volume
       v.volume = Math.max(0, Math.min(1, v.volume + delta))
       logInfo('player', `swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
       showHint(`音量 ${Math.round(v.volume * 100)}%`)
+    } else {
+      // 左侧上下滑：浏览器没有系统亮度 API，仅作提示
+      showHint(dy < 0 ? '亮度 ↑ (浏览器不支持)' : '亮度 ↓ (浏览器不支持)')
     }
   }
 }
