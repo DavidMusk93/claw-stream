@@ -152,25 +152,12 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
     result.sort(key=_latest_date, reverse=True)
 
-    # Assign global numbers to all titles (sorted by release date descending)
-    def _title_sort_key(t):
-        d = t.get("date", "")
-        if d and "/" in d:
-            parts = d.split("/")
-            return f"{parts[2]}{parts[1].zfill(2)}{parts[0].zfill(2)}"
-        return "00000000"
-
-    all_titles = []
+    # Assign global numbers to all titles in star order (star[0] -> #1,2,3, star[1] -> #4,5,6...)
+    number = 1
     for star in result:
         for t in star.get("titles", []):
-            all_titles.append((star["code"], t))
-
-    all_titles.sort(key=lambda x: _title_sort_key(x[1]), reverse=True)
-
-    number_map: dict[str, int] = {}
-    for i, (star_code, t) in enumerate(all_titles, 1):
-        t["number"] = i
-        number_map[t["code"]] = i
+            t["number"] = number
+            number += 1
 
     return result
 
