@@ -64,6 +64,11 @@ class _TextFormatter(logging.Formatter):
         tid = trace_id_ctx.get()
         tid_str = f"[{tid}] " if tid != "-" else ""
         base = f"{self.formatTime(record)} {tid_str}[{record.name}] {record.levelname} {record.filename}:{record.lineno} {record.getMessage()}"
+        # Append extra fields so AI agents can grep/awk structured data
+        extra = getattr(record, "extra", None)
+        if extra:
+            pairs = " ".join(f"{k}={v}" for k, v in extra.items())
+            base += " | " + pairs
         if record.exc_info:
             base += "\n" + self.formatException(record.exc_info)
         return base

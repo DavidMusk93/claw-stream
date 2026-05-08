@@ -97,6 +97,7 @@ export function useVideoPlayer() {
   async function reportSeek(hash: string, time: number, duration: number) {
     if (!hash || !duration || duration === Infinity) return
     try {
+      logInfo('player', `reportSeek ${hash.slice(0, 12)} time=${time.toFixed(1)}s`)
       await $fetch('/torrent/seek', {
         baseURL: config.public.apiBase,
         method: 'POST',
@@ -104,13 +105,14 @@ export function useVideoPlayer() {
         body: { hash, time, duration },
       })
     } catch (e: any) {
-      // silent: seek reporting is best-effort
+      logError('player', `reportSeek ${hash.slice(0, 12)} failed: ${e.message || e}`)
     }
   }
 
   async function reportProgress(hash: string, time: number, duration: number) {
     if (!hash || !duration || duration === Infinity) return
     try {
+      logInfo('player', `reportProgress ${hash.slice(0, 12)} time=${time.toFixed(1)}s/${duration.toFixed(1)}s`)
       await $fetch('/torrent/progress', {
         baseURL: config.public.apiBase,
         method: 'POST',
@@ -118,7 +120,7 @@ export function useVideoPlayer() {
         body: { hash, time, duration },
       })
     } catch (e: any) {
-      // silent: progress reporting is best-effort
+      logError('player', `reportProgress ${hash.slice(0, 12)} failed: ${e.message || e}`)
     }
   }
 

@@ -9,9 +9,11 @@ from typing import Any
 from backend.services.torrent_engine import find_video_state
 from backend.services.video_stream import read_video_range
 from backend.models import StreamCheckResponse
+from core import get_logger
 
 stream_router = APIRouter(prefix="/stream", tags=["stream"])
 check_router = APIRouter(prefix="/api/check", tags=["stream"])
+log = get_logger("stream-router")
 
 
 def get_engine(request: Request) -> Any:
@@ -67,6 +69,19 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     # 将同步文件 I/O 放到线程池，避免阻塞事件循环
     data = await asyncio.to_thread(read_video_range, hash_str, start, end, engine)
     actual_size = len(data)
+
+    is_hole = actual_size > 0 and not any(data)
+    log.debug(
+        "stream_video response",
+        extra={
+            "hash": hash_str[:12],
+            "range": f"{start}-{end}",
+            "requested_size": end - start + 1,
+            "actual_size": actual_size,
+            "hole": is_hole,
+            "mime": mime,
+        },
+    )
 
     headers = {
         "Content-Range": f"bytes {start}-{start + actual_size - 1}/{total_size}",

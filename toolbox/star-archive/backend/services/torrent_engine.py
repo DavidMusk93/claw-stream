@@ -405,15 +405,23 @@ class TorrentEngine:
         info["video_idx"] = idx
         info["video_path"] = os.path.join(info["handle"].status().save_path, name)
         info["video_size"] = size
-        # 优先从视频文件名提取 code，更准确
         code_from_file = _extract_work_code(name)
         if code_from_file:
             info["work_code"] = code_from_file
 
-        # 只下载选定的主视频文件，其余全部设为 0（避免下载 preview/clip 等附加视频）
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4
         handle.prioritize_files(file_prios)
+        log.debug(
+            "_on_metadata: file priority set",
+            extra={
+                "hash": hash_str[:12],
+                "video_idx": idx,
+                "video_name": name,
+                "video_size": size,
+                "num_files": fs.num_files(),
+            },
+        )
 
         # 持久化 metadata，下次播放时无需重新寻找 peers 下载 metadata
         try:
@@ -496,6 +504,20 @@ class TorrentEngine:
 
         h.prioritize_pieces(piece_prios)
         h.set_sequential_download(False)
+        log.debug(
+            "_set_stream_window: pieces prioritized",
+            extra={
+                "hash": info['hash'][:12],
+                "num_pieces": num_pieces,
+                "start_piece": start_piece,
+                "end_piece": end_piece,
+                "head_count": head_count,
+                "tail_count": tail_count,
+                "window_pcs": window_pcs,
+                "win_start": win_start if window_pcs > 0 else None,
+                "win_end": win_end if window_pcs > 0 else None,
+            },
+        )
         return True
 
     def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:

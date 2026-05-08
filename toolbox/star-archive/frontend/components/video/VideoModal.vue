@@ -417,7 +417,11 @@ function onCanplay() {
   canplayFired.value = true
   buffering.value = false
   retryCount.value = 0
-  logInfo('player', 'canplay')
+  const v = videoRef.value
+  logInfo('player', 'canplay', {
+    currentTime: v?.currentTime ?? 0,
+    bufferedRanges: v?.buffered?.length ?? 0,
+  })
   videoRef.value?.play().catch(() => {})
 }
 
@@ -447,7 +451,11 @@ function onEnded() {
 
 function onWaiting() {
   buffering.value = true
-  logInfo('player', 'waiting (buffering)')
+  const v = videoRef.value
+  logInfo('player', 'waiting', {
+    currentTime: v?.currentTime ?? 0,
+    readyState: v?.readyState ?? -1,
+  })
 }
 function onPlaying() {
   buffering.value = false
@@ -455,24 +463,34 @@ function onPlaying() {
 }
 function onSeeking() {
   buffering.value = true
-  logInfo('player', 'seeking')
-  // 暂停播放，等待数据就绪，避免 seek 到未缓存区域触发解码错误
+  const v = videoRef.value
+  logInfo('player', 'seeking', {
+    currentTime: v?.currentTime ?? 0,
+    duration: v?.duration ?? 0,
+  })
   videoRef.value?.pause()
 }
 function onSeeked() {
   buffering.value = false
-  logInfo('player', 'seeked')
   const v = videoRef.value
+  logInfo('player', 'seeked', {
+    currentTime: v?.currentTime ?? 0,
+    duration: v?.duration ?? 0,
+  })
   if (v && v.duration && isFinite(v.duration) && props.hash) {
     reportSeek(props.hash, v.currentTime, v.duration)
   }
-  // 尝试恢复播放，如果数据不足浏览器会再次进入 waiting
   v?.play().catch(() => {})
 }
 
 function onStalled() {
   buffering.value = true
-  logInfo('player', 'stalled (waiting for data)')
+  const v = videoRef.value
+  logInfo('player', 'stalled', {
+    currentTime: v?.currentTime ?? 0,
+    readyState: v?.readyState ?? -1,
+    networkState: v?.networkState ?? -1,
+  })
 }
 
 function onAbort() {
@@ -484,11 +502,21 @@ function onError() {
   const v = videoRef.value
   const code = v?.error?.code ?? 0
   const message = v?.error?.message ?? 'unknown'
-  logError('player', `video error code=${code} msg=${message}`)
+  const networkState = v?.networkState ?? -1
+  const readyState = v?.readyState ?? -1
+  const currentSrc = v?.currentSrc ?? ''
+  const buffered = v?.buffered?.length ?? 0
+  logError('player', `video error code=${code} msg=${message}`, {
+    networkState,
+    readyState,
+    currentSrc: currentSrc.slice(-60),
+    bufferedRanges: buffered,
+    canplayFired: canplayFired.value,
+    retryCount: retryCount.value,
+    hash: props.hash?.slice(0, 12),
+  })
 
   // code=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) is not recoverable by reload.
-  // It usually means the browser cannot decode the format or the data
-  // stream is fundamentally broken. Retrying only produces more errors.
   if (code === 4) {
     errorMsg.value = '播放失败，文件格式不支持或数据损坏'
     stopPolling()
@@ -499,11 +527,10 @@ function onError() {
     retryCount.value++
     logInfo('player', `retry ${retryCount.value}/${MAX_RETRIES}`)
     errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
-    const currentSrc = v?.src || streamUrl.value
-    // Do NOT clear src to empty string — that triggers a spurious code=4.
+    const src = v?.src || streamUrl.value
     setTimeout(() => {
       if (videoRef.value) {
-        videoRef.value.src = currentSrc
+        videoRef.value.src = src
         videoRef.value.load()
       }
     }, 1000)

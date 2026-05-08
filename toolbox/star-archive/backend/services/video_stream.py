@@ -4,7 +4,10 @@ import os
 import time
 from typing import Any
 
+from core import get_logger
 from .torrent_engine import find_video_state
+
+log = get_logger("video-stream")
 
 
 def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) -> None:
@@ -16,14 +19,17 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     with engine.lock:
         info = engine.torrents.get(hash_str)
     if not info:
+        log.debug("seek_priority: torrent not found", extra={"hash": hash_str[:12]})
         return
     h = info["handle"]
     if not h.status().has_metadata:
+        log.debug("seek_priority: no metadata yet", extra={"hash": hash_str[:12]})
         return
     ti = h.torrent_file()
     fs = ti.files()
     idx = info["video_idx"]
     if idx is None:
+        log.debug("seek_priority: video_idx is None", extra={"hash": hash_str[:12]})
         return
     piece_length = ti.piece_length()
     file_offset = fs.file_offset(idx)
@@ -34,22 +40,37 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
 
     # Set both deadline and priority so libtorrent resumes from 'finished'
     # state immediately and downloads the piece with full speed.
+    deadline_count = 0
+    prio_count = 0
     for p in range(start_piece, end_piece + 1):
         h.set_piece_deadline(p, 0)
-        h.piece_priority(p, 7)
+        deadline_count += 1
+        old_prio = h.piece_priority(p)
+        if old_prio != 7:
+            h.piece_priority(p, 7)
+            prio_count += 1
+    log.debug(
+        "seek_priority",
+        extra={
+            "hash": hash_str[:12],
+            "start_byte": start_byte,
+            "end_byte": end_byte,
+            "start_piece": start_piece,
+            "end_piece": end_piece,
+            "deadline_count": deadline_count,
+            "prio_changed": prio_count,
+            "state": str(h.status().state),
+        },
+    )
 
 
 def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     """Read video data for a given byte range, stopping at holes.
     Returns the actual data read (may be less than requested if hole encountered).
-
-    关键修复：
-    1. 仅在 prefetch 模式首次 stream 时切换 play priority，不再每次请求重置。
-    2. seek_priority 只提升 deadline，不覆盖已有优先级策略。
-    3. 遇到 hole 时短暂等待（最多 2s），让 libtorrent 完成 urgent 下载。
     """
     path, real_size, head_ready, mime = find_video_state(hash_str)
     if not path:
+        log.debug("read_video_range: video not found", extra={"hash": hash_str[:12], "start": start, "end": end})
         return b""
 
     # Ensure play priority is applied ONLY when switching from prefetch mode
@@ -60,9 +81,7 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
         if h.status().has_metadata and info.get("prefetch"):
             info["prefetch"] = False
             engine._apply_play_priority(h, info)
-        # Removed: do NOT call _apply_play_priority on every stream request,
-        # because _apply_play_priority uses window_pcs=0 which resets the
-        # sliding window to the file head, breaking seek/play progress.
+            log.debug("read_video_range: switched prefetch→play", extra={"hash": hash_str[:12]})
 
     # Trigger urgent download for this range
     seek_priority(hash_str, start, end, engine)
@@ -70,14 +89,13 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     total_size = os.path.getsize(path)
     chunk_size = (end - start) + 1
 
-    # Try reading; if we hit a hole, wait for libtorrent to download.
-    # When torrent is in 'finished' state, restoring a piece from priority 0
-    # to 7 + deadline may take 5–15s to actually fetch the data.
-    max_wait = 15.0  # seconds
+    max_wait = 15.0
     wait_step = 0.5
     elapsed = 0.0
+    attempt = 0
 
     while True:
+        attempt += 1
         data = bytearray()
         with open(path, "rb") as f:
             f.seek(start)
@@ -89,15 +107,44 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
                 data.extend(buf)
                 remaining -= len(buf)
 
-        # Hole detection: if we read data but every byte is zero,
-        # the piece hasn't been downloaded yet.
         hole = len(data) > 0 and not any(data)
 
+        log.debug(
+            "read_video_range attempt",
+            extra={
+                "hash": hash_str[:12],
+                "attempt": attempt,
+                "start": start,
+                "end": end,
+                "requested": chunk_size,
+                "read": len(data),
+                "hole": hole,
+                "elapsed": round(elapsed, 1),
+                "head_ready": head_ready,
+                "real_size": real_size,
+            },
+        )
+
         if not hole and len(data) > 0:
+            log.debug(
+                "read_video_range success",
+                extra={"hash": hash_str[:12], "attempt": attempt, "read": len(data), "elapsed": round(elapsed, 1)},
+            )
             return bytes(data)
 
-        # Hole or empty — wait and retry if within max_wait
         if elapsed >= max_wait:
+            log.warning(
+                "read_video_range hole timeout",
+                extra={
+                    "hash": hash_str[:12],
+                    "start": start,
+                    "end": end,
+                    "read": len(data),
+                    "elapsed": round(elapsed, 1),
+                    "head_ready": head_ready,
+                    "real_size": real_size,
+                },
+            )
             break
         time.sleep(wait_step)
         elapsed += wait_step
