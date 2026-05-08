@@ -313,6 +313,9 @@ class TorrentEngine:
         # Also disable seed_mode to prevent progress from jumping to 100%
         # when sparse files already exist on disk.
         params.flags &= ~lt.torrent_flags.seed_mode
+        # Magnet URI defaults to paused; resume so it actually connects to
+        # trackers / DHT and downloads metadata.
+        params.flags &= ~lt.torrent_flags.paused
 
         # Load cached metadata if available (skips peer discovery + metadata download)
         torrent_path = os.path.join(save_path, f"{hash_str}.torrent")
