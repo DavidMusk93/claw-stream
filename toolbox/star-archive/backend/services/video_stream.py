@@ -32,9 +32,12 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
     end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
-    # Only set deadline for pieces in the Range, do NOT reset other priorities
+    # Set both deadline and priority so libtorrent resumes from 'finished'
+    # state immediately and downloads the piece with full speed.
     for p in range(start_piece, end_piece + 1):
         h.set_piece_deadline(p, 0)
+        if h.piece_priority(p) == 0:
+            h.piece_priority(p, 7)
 
 
 def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
@@ -68,9 +71,11 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     total_size = os.path.getsize(path)
     chunk_size = (end - start) + 1
 
-    # Try reading; if we hit a hole, wait briefly for libtorrent to download
-    max_wait = 2.0  # seconds
-    wait_step = 0.2
+    # Try reading; if we hit a hole, wait for libtorrent to download.
+    # When torrent is in 'finished' state, restoring a piece from priority 0
+    # to 7 + deadline may take 5–15s to actually fetch the data.
+    max_wait = 15.0  # seconds
+    wait_step = 0.5
     elapsed = 0.0
 
     while True:

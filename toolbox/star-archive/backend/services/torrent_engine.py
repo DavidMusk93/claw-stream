@@ -328,6 +328,7 @@ class TorrentEngine:
                 log.warning(f"metadata cache load failed: {hash_str[:12]}... {e}")
 
         handle = self.session.add_torrent(params)
+
         info = {
             "handle": handle,
             "magnet": magnet,
@@ -343,6 +344,12 @@ class TorrentEngine:
         }
         with self.lock:
             self.torrents[hash_str] = info
+
+        # If metadata was loaded from local .torrent, run _on_metadata immediately
+        # so video_idx / ready are populated before the first status query.
+        if params.ti is not None:
+            self._on_metadata(handle)
+
         return info
 
     def _extract_hash(self, magnet: str) -> str | None:
@@ -429,7 +436,8 @@ class TorrentEngine:
             handle.prioritize_pieces(piece_prios)
             log.info(f"prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
         else:
-            # Default: all pieces priority 0 (set head urgent when playing)
+            # Default: all pieces priority 0 (strict on-demand).
+            # head+tail urgent applied later by _apply_play_priority.
             piece_prios = [0] * num_pieces
             handle.prioritize_pieces(piece_prios)
             log.info(f"added: {name} ({format_size(size)})")
@@ -460,7 +468,7 @@ class TorrentEngine:
         start_piece = file_offset // piece_length
         end_piece = (file_offset + file_size) // piece_length
 
-        # 全部清零 —— 不下载任何不在窗口内的 piece
+        # 窗口外设为 0（严格按需），窗口内 7
         piece_prios = [0] * num_pieces
 
         # Head urgent (moov-in-head + first frame)
