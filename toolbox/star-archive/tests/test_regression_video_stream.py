@@ -121,15 +121,19 @@ class TestMp4MoovDetection(unittest.TestCase):
             self.assertTrue(head_ready, "head_ready should be True when moov is complete")
 
     def test_find_video_state_tail_moov(self) -> None:
-        """ABF-350: tail-moov without full download → head_ready=False."""
+        """ABF-350: tail-moov only needs moov region, not whole file."""
         hash_str = "4637fa3c7a508f8394da6f7c3601c152ae51de6b"
         path, real_size, head_ready, mime = find_video_state(hash_str)
         if not path:
             self.skipTest("ABF-350 not cached")
         print(f"  ABF-350: real_size={real_size:,} head_ready={head_ready}")
-        # Tail-moov requires almost full file; with only 189MB it should be False
-        if real_size < 5 * 1024 * 1024 * 1024:
-            self.assertFalse(head_ready, "tail-moov should be False until near-complete")
+        # Tail-moov only needs [moov_start, moov_end] to have data,
+        # not the entire file. Check actual moov region via SEEK_HOLE.
+        moov_start, moov_end = _scan_mp4_moov(path)
+        moov_complete = _range_has_data(path, moov_start, moov_end - 1)
+        print(f"  ABF-350 moov_complete={moov_complete}")
+        if moov_complete:
+            self.assertTrue(head_ready, "tail-moov head_ready should be True when moov region is complete")
 
 
 class TestBrowserPlaybackFlow(unittest.TestCase):

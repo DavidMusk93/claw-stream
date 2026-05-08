@@ -185,12 +185,15 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
             except Exception:
                 return best, best_size, False, mime
 
-        # Strict check: moov range [moov_start, moov_end] must have no holes.
-        # For head-moov: moov_start=0, checks [0, moov_end].
+        # Strict check: moov range [moov_start, moov_end) must have no holes.
+        # For head-moov: moov_start=0, checks [0, moov_end).
         # For tail-moov: moov_start>0, checks only moov region (not whole file).
         head_ready = False
         try:
-            if _range_has_data(best, moov_start, moov_end):
+            # Check [moov_start, moov_end-1] — the actual moov byte range.
+            # SEEK_HOLE returns the first hole offset; if it's >= moov_end,
+            # the entire moov range has data.
+            if _range_has_data(best, moov_start, moov_end - 1):
                 head_ready = True
             else:
                 log.debug(
