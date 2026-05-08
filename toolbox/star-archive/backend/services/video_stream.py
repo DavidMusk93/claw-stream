@@ -36,8 +36,7 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     # state immediately and downloads the piece with full speed.
     for p in range(start_piece, end_piece + 1):
         h.set_piece_deadline(p, 0)
-        if h.piece_priority(p) == 0:
-            h.piece_priority(p, 7)
+        h.piece_priority(p, 7)
 
 
 def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
@@ -80,7 +79,6 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
 
     while True:
         data = bytearray()
-        hole = False
         with open(path, "rb") as f:
             f.seek(start)
             remaining = chunk_size
@@ -88,12 +86,12 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
                 buf = f.read(min(16384, remaining))
                 if not buf:
                     break
-                # Hole detection: treat a full zero chunk as a hole
-                if len(buf) >= 16384 and not any(buf):
-                    hole = True
-                    break
                 data.extend(buf)
                 remaining -= len(buf)
+
+        # Hole detection: if we read data but every byte is zero,
+        # the piece hasn't been downloaded yet.
+        hole = len(data) > 0 and not any(data)
 
         if not hole and len(data) > 0:
             return bytes(data)

@@ -486,15 +486,21 @@ function onError() {
   const message = v?.error?.message ?? 'unknown'
   logError('player', `video error code=${code} msg=${message}`)
 
+  // code=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) is not recoverable by reload.
+  // It usually means the browser cannot decode the format or the data
+  // stream is fundamentally broken. Retrying only produces more errors.
+  if (code === 4) {
+    errorMsg.value = '播放失败，文件格式不支持或数据损坏'
+    stopPolling()
+    return
+  }
+
   if (retryCount.value < MAX_RETRIES) {
     retryCount.value++
     logInfo('player', `retry ${retryCount.value}/${MAX_RETRIES}`)
     errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
     const currentSrc = v?.src || streamUrl.value
-    if (v) {
-      v.src = ''
-      v.load()
-    }
+    // Do NOT clear src to empty string — that triggers a spurious code=4.
     setTimeout(() => {
       if (videoRef.value) {
         videoRef.value.src = currentSrc
