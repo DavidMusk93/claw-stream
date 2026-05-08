@@ -105,6 +105,27 @@ def _mime_type(path: str) -> str:
     }.get(ext, "video/mp4")
 
 
+def _range_has_data(path: str, start: int, end: int) -> bool:
+    """使用 Linux SEEK_HOLE 确认 [start, end] 范围内没有 sparse hole。
+
+    原理：SEEK_HOLE(start) 返回 >= start 的第一个 hole 偏移。
+    如果该偏移 > end，说明 [start, end] 全是实际数据。
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        hole_offset = os.lseek(fd, start, os.SEEK_HOLE)
+        return hole_offset > end
+    except OSError as e:
+        # EINVAL = 不支持 SEEK_HOLE；ENXIO = start 之后没有 hole（全是数据）
+        if e.errno == 22:  # EINVAL
+            return False
+        if e.errno == 6:   # ENXIO — no more holes, all data
+            return True
+        raise
+    finally:
+        os.close(fd)
+
+
 def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
     """查找视频文件并检查是否已下载足够的头部数据以供播放。
 
@@ -137,7 +158,7 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
     mime = _mime_type(best)
     ext = os.path.splitext(best)[1].lower()
 
-    # MP4/MOV: need moov atom downloaded
+    # MP4/MOV: need moov atom downloaded (entire moov, no holes)
     if ext in (".mp4", ".m4v", ".mov"):
         moov_end = _scan_mp4_moov(best)
         if moov_end == 0:
@@ -165,14 +186,17 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
             except Exception:
                 return best, best_size, False, mime
 
-        # Confirm moov_end in downloaded area (non-zero bytes around moov end)
+        # Strict check: entire moov range [0, moov_end] must have no holes.
+        # SEEK_HOLE is filesystem-level and works regardless of libtorrent state.
         head_ready = False
         try:
-            with open(best, "rb") as f:
-                f.seek(max(0, moov_end - 1024))
-                tail = f.read(1024)
-                if len(tail) == 1024 and not all(b == 0 for b in tail):
-                    head_ready = True
+            if _range_has_data(best, 0, moov_end):
+                head_ready = True
+            else:
+                log.debug(
+                    "find_video_state: moov has hole",
+                    extra={"hash": hash_str[:12], "moov_end": moov_end},
+                )
         except Exception:
             pass
         return best, best_size, head_ready, mime
@@ -208,6 +232,7 @@ class TorrentEngine:
         settings["connections_limit"] = 200
         settings["download_rate_limit"] = 0
         settings["upload_rate_limit"] = 0
+        settings["checking_mem_usage"] = 1024  # 1GB RAM for faster hash checking
         self.session.apply_settings(settings)
 
         # hash -> { handle, magnet, added_at, last_access, video_idx, video_path, video_size }
