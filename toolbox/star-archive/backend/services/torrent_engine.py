@@ -11,6 +11,7 @@ from typing import Any
 import libtorrent as lt
 
 from core import get_logger
+from .piece_tracker import PieceStateTracker
 
 log = get_logger("torrent-engine")
 
@@ -408,7 +409,10 @@ class TorrentEngine:
             with self.lock:
                 if hash_str in self.torrents:
                     info = self.torrents[hash_str]
-                    # If play mode (not prefetch), reset head urgent
+                    # Re-bootstrap tracker after checking (have_piece now accurate)
+                    if info.get("tracker"):
+                        info["tracker"]._bootstrap_from_filesystem()
+                        info["tracker"]._overlay_have_piece()
                     if not info.get("prefetch"):
                         self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
@@ -417,6 +421,22 @@ class TorrentEngine:
             with self.lock:
                 if hash_str in self.torrents:
                     self.torrents[hash_str]["ready"] = True
+        elif isinstance(alert, lt.piece_finished_alert):
+            h = alert.handle
+            hash_str = str(h.info_hash())
+            with self.lock:
+                if hash_str in self.torrents:
+                    tracker = self.torrents[hash_str].get("tracker")
+                    if tracker:
+                        tracker.on_piece_finished(alert.piece_index)
+        elif isinstance(alert, lt.hash_failed_alert):
+            h = alert.handle
+            hash_str = str(h.info_hash())
+            with self.lock:
+                if hash_str in self.torrents:
+                    tracker = self.torrents[hash_str].get("tracker")
+                    if tracker:
+                        tracker.on_hash_failed(alert.piece_index)
 
     def _on_metadata(self, handle: lt.torrent_handle) -> None:
         """当 torrent metadata 下载完成后，选定视频文件并设置优先级。"""
@@ -441,6 +461,14 @@ class TorrentEngine:
         code_from_file = _extract_work_code(name)
         if code_from_file:
             info["work_code"] = code_from_file
+
+        # Create PieceStateTracker — piece-level state replaces filesystem scans
+        info["tracker"] = PieceStateTracker(
+            handle=handle,
+            video_idx=idx,
+            video_size=size,
+            path=info["video_path"],
+        )
 
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4
@@ -567,6 +595,15 @@ class TorrentEngine:
 
     def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:
         """开始播放：只下载 head + tail，等待前端报告进度后滑动窗口。"""
+        tracker = info.get("tracker")
+        if tracker:
+            count = tracker.request_head_tail(head_count=30, tail_count=30)
+            log.info(
+                f"play priority: {info['hash'][:12]}... head+tail via tracker",
+                extra={"requested_pieces": count},
+            )
+            return True
+        # Fallback to old _set_stream_window if tracker not yet created
         result = self._set_stream_window(h, info, 0.0, 0.0, window_pcs=0)
         if result:
             log.info(f"play priority: {info['hash'][:12]}... head+tail only, waiting for progress")
@@ -621,7 +658,18 @@ class TorrentEngine:
 
         h = info["handle"]
         s = h.status()
-        local_path, local_size, head_ready, mime = find_video_state(hash_str)
+        local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
+
+        # Use tracker head_ready if available (O(pieces) instead of filesystem scan)
+        tracker = info.get("tracker")
+        if tracker and local_path:
+            moov_start, moov_end = _scan_mp4_moov(local_path)
+            if moov_end > 0:
+                head_ready = tracker.head_ready(moov_start, moov_end)
+            else:
+                head_ready = head_ready_fs
+        else:
+            head_ready = head_ready_fs
 
         return {
             "hash": hash_str,
@@ -639,6 +687,7 @@ class TorrentEngine:
             "local_size": local_size,
             "mime": mime,
             "state": str(s.state),
+            "verified_pieces": tracker.verified_count() if tracker else 0,
         }
 
     def get_all_status(self) -> list[dict[str, Any]]:

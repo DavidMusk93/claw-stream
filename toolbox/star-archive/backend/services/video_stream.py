@@ -15,8 +15,9 @@ log = get_logger("video-stream")
 def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) -> None:
     """Set corresponding pieces to urgent based on Range request.
 
-    只提升 Range 对应 piece 的 deadline，**不重置**其他 piece 的优先级，
-    避免与 _set_stream_window 的 strict 策略冲突。
+    Uses PieceStateTracker to avoid requesting already-verified pieces,
+    and avoids finished-state deadlock by trusting tracker state over
+    libtorrent's potentially stale have_piece bitmap.
     """
     with engine.lock:
         info = engine.torrents.get(hash_str)
@@ -40,8 +41,25 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
     end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
-    # Set both deadline and priority so libtorrent resumes from 'finished'
-    # state immediately and downloads the piece with full speed.
+    # Use tracker if available — avoids finished-state deadlock
+    tracker = info.get("tracker")
+    if tracker:
+        requested = tracker.request_pieces(start_piece, end_piece)
+        log.debug(
+            "seek_priority via tracker",
+            extra={
+                "hash": hash_str[:12],
+                "start_byte": start_byte,
+                "end_byte": end_byte,
+                "start_piece": start_piece,
+                "end_piece": end_piece,
+                "requested": requested,
+                "state": str(h.status().state),
+            },
+        )
+        return
+
+    # Fallback: direct libtorrent manipulation (old behaviour)
     deadline_count = 0
     prio_count = 0
     for p in range(start_piece, end_piece + 1):
@@ -52,9 +70,6 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
             h.piece_priority(p, 7)
             prio_count += 1
 
-    # If torrent is in finished state but some pieces in range are missing,
-    # force a recheck to resume downloading. Otherwise libtorrent ignores
-    # deadlines/priorities because it thinks everything is complete.
     status = h.status()
     state = status.state
     forced_recheck = False
