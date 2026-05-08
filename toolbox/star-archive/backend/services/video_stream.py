@@ -80,10 +80,31 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     )
 
 
+def _is_data_at_offset(path: str, offset: int) -> bool:
+    """使用 Linux SEEK_DATA 检查文件 offset 处是否有实际数据（非 sparse hole）。
+
+    比 libtorrent have_piece() 更可靠，不受 checking_files / finished 状态影响。
+    如果文件系统不支持 SEEK_DATA，回退到 have_piece()（通过调用方处理）。
+    """
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        data_offset = os.lseek(fd, offset, os.SEEK_DATA)
+        # offset 本身有数据，或者 SEEK_DATA 跳到了后面的数据区域
+        return data_offset == offset
+    except OSError as e:
+        # ENXIO = 没有更多数据；EINVAL = 不支持 SEEK_DATA
+        if e.errno in (6, 22):  # ENXIO=6, EINVAL=22
+            return False
+        raise
+    finally:
+        os.close(fd)
+
+
 def _check_pieces_have(h: Any, ti: Any, fs: Any, idx: int, start_byte: int, data_len: int) -> bool:
     """检查 [start_byte, start_byte+data_len) 范围涉及的所有 piece 是否已下载。
 
-    用于区分"合法全零数据"（如 MP4 ftyp size 字段）和"未下载的 hole"。
+    回退方案：当 SEEK_DATA 不可用时使用 libtorrent have_piece()。
+    注意：checking_files 状态下 have_piece() 不可靠（全返回 False）。
     """
     piece_length = ti.piece_length()
     file_offset = fs.file_offset(idx)
@@ -144,22 +165,29 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
                 remaining -= len(buf)
 
         # Hole detection: all-zero data may be legitimate (e.g. MP4 ftyp size field)
-        # Verify by checking piece download state via libtorrent.
+        # Use SEEK_DATA (filesystem-level) as primary check — works regardless of
+        # libtorrent state (checking_files, finished, downloading).
+        # Falls back to have_piece() only when SEEK_DATA is unavailable.
         hole = False
         if len(data) > 0 and not any(data):
-            with engine.lock:
-                info = engine.torrents.get(hash_str)
-            if info:
-                h = info["handle"]
-                if h.status().has_metadata and info["video_idx"] is not None:
-                    ti = h.torrent_file()
-                    fs = ti.files()
-                    if not _check_pieces_have(h, ti, fs, info["video_idx"], start, len(data)):
+            try:
+                has_data = _is_data_at_offset(path, start)
+                hole = not has_data
+            except OSError:
+                # SEEK_DATA not supported, fall back to libtorrent have_piece()
+                with engine.lock:
+                    info = engine.torrents.get(hash_str)
+                if info:
+                    h = info["handle"]
+                    if h.status().has_metadata and info["video_idx"] is not None:
+                        ti = h.torrent_file()
+                        fs = ti.files()
+                        if not _check_pieces_have(h, ti, fs, info["video_idx"], start, len(data)):
+                            hole = True
+                    else:
                         hole = True
                 else:
                     hole = True
-            else:
-                hole = True
 
         log.debug(
             "read_video_range attempt",
