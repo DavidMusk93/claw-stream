@@ -475,6 +475,18 @@ class TorrentEngine:
             handle.prioritize_pieces(piece_prios)
             log.info(f"added: {name} ({format_size(size)})")
 
+        # If torrent resumed from cache and is in finished state, its have_piece
+        # bitmap may be stale (doesn't match actual sparse file content).
+        # Force a recheck to sync have_pieces with disk, otherwise head_ready
+        # will stay false forever because libtorrent won't re-download pieces
+        # it thinks are already complete.
+        status = handle.status()
+        if status.state == lt.torrent_status.finished:
+            handle.force_recheck()
+            log.info(
+                f"recheck triggered: {hash_str[:12]}... (finished state, stale have_pieces)"
+            )
+
         info["ready"] = True
 
     def _set_stream_window(
