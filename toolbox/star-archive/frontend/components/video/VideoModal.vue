@@ -355,8 +355,11 @@ const statusText = computed(() => {
   return '准备播放...'
 })
 
-watch(() => props.hash, async (hash) => {
-  if (!hash || !isOpen.value) return
+// 同时 watch hash 和 isOpen，避免 Vue 响应式时序导致两者不同时更新时漏触发
+watch([() => props.hash, isOpen], async ([hash, open]) => {
+  if (!hash || !open) return
+  // 避免重复加载同一 hash
+  if (videoRef.value?.src && videoRef.value.src.includes(hash)) return
   errorMsg.value = ''
   canplayFired.value = false
   buffering.value = true
