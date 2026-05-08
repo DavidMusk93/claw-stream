@@ -41,11 +41,11 @@ def _extract_work_code(name: str) -> str | None:
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> int:
-    """扫描 MP4 文件，查找 moov box 的结束位置。
+def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, int]:
+    """扫描 MP4 文件，查找 moov box 的起始和结束位置。
 
-    处理扩展大小（size==1）和 size==0（box 延伸至 EOF）的情况。
-    对于尾部 moov 文件，如果 mdat 很大，则跳转到 mdat 末尾定位 moov。
+    返回 (moov_start, moov_end)。moov_start=0 且 moov_end>0 表示 head-moov。
+    moov_start>0 表示 tail-moov。返回 (0, 0) 表示未找到。
     """
     try:
         file_size = os.path.getsize(path)
@@ -57,11 +57,9 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> int:
                 size = int.from_bytes(data[offset:offset+4], "big")
                 box_type = data[offset+4:offset+8]
                 if size == 0:
-                    # Box extends to end of file
                     mdat_end = file_size
                     break
                 if size == 1:
-                    # Extended size in next 8 bytes
                     if offset + 16 > len(data):
                         break
                     size = int.from_bytes(data[offset+8:offset+16], "big")
@@ -73,10 +71,10 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> int:
                 elif size < 8 or size > 100 * 1024 * 1024:
                     break
                 if box_type == b"moov":
-                    return offset + size
+                    return 0, offset + size
                 offset += size
 
-            # If we found a large mdat, moov is likely right after it (tail-moov)
+            # tail-moov: moov is after mdat
             if mdat_end > 0:
                 f.seek(max(0, mdat_end - 1024))
                 check = f.read(2048)
@@ -88,10 +86,11 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> int:
                     else:
                         box_size = box_size_raw
                     if 0 < box_size < 100 * 1024 * 1024:
-                        return (mdat_end - 1024 if mdat_end >= 1024 else 0) + moov_idx - 4 + box_size
+                        moov_start = (mdat_end - 1024 if mdat_end >= 1024 else 0) + moov_idx - 4
+                        return moov_start, moov_start + box_size
     except Exception:
         pass
-    return 0
+    return 0, 0
 
 
 def _mime_type(path: str) -> str:
@@ -158,12 +157,11 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
     mime = _mime_type(best)
     ext = os.path.splitext(best)[1].lower()
 
-    # MP4/MOV: need moov atom downloaded (entire moov, no holes)
+    # MP4/MOV: need moov atom downloaded (entire moov range, no holes)
     if ext in (".mp4", ".m4v", ".mov"):
-        moov_end = _scan_mp4_moov(best)
+        moov_start, moov_end = _scan_mp4_moov(best)
         if moov_end == 0:
-            # moov not in head, try find in tail (scan last 128MB — moov may be
-            # far from end if mdat uses extended size)
+            # moov not in head, try find in tail (scan last 128MB)
             try:
                 tail_scan_size = min(128 * 1024 * 1024, best_logic)
                 tail_offset = max(0, best_logic - tail_scan_size)
@@ -178,7 +176,8 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
                         else:
                             box_size = box_size_raw
                         if 0 < box_size < 100 * 1024 * 1024:
-                            moov_end = tail_offset + moov_idx - 4 + box_size
+                            moov_start = tail_offset + moov_idx - 4
+                            moov_end = moov_start + box_size
                         else:
                             return best, best_size, False, mime
                     else:
@@ -186,16 +185,22 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
             except Exception:
                 return best, best_size, False, mime
 
-        # Strict check: entire moov range [0, moov_end] must have no holes.
-        # SEEK_HOLE is filesystem-level and works regardless of libtorrent state.
+        # Strict check: moov range [moov_start, moov_end] must have no holes.
+        # For head-moov: moov_start=0, checks [0, moov_end].
+        # For tail-moov: moov_start>0, checks only moov region (not whole file).
         head_ready = False
         try:
-            if _range_has_data(best, 0, moov_end):
+            if _range_has_data(best, moov_start, moov_end):
                 head_ready = True
             else:
                 log.debug(
                     "find_video_state: moov has hole",
-                    extra={"hash": hash_str[:12], "moov_end": moov_end},
+                    extra={
+                        "hash": hash_str[:12],
+                        "moov_start": moov_start,
+                        "moov_end": moov_end,
+                        "tail_moov": moov_start > 0,
+                    },
                 )
         except Exception:
             pass

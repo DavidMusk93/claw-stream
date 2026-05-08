@@ -79,7 +79,7 @@ class TestMp4MoovDetection(unittest.TestCase):
     """Test MP4 moov atom scanning and head_ready logic."""
 
     def test_scan_mp4_moov_head(self) -> None:
-        """DLDSS-483: moov in head, should return moov_end > 0."""
+        """DLDSS-483: moov in head, should return moov_start=0, moov_end>0."""
         path = os.path.join(
             CACHE_DIR,
             "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
@@ -88,12 +88,13 @@ class TestMp4MoovDetection(unittest.TestCase):
         )
         if not os.path.exists(path):
             self.skipTest("DLDSS-483 cache not available")
-        moov_end = _scan_mp4_moov(path)
-        self.assertGreater(moov_end, 0, "moov should be found in head")
-        print(f"  DLDSS-483 moov_end = {moov_end:,}")
+        moov_start, moov_end = _scan_mp4_moov(path)
+        self.assertEqual(moov_start, 0, "head-moov should have moov_start=0")
+        self.assertGreater(moov_end, 0, "moov should be found")
+        print(f"  DLDSS-483 moov_start={moov_start:,} moov_end={moov_end:,}")
 
     def test_scan_mp4_moov_tail(self) -> None:
-        """ABF-350: moov in tail, _scan_mp4_moov head scan returns 0."""
+        """ABF-350: moov in tail, should return moov_start>0."""
         path = os.path.join(
             CACHE_DIR,
             "4637fa3c7a508f8394da6f7c3601c152ae51de6b",
@@ -102,11 +103,10 @@ class TestMp4MoovDetection(unittest.TestCase):
         )
         if not os.path.exists(path):
             self.skipTest("ABF-350 cache not available")
-        moov_end = _scan_mp4_moov(path)
-        # For tail-moov, head scan returns 0, then tail scan finds it
-        # find_video_state handles the tail scan
-        head_only = moov_end == 0
-        print(f"  ABF-350 head scan moov_end = {moov_end} (tail-moov={head_only})")
+        moov_start, moov_end = _scan_mp4_moov(path)
+        self.assertGreater(moov_start, 0, "tail-moov should have moov_start>0")
+        self.assertGreater(moov_end, moov_start, "moov_end should be > moov_start")
+        print(f"  ABF-350 moov_start={moov_start:,} moov_end={moov_end:,} (tail-moov)")
 
     def test_find_video_state_head_moov(self) -> None:
         """DLDSS-483: head-moov with complete data → head_ready=True."""
@@ -116,7 +116,8 @@ class TestMp4MoovDetection(unittest.TestCase):
             self.skipTest("DLDSS-483 not cached")
         print(f"  DLDSS-483: real_size={real_size:,} head_ready={head_ready}")
         # If moov is complete, head_ready should be True
-        if _range_has_data(path, 0, _scan_mp4_moov(path)):
+        moov_start, moov_end = _scan_mp4_moov(path)
+        if _range_has_data(path, moov_start, moov_end):
             self.assertTrue(head_ready, "head_ready should be True when moov is complete")
 
     def test_find_video_state_tail_moov(self) -> None:
