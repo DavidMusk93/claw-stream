@@ -6,6 +6,8 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import Response
 from typing import Any
 
+import libtorrent as lt
+
 from backend.services.torrent_engine import find_video_state
 from backend.services.video_stream import read_video_range
 from backend.models import StreamCheckResponse
@@ -37,6 +39,18 @@ def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
     return start, end
 
 
+def _is_torrent_checking(engine: Any, hash_str: str) -> bool:
+    """检查指定 torrent 是否处于 checking_files 状态。"""
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if not info:
+        return False
+    try:
+        return info["handle"].status().state == lt.torrent_status.checking_files
+    except Exception:
+        return False
+
+
 @stream_router.get("/{hash_str}")
 async def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
     """Serve video stream with Range support.
@@ -44,10 +58,16 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     大文件流式播放使用线程池执行文件 I/O，避免阻塞 FastAPI 事件循环。
     不带 Range 头的请求返回前 1MB（200），避免 Safari 收到 416 后报 code=4。
     带 Range 头的请求返回 206 Partial Content；若请求范围全是 hole 则返回 416。
+    若 torrent 处于 checking_files 状态返回 503，防止读取到不一致数据。
     """
     path, real_size, head_ready, mime = find_video_state(hash_str)
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
+
+    # Protect against reading while libtorrent is checking files (may zero pieces)
+    if _is_torrent_checking(engine, hash_str):
+        log.debug("stream_video: torrent checking_files, returning 503", extra={"hash": hash_str[:12]})
+        raise HTTPException(status_code=503, headers={"Retry-After": "10"}, detail="Torrent checking files")
 
     total_size = os.path.getsize(path)
     range_hdr = request.headers.get("Range")
@@ -104,9 +124,14 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
 
 
 @check_router.get("/{hash_str}", response_model=StreamCheckResponse)
-async def check_stream(hash_str: str):
+async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     """Check if video head is ready for playback."""
-    local_path, local_size, head_ready, mime = find_video_state(hash_str)
+    local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
+
+    # If torrent is checking_files, report not ready even if filesystem has data.
+    # libtorrent may zero pieces during checking, causing MP4 parse errors.
+    head_ready = head_ready_fs and not _is_torrent_checking(engine, hash_str)
+
     return StreamCheckResponse(
         hash=hash_str,
         cached=local_size > 1024 * 1024,
