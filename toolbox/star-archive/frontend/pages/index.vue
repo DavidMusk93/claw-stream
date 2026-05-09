@@ -19,6 +19,21 @@
           <span v-if="metrics?.used_human" class="font-mono tabular-nums glass px-3 py-1 rounded-full">
             {{ metrics.used_human }}
           </span>
+          <!-- Refresh / Sync button -->
+          <button
+            class="flex items-center gap-1.5 glass px-3 py-1.5 rounded-full text-xs transition-colors hover:bg-white/10 active:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="syncRunning"
+            @click="startSync"
+          >
+            <span
+              class="w-3 h-3 transition-transform"
+              :class="{ 'animate-spin': syncRunning }"
+            >
+              ↻
+            </span>
+            <span v-if="syncRunning">同步中 {{ syncElapsed }}s</span>
+            <span v-else>刷新作品</span>
+          </button>
         </div>
       </div>
     </header>
@@ -74,6 +89,13 @@ const modalOpen = ref(false)
 const activeHash = ref('')
 const preheated = ref(false)
 
+// Sync state
+const syncRunning = ref(false)
+const syncElapsed = ref(0)
+const syncError = ref('')
+let syncTimer: ReturnType<typeof setInterval> | null = null
+let syncStartTime = 0
+
 function openVideo(magnet: string) {
   const match = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
   if (match) {
@@ -81,6 +103,63 @@ function openVideo(magnet: string) {
     modalOpen.value = true
   }
 }
+
+async function startSync() {
+  if (syncRunning.value) return
+  syncError.value = ''
+
+  try {
+    const res = await $fetch('/api/stars/sync', {
+      baseURL: config.public.apiBase,
+      method: 'POST',
+    }) as any
+
+    if (res.status === 'started') {
+      syncRunning.value = true
+      syncStartTime = Date.now()
+      beginPolling()
+    } else if (res.status === 'running') {
+      syncRunning.value = true
+      syncStartTime = Date.now() - (res.elapsed || 0) * 1000
+      beginPolling()
+    }
+  } catch (e: any) {
+    syncError.value = e?.message || '启动同步失败'
+  }
+}
+
+function beginPolling() {
+  if (syncTimer) clearInterval(syncTimer)
+  syncTimer = setInterval(async () => {
+    syncElapsed.value = Math.floor((Date.now() - syncStartTime) / 1000)
+
+    try {
+      const status = await $fetch('/api/stars/sync', {
+        baseURL: config.public.apiBase,
+      }) as any
+
+      if (!status.running) {
+        syncRunning.value = false
+        if (syncTimer) {
+          clearInterval(syncTimer)
+          syncTimer = null
+        }
+        if (status.last_error) {
+          syncError.value = status.last_error.slice(0, 200)
+        }
+        // Refresh stars data after sync completes
+        await refreshNuxtData('stars')
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, 2000)
+}
+
+// Stop polling on unmount
+onUnmounted(() => {
+  if (syncTimer) clearInterval(syncTimer)
+})
 
 // 页面加载完成后预热缓存（每个 star 第 1,4,7... 个作品）
 watch(() => stars.value, (val) => {

@@ -19,7 +19,7 @@ import base64
 
 import duckdb
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, stars
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, stars
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
 
@@ -130,6 +130,7 @@ app.include_router(cache_router)
 app.include_router(auth_router)
 app.include_router(log_router)
 app.include_router(stars.router)
+app.include_router(sync_router)
 
 # Static files
 if os.path.exists(IMAGES_DIR):
