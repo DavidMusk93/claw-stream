@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import mmap
 import os
 import time
 from typing import Any
@@ -138,7 +139,6 @@ def _check_pieces_have(h: Any, ti: Any, fs: Any, idx: int, start_byte: int, data
 
 def _read_once(path: str, start: int, chunk_size: int) -> bytearray:
     """Read [start, start+chunk_size) via mmap. Returns bytearray."""
-    import mmap
     try:
         with open(path, "rb") as f:
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
