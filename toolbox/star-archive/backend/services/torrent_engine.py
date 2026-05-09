@@ -143,47 +143,33 @@ def _range_has_data(path: str, start: int, end: int) -> bool:
         os.close(fd)
 
 
-def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
-    """查找视频文件并检查是否已下载足够的头部数据以供播放。
+def _check_video_ready(path: str, hash_str: str = "") -> tuple[int, bool, str]:
+    """Check if a known video file is ready for playback.
 
-    返回: (文件路径, 实际磁盘大小, 头部是否就绪, MIME 类型)
+    Returns (real_size, head_ready, mime).
     """
-    dir_path = os.path.join(CACHE_DIR, hash_str)
-    if not os.path.exists(dir_path):
-        return None, 0, False, "video/mp4"
-    best = None
-    best_size = 0
-    best_logic = 0
-    for root, dirs, files in os.walk(dir_path):
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext not in VIDEO_EXTS:
-                continue
-            fp = os.path.join(root, f)
-            try:
-                st = os.stat(fp)
-                real_size = st.st_blocks * 512
-                if real_size > best_size:
-                    best_size = real_size
-                    best = fp
-                    best_logic = st.st_size
-            except OSError:
-                pass
-    if not best or best_size < 1024 * 1024:
-        return best, best_size, False, _mime_type(best or "")
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0, False, "video/mp4"
 
-    mime = _mime_type(best)
-    ext = os.path.splitext(best)[1].lower()
+    real_size = st.st_blocks * 512
+    logic_size = st.st_size
+    if real_size < 1024 * 1024:
+        return real_size, False, _mime_type(path)
+
+    mime = _mime_type(path)
+    ext = os.path.splitext(path)[1].lower()
 
     # MP4/MOV: need moov atom downloaded (entire moov range, no holes)
     if ext in (".mp4", ".m4v", ".mov"):
-        moov_start, moov_end = _scan_mp4_moov(best)
+        moov_start, moov_end = _scan_mp4_moov(path)
         if moov_end == 0:
             # moov not in head, try find in tail (scan last 128MB)
             try:
-                tail_scan_size = min(128 * 1024 * 1024, best_logic)
-                tail_offset = max(0, best_logic - tail_scan_size)
-                with open(best, "rb") as f:
+                tail_scan_size = min(128 * 1024 * 1024, logic_size)
+                tail_offset = max(0, logic_size - tail_scan_size)
+                with open(path, "rb") as f:
                     f.seek(tail_offset)
                     tail = f.read(tail_scan_size)
                     moov_idx = tail.find(b"moov")
@@ -197,42 +183,68 @@ def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
                             moov_start = tail_offset + moov_idx - 4
                             moov_end = moov_start + box_size
                         else:
-                            return best, best_size, False, mime
+                            return real_size, False, mime
                     else:
-                        return best, best_size, False, mime
+                        return real_size, False, mime
             except Exception:
-                return best, best_size, False, mime
+                return real_size, False, mime
 
-        # Strict check: moov range [moov_start, moov_end) must have no holes.
-        # For head-moov: moov_start=0, checks [0, moov_end).
-        # For tail-moov: moov_start>0, checks only moov region (not whole file).
         head_ready = False
         try:
-            # Check [moov_start, moov_end-1] — the actual moov byte range.
-            # SEEK_HOLE returns the first hole offset; if it's >= moov_end,
-            # the entire moov range has data.
-            if _range_has_data(best, moov_start, moov_end - 1):
+            if _range_has_data(path, moov_start, moov_end - 1):
                 head_ready = True
             else:
-                log.debug(
-                    "find_video_state: moov has hole",
-                    extra={
-                        "hash": hash_str[:12],
-                        "moov_start": moov_start,
-                        "moov_end": moov_end,
-                        "tail_moov": moov_start > 0,
-                    },
-                )
+                if hash_str:
+                    log.debug(
+                        "find_video_state: moov has hole",
+                        extra={
+                            "hash": hash_str[:12],
+                            "moov_start": moov_start,
+                            "moov_end": moov_end,
+                            "tail_moov": moov_start > 0,
+                        },
+                    )
         except Exception:
             pass
-        return best, best_size, head_ready, mime
+        return real_size, head_ready, mime
 
     # MKV/WEBM: need first 5MB downloaded for header parsing
     if ext in (".mkv", ".webm"):
-        return best, best_size, best_size >= 5 * 1024 * 1024, mime
+        return real_size, real_size >= 5 * 1024 * 1024, mime
 
     # Other formats: need first 10MB
-    return best, best_size, best_size >= 10 * 1024 * 1024, mime
+    return real_size, real_size >= 10 * 1024 * 1024, mime
+
+
+def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
+    """查找视频文件并检查是否已下载足够的头部数据以供播放。
+
+    返回: (文件路径, 实际磁盘大小, 头部是否就绪, MIME 类型)
+    """
+    dir_path = os.path.join(CACHE_DIR, hash_str)
+    if not os.path.exists(dir_path):
+        return None, 0, False, "video/mp4"
+    best = None
+    best_size = 0
+    for root, dirs, files in os.walk(dir_path):
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in VIDEO_EXTS:
+                continue
+            fp = os.path.join(root, f)
+            try:
+                st = os.stat(fp)
+                real_size = st.st_blocks * 512
+                if real_size > best_size:
+                    best_size = real_size
+                    best = fp
+            except OSError:
+                pass
+    if not best or best_size < 1024 * 1024:
+        return best, best_size, False, _mime_type(best or "")
+
+    real_size, head_ready, mime = _check_video_ready(best, hash_str)
+    return best, real_size, head_ready, mime
 
 
 def format_size(b: int) -> str:
@@ -716,7 +728,15 @@ class TorrentEngine:
 
         h = info["handle"]
         s = h.status()
-        local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
+
+        # Fast path: if video_path is known, skip the directory scan in
+        # find_video_state. The frontend polls this once per second; avoiding
+        # os.walk saves syscalls under concurrent load.
+        local_path = info.get("video_path")
+        if local_path and os.path.exists(local_path):
+            local_size, head_ready_fs, mime = _check_video_ready(local_path, hash_str)
+        else:
+            local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
 
         # Use tracker head_ready if available (O(pieces) instead of filesystem scan)
         tracker = info.get("tracker")
