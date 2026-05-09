@@ -145,17 +145,32 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
     def setUpClass(cls) -> None:
         import requests
         try:
-            r = requests.get(f"{cls.BASE}/api/check/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1")
-            cls.backend_ok = r.status_code == 200
+            # Wait for backend to be ready and not checking_files
+            for _ in range(30):
+                r = requests.get(f"{cls.BASE}/api/check/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1")
+                if r.status_code == 200 and r.json().get("head_ready"):
+                    cls.backend_ok = True
+                    return
+                time.sleep(0.5)
+            cls.backend_ok = False
         except Exception:
             cls.backend_ok = False
 
+    def _get_with_retry(self, url: str, headers: dict | None = None, max_retries: int = 10) -> Any:
+        """Send GET with 503 retry (checking_files may cause temporary 503)."""
+        import requests
+        for i in range(max_retries):
+            r = requests.get(url, headers=headers or {}, timeout=30)
+            if r.status_code != 503:
+                return r
+            time.sleep(0.5)
+        return r
+
     def test_range_probe_2_bytes(self) -> None:
         """Browser first sends bytes=0-1 to probe format."""
-        import requests
         if not self.backend_ok:
             self.skipTest("backend not running")
-        r = requests.get(
+        r = self._get_with_retry(
             f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
             headers={"Range": "bytes=0-1"},
         )
@@ -166,7 +181,6 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
 
     def test_range_moov_region(self) -> None:
         """Request 8MB covering moov atom, verify ffprobe can parse."""
-        import requests
         if not self.backend_ok:
             self.skipTest("backend not running")
 
@@ -176,7 +190,7 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
             max_bytes = 8 * 1024 * 1024
             while offset < max_bytes:
                 end = offset + 1024 * 1024 - 1
-                r = requests.get(
+                r = self._get_with_retry(
                     f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
                     headers={"Range": f"bytes={offset}-{end}"},
                 )
@@ -203,10 +217,9 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
 
     def test_range_mid_file_not_all_zero(self) -> None:
         """Request 1KB at 1GB position — should not be all zeros."""
-        import requests
         if not self.backend_ok:
             self.skipTest("backend not running")
-        r = requests.get(
+        r = self._get_with_retry(
             f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
             headers={"Range": "bytes=1000000000-1000000999"},
         )
