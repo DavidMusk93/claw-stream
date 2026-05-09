@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi import APIRouter, Request, Depends, HTTPException
 from typing import Any
 
@@ -16,8 +17,8 @@ def get_engine(request: Request) -> Any:
 @router.get("")
 async def get_cache(engine: Any = Depends(get_engine)):
     """Get all cache items and total size."""
-    items = engine.get_all_status()
-    total_disk = engine._get_cache_size()
+    items = await asyncio.to_thread(engine.get_all_status)
+    total_disk = await asyncio.to_thread(engine._get_cache_size)
     return {
         "totalSize": total_disk,
         "maxSize": engine.max_size_bytes,
@@ -29,15 +30,15 @@ async def get_cache(engine: Any = Depends(get_engine)):
 @router.delete("/{hash_str}")
 async def delete_cache(hash_str: str, engine: Any = Depends(get_engine)):
     """Remove a torrent from cache."""
-    success = engine.remove_torrent(hash_str)
+    success = await asyncio.to_thread(engine.remove_torrent, hash_str)
     return {"deleted": success}
 
 
 @router.get("/metrics", response_model=CacheMetrics)
 async def get_metrics(engine: Any = Depends(get_engine)):
     """Get cache metrics summary."""
-    items = engine.get_all_status()
-    total_disk = engine._get_cache_size()
+    items = await asyncio.to_thread(engine.get_all_status)
+    total_disk = await asyncio.to_thread(engine._get_cache_size)
     completed = sum(1 for i in items if i.get("progress", 0) >= 99.9)
     return CacheMetrics(
         total=len(items),

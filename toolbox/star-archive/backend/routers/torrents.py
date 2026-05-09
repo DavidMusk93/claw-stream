@@ -56,7 +56,7 @@ def get_engine(request: Request) -> Any:
 @router.get("/status/{hash_str}", response_model=TorrentStatus)
 async def get_torrent_status(hash_str: str, engine: Any = Depends(get_engine)):
     """Get torrent download status."""
-    status = engine.get_status(hash_str)
+    status = await asyncio.to_thread(engine.get_status, hash_str)
     if not status:
         raise HTTPException(status_code=404, detail="Not found")
     return TorrentStatus(**status)
@@ -95,7 +95,7 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
 @router.post("/seek")
 async def seek_torrent(req: SeekRequest, engine: Any = Depends(get_engine)):
     """Report current playback position so engine can prioritize pieces ahead of playhead."""
-    ok = engine.apply_seek_priority(req.hash, req.time, req.duration)
+    ok = await asyncio.to_thread(engine.apply_seek_priority, req.hash, req.time, req.duration)
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found or not ready")
     return {"ok": True}
@@ -104,7 +104,7 @@ async def seek_torrent(req: SeekRequest, engine: Any = Depends(get_engine)):
 @router.post("/progress")
 async def progress_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
     """定期报告播放进度，引擎滑动下载窗口（±30 piece），其余停止下载。"""
-    ok = engine.update_play_progress(req.hash, req.time, req.duration)
+    ok = await asyncio.to_thread(engine.update_play_progress, req.hash, req.time, req.duration)
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found or not ready")
     return {"ok": True}
