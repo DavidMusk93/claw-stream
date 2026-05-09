@@ -178,6 +178,11 @@ const isPlaying = ref(false)
 const controlsHidden = ref(false)
 let controlsHideTimer: ReturnType<typeof setTimeout> | null = null
 
+// Seek state: track whether video was playing before seek started
+// so we can resume after seeked (instead of relying on isPlaying
+// which gets clobbered by the pause event).
+const wasPlayingBeforeSeek = ref(false)
+
 const progressPercent = computed(() => {
   if (!duration.value || duration.value === Infinity) return 0
   return (currentTime.value / duration.value) * 100
@@ -497,11 +502,15 @@ function onPlaying() {
 function onSeeking() {
   buffering.value = true
   const v = videoRef.value
+  // Snapshot play state BEFORE browser pauses internally.
+  // Do NOT call pause() manually — it fires a 'pause' event that
+  // clobbers isPlaying and breaks the seeked-auto-resume logic.
+  wasPlayingBeforeSeek.value = isPlaying.value
   logInfo('player', 'seeking', {
     currentTime: v?.currentTime ?? 0,
     duration: v?.duration ?? 0,
+    wasPlaying: wasPlayingBeforeSeek.value,
   })
-  videoRef.value?.pause()
 }
 function onSeeked() {
   buffering.value = false
@@ -513,13 +522,16 @@ function onSeeked() {
   logInfo('player', 'seeked', {
     currentTime: v?.currentTime ?? 0,
     duration: v?.duration ?? 0,
+    wasPlaying: wasPlayingBeforeSeek.value,
   })
   if (v && v.duration && isFinite(v.duration) && props.hash) {
     reportSeek(props.hash, v.currentTime, v.duration)
   }
-  // Only auto-resume if we were playing before the seek started.
-  if (isPlaying.value) {
-    v?.play().catch(() => {})
+  // Resume playback only if we were actually playing before the seek.
+  if (wasPlayingBeforeSeek.value) {
+    v?.play().then(() => {
+      isPlaying.value = true
+    }).catch(() => {})
   }
 }
 
