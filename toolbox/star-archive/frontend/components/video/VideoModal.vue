@@ -39,6 +39,8 @@
           x5-video-player-type="h5"
           x5-video-player-fullscreen="false"
           controlsList="nodownload noremoteplayback"
+          preload="auto"
+          muted
           class="w-full h-full"
           @canplay="onCanplay"
           @waiting="onWaiting"
@@ -422,7 +424,9 @@ function onCanplay() {
     currentTime: v?.currentTime ?? 0,
     bufferedRanges: v?.buffered?.length ?? 0,
   })
-  videoRef.value?.play().catch(() => {})
+  v?.play().catch((err: any) => {
+    logError('player', `canplay play() rejected: ${err?.name || err?.message || err}`)
+  })
 }
 
 function onTimeUpdate() {
@@ -560,9 +564,13 @@ function togglePlay() {
   const v = videoRef.value
   if (!v) return
   if (v.paused) {
-    v.play().catch(() => {})
-    isPlaying.value = true
-    logInfo('player', 'toggle play')
+    v.play().then(() => {
+      isPlaying.value = true
+      logInfo('player', 'toggle play success')
+    }).catch((err: any) => {
+      isPlaying.value = false
+      logError('player', `toggle play rejected: ${err?.name || err?.message || err}`)
+    })
   } else {
     v.pause()
     isPlaying.value = false
