@@ -516,12 +516,15 @@ class TorrentEngine:
         # Force a recheck to sync have_pieces with disk, otherwise head_ready
         # will stay false forever because libtorrent won't re-download pieces
         # it thinks are already complete.
-        status = handle.status()
-        if status.state == lt.torrent_status.finished:
-            handle.force_recheck()
-            log.info(
-                f"recheck triggered: {hash_str[:12]}... (finished state, stale have_pieces)"
-            )
+        # Only do this ONCE — _on_metadata may be called again by add_torrent
+        # when the torrent already exists, and repeated rechecks break playback.
+        if not info.get("tracker"):
+            status = handle.status()
+            if status.state == lt.torrent_status.finished:
+                handle.force_recheck()
+                log.info(
+                    f"recheck triggered: {hash_str[:12]}... (finished state, stale have_pieces)"
+                )
 
         info["ready"] = True
 

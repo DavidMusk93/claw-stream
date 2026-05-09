@@ -389,12 +389,12 @@ class TestHoleHandling(unittest.TestCase):
             self.assertLess(zero_pct, 50,
                             f"Range at {hole_offset} returned {zero_pct:.0f}% zeros")
 
-    def test_no_range_returns_200_with_1mb(self) -> None:
-        """Request without Range header returns 200 + first 1MB (Safari compat)."""
+    def test_no_range_returns_200_with_8mb(self) -> None:
+        """Request without Range header returns 200 + first 8MB (Safari compat)."""
         r = self.client.get(f"/stream/{SAMPLE_HASH}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.content), 1024 * 1024,
-                         "No-Range request must return exactly 1MB")
+        self.assertEqual(len(r.content), 8 * 1024 * 1024,
+                         "No-Range request must return exactly 8MB")
         self.assertEqual(r.headers.get("accept-ranges"), "bytes")
 
 
@@ -408,6 +408,126 @@ def _make_private_app(cache_dir: str) -> tuple[FastAPI, TorrentEngine]:
     app.include_router(stream_router)
     app.include_router(check_router)
     return app, engine
+
+
+class TestFullPlaybackFlow(unittest.TestCase):
+    """Simulate the complete Safari playback flow from check to stream to decode.
+
+    Covers: /api/check → /torrent/add → Range sequence → assemble → ffprobe → first frame.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.engine, cls.video_path, cls.client = _SharedEngine.get()
+        cls.total = os.path.getsize(cls.video_path)
+
+    def _request_range(self, start: int, end: int) -> tuple[bytes, int, dict, float]:
+        """Send Range request; return (data, status, headers, elapsed_ms)."""
+        import time
+        t0 = time.perf_counter()
+        r = self.client.get(
+            f"/stream/{SAMPLE_HASH}",
+            headers={"Range": f"bytes={start}-{end}"},
+        )
+        elapsed = (time.perf_counter() - t0) * 1000
+        return r.content, r.status_code, dict(r.headers), elapsed
+
+    def test_api_check_reports_ready(self) -> None:
+        """/api/check must report head_ready=true when moov is complete."""
+        r = self.client.get(f"/api/check/{SAMPLE_HASH}")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["head_ready"], "head_ready must be true")
+        self.assertTrue(r.json()["cached"], "cached must be true")
+
+    def test_safari_full_range_sequence(self) -> None:
+        """Simulate Safari's complete request sequence; verify each response matches file.
+
+        Observed Safari pattern (iOS 18):
+          1. bytes=0-1              (probe format)
+          2. bytes=0-total          (get initial chunk, backend truncates to 8MB)
+          3. bytes=3014656-total    (mid-moov)
+          4. bytes=7602176-total    (moov tail / mdat start)
+          5. bytes=16384-3014655    (fill moov gap)
+          6. bytes=7634732-7667711  (precise first frame region)
+        """
+        # Read ground truth from file (mmap to avoid loading 3.8GB into RAM)
+        import mmap
+        with open(self.video_path, "rb") as f:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as file_data:
+                ranges = [
+                    (0, 1),
+                    (0, self.total - 1),
+                    (3_014_656, self.total - 1),
+                    (7_602_176, self.total - 1),
+                    (16_384, 3_014_655),
+                    (7_634_732, 7_667_711),
+                ]
+
+                max_elapsed = 0.0
+                for start, end in ranges:
+                    data, status, headers, elapsed = self._request_range(start, end)
+                    self.assertIn(status, {200, 206}, f"Range {start}-{end} failed with {status}")
+                    self.assertLess(elapsed, 5000, f"Range {start}-{end} took {elapsed:.0f}ms (>5s)")
+                    max_elapsed = max(max_elapsed, elapsed)
+
+                    # Verify response data matches file at same offset
+                    expected = bytes(file_data[start:start + len(data)])
+                    self.assertEqual(
+                        data, expected,
+                        f"Range {start}-{end} returned data that does NOT match file at offset {start}",
+                    )
+
+                    cr = headers.get("content-range", "")
+                    self.assertIn("bytes", cr, f"Missing Content-Range for {start}-{end}")
+                    print(f"  Range {start}-{end}: OK ({len(data)} bytes, {elapsed:.0f}ms)")
+
+                print(f"  Max elapsed: {max_elapsed:.0f}ms")
+
+                # Verify moov region is complete by checking offsets [0, 8MB]
+                moov_region = bytes(file_data[0:8 * 1024 * 1024])
+                tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                try:
+                    tmp.write(moov_region)
+                    tmp.close()
+                    result = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries",
+                         "format=duration", "-show_entries",
+                         "stream=codec_name,width,height",
+                         "-of", "default=noprint_wrappers=1", tmp.name],
+                        capture_output=True, text=True,
+                    )
+                    print(f"  ffprobe (moov+mdat head): returncode={result.returncode}")
+                    if result.stderr.strip():
+                        print(f"  ffprobe stderr: {result.stderr.strip()[:300]}")
+                    self.assertEqual(result.returncode, 0,
+                                     f"ffprobe failed:\n{result.stderr.strip()[:500]}")
+                    self.assertIn("codec_name=h264", result.stdout, "Must contain H.264 stream")
+
+                    # Extract first frame from moov+mdat head
+                    result2 = subprocess.run(
+                        ["ffmpeg", "-v", "error", "-ss", "0", "-i", tmp.name,
+                         "-vframes", "1", "-f", "image2pipe", "-pix_fmt", "rgb24", "-"],
+                        capture_output=True,
+                    )
+                    self.assertEqual(result2.returncode, 0,
+                                     f"ffmpeg first-frame extract failed:\n{result2.stderr.decode()[:500]}")
+                    self.assertGreater(len(result2.stdout), 1000,
+                                       "First frame must be >1000 bytes")
+                    print(f"  First frame: {len(result2.stdout)} bytes")
+                finally:
+                    os.unlink(tmp.name)
+
+    def test_response_time_under_2s(self) -> None:
+        """All stream requests must complete within 2 seconds."""
+        ranges = [
+            (0, 1024 * 1024),
+            (7_627_032, 7_627_032 + 1024 * 1024),
+            (100 * 1024 * 1024, 100 * 1024 * 1024 + 1024 * 1024),
+        ]
+        for start, end in ranges:
+            _, status, _, elapsed = self._request_range(start, end)
+            self.assertEqual(status, 206)
+            self.assertLess(elapsed, 2000, f"Range {start}-{end} took {elapsed:.0f}ms")
 
 
 if __name__ == "__main__":

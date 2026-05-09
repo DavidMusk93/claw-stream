@@ -31,7 +31,7 @@
 
         <!-- Video player -->
         <video
-          v-show="!loading && !errorMsg"
+          v-if="!loading && !errorMsg"
           ref="videoRef"
           playsinline
           webkit-playsinline
@@ -152,6 +152,7 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick } from 'vue'
 import { logInfo, logError } from '~/composables/useLogger'
 
 const isOpen = defineModel<boolean>('open', { default: false })
@@ -374,10 +375,19 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
     return
   }
 
-  if (videoRef.value) {
-    videoRef.value.src = streamUrl.value
-    videoRef.value.load()
-  }
+  // iOS Safari: element must be fully mounted and visible before src is set.
+  // nextTick() alone is not enough; use setTimeout to defer past layout.
+  await nextTick()
+  setTimeout(() => {
+    const v = videoRef.value
+    if (v) {
+      v.src = streamUrl.value
+      v.load()
+      logInfo('player', `src set hash=${hash.slice(0, 12)} readyState=${v.readyState} networkState=${v.networkState}`)
+    } else {
+      logError('player', `videoRef missing after nextTick+setTimeout hash=${hash.slice(0, 12)}`)
+    }
+  }, 200)
 
   startPolling(hash)
 })

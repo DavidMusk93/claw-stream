@@ -60,19 +60,26 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     带 Range 头的请求返回 206 Partial Content；若请求范围全是 hole 则返回 416。
     若 torrent 处于 checking_files 状态返回 503，防止读取到不一致数据。
     """
+    import time as _time
+    t0 = _time.perf_counter()
     path, real_size, head_ready, mime = find_video_state(hash_str)
+    t1 = _time.perf_counter()
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
 
     # Protect against reading while libtorrent is checking files (may zero pieces)
+    t2 = _time.perf_counter()
     if _is_torrent_checking(engine, hash_str):
         log.debug("stream_video: torrent checking_files, returning 503", extra={"hash": hash_str[:12]})
         raise HTTPException(status_code=503, headers={"Retry-After": "10"}, detail="Torrent checking files")
+    t3 = _time.perf_counter()
 
     total_size = os.path.getsize(path)
     range_hdr = request.headers.get("Range")
 
-    start, end = 0, min(total_size - 1, 1024 * 1024 - 1)
+    # Default chunk for non-Range requests matches MAX_CHUNK in read_video_range
+    DEFAULT_CHUNK = 8 * 1024 * 1024
+    start, end = 0, min(total_size - 1, DEFAULT_CHUNK - 1)
     if range_hdr:
         try:
             start, end = _parse_range(range_hdr, total_size)
@@ -81,7 +88,9 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
 
     # 将同步文件 I/O 放到线程池，避免阻塞事件循环
+    t4 = _time.perf_counter()
     data = await asyncio.to_thread(read_video_range, hash_str, start, end, engine)
+    t5 = _time.perf_counter()
     actual_size = len(data)
 
     is_hole = actual_size > 0 and not any(data)
@@ -94,6 +103,12 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             "actual_size": actual_size,
             "hole": is_hole,
             "mime": mime,
+            "timing_ms": {
+                "find_state": round((t1-t0)*1000, 2),
+                "check_checking": round((t3-t2)*1000, 2),
+                "read_range": round((t5-t4)*1000, 2),
+                "total": round((_time.perf_counter()-t0)*1000, 2),
+            },
         },
     )
 

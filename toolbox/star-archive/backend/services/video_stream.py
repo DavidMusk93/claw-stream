@@ -169,8 +169,9 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
             log.debug("read_video_range: auto-add failed", extra={"hash": hash_str[:12], "error": str(e)})
 
     total_size = os.path.getsize(path)
-    # 限制单次最大读取 1MB，避免浏览器发送 bytes=0- 时读取整个文件到内存
-    MAX_CHUNK = 1024 * 1024
+    # 限制单次最大读取 8MB。Safari needs enough data to parse moov + first frames.
+    # 1MB truncates range responses too aggressively, causing Safari demuxer issues.
+    MAX_CHUNK = 8 * 1024 * 1024
     chunk_size = min((end - start) + 1, MAX_CHUNK)
 
     max_wait = 15.0
