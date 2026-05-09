@@ -41,8 +41,9 @@ def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
 async def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
     """Serve video stream with Range support.
 
-    大文件流式播放强制要求 Range 头，避免一次性加载整段视频到内存。
-    文件读取使用线程池执行，避免阻塞 FastAPI 事件循环。
+    大文件流式播放使用线程池执行文件 I/O，避免阻塞 FastAPI 事件循环。
+    不带 Range 头的请求返回前 1MB（200），避免 Safari 收到 416 后报 code=4。
+    带 Range 头的请求返回 206 Partial Content；若请求范围全是 hole 则返回 416。
     """
     path, real_size, head_ready, mime = find_video_state(hash_str)
     if not path:
@@ -51,20 +52,13 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     total_size = os.path.getsize(path)
     range_hdr = request.headers.get("Range")
 
-    if not range_hdr:
-        # 强制 Range 请求：返回 416，提示客户端使用分片请求
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Type": mime,
-            "Content-Length": str(total_size),
-        }
-        raise HTTPException(status_code=416, headers=headers, detail="Range header required")
-
-    try:
-        start, end = _parse_range(range_hdr, total_size)
-    except ValueError:
-        headers = {"Accept-Ranges": "bytes", "Content-Type": mime}
-        raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
+    start, end = 0, min(total_size - 1, 1024 * 1024 - 1)
+    if range_hdr:
+        try:
+            start, end = _parse_range(range_hdr, total_size)
+        except ValueError:
+            headers = {"Accept-Ranges": "bytes", "Content-Type": mime}
+            raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
 
     # 将同步文件 I/O 放到线程池，避免阻塞事件循环
     data = await asyncio.to_thread(read_video_range, hash_str, start, end, engine)
@@ -83,13 +77,30 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         },
     )
 
-    headers = {
-        "Content-Range": f"bytes {start}-{start + actual_size - 1}/{total_size}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(actual_size),
-        "Content-Type": mime,
-    }
-    return Response(content=data, status_code=206, headers=headers)
+    if range_hdr:
+        if actual_size == 0:
+            # 请求范围全是 hole，返回 416 + 空范围 Content-Range
+            headers = {
+                "Content-Range": f"bytes */{total_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Type": mime,
+            }
+            return Response(content=b"", status_code=416, headers=headers)
+        headers = {
+            "Content-Range": f"bytes {start}-{start + actual_size - 1}/{total_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(actual_size),
+            "Content-Type": mime,
+        }
+        return Response(content=data, status_code=206, headers=headers)
+    else:
+        # Safari 等浏览器首次请求可能不带 Range；返回 200 + 前 1MB 避免 416 触发 code=4
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(actual_size),
+            "Content-Type": mime,
+        }
+        return Response(content=data, status_code=200, headers=headers)
 
 
 @check_router.get("/{hash_str}", response_model=StreamCheckResponse)

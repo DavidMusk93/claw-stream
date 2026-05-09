@@ -156,6 +156,18 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     # Trigger urgent download for this range
     seek_priority(hash_str, start, end, engine)
 
+    # If torrent not in engine, try to re-add from local cache so that
+    # seek_priority can set piece priorities for future requests.
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if not info:
+        magnet = f"magnet:?xt=urn:btih:{hash_str}"
+        try:
+            engine.add_torrent(magnet, prefetch=False)
+            log.debug("read_video_range: auto-added torrent", extra={"hash": hash_str[:12]})
+        except Exception as e:
+            log.debug("read_video_range: auto-add failed", extra={"hash": hash_str[:12], "error": str(e)})
+
     total_size = os.path.getsize(path)
     # 限制单次最大读取 1MB，避免浏览器发送 bytes=0- 时读取整个文件到内存
     MAX_CHUNK = 1024 * 1024
@@ -240,7 +252,8 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
                     "real_size": real_size,
                 },
             )
-            break
+            # Return empty bytes so caller can send 416 instead of all-zero data
+            return b""
         time.sleep(wait_step)
         elapsed += wait_step
         seek_priority(hash_str, start, end, engine)

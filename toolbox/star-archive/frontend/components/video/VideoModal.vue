@@ -516,7 +516,22 @@ function onError() {
     hash: props.hash?.slice(0, 12),
   })
 
-  // code=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) is not recoverable by reload.
+  // code=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) — give it one retry before giving up.
+  // Safari may temporarily report code=4 during initial load; a reload often fixes it.
+  if (code === 4 && retryCount.value < MAX_RETRIES) {
+    retryCount.value++
+    logInfo('player', `code=4 retry ${retryCount.value}/${MAX_RETRIES}`)
+    errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
+    const src = streamUrl.value
+    setTimeout(() => {
+      if (videoRef.value) {
+        videoRef.value.src = src
+        videoRef.value.load()
+      }
+    }, 1000)
+    return
+  }
+
   if (code === 4) {
     errorMsg.value = '播放失败，文件格式不支持或数据损坏'
     stopPolling()
