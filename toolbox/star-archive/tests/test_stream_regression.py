@@ -157,51 +157,51 @@ class TestSafariRangeSequence(unittest.TestCase):
         return INCONSISTENT data, which confuses Safari's demuxer and causes
         MEDIA_ERR_SRC_NOT_SUPPORTED (code=4).
         """
-        # Read ground truth from file
+        # Read ground truth via mmap (avoid loading 3.8GB into RAM)
+        import mmap
         with open(self.video_path, "rb") as f:
-            file_data = f.read()
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as file_data:
+                # Safari request pattern (observed from access logs)
+                ranges = [
+                    (0, 1),               # probe
+                    (0, self.total - 1),  # full file (backend truncates to 8MB)
+                    (3_014_656, 3_014_656 + 1_048_575),   # ~3MB offset
+                    (7_602_176, 7_602_176 + 1_048_575),   # ~7.6MB offset
+                    (16_384, 16_384 + 1_048_575),         # ~16KB offset
+                ]
 
-        # Safari request pattern (observed from access logs)
-        ranges = [
-            (0, 1),               # probe
-            (0, self.total - 1),  # full file (backend truncates to 1MB)
-            (3_014_656, 3_014_656 + 1_048_575),   # ~3MB offset
-            (7_602_176, 7_602_176 + 1_048_575),   # ~7.6MB offset
-            (16_384, 16_384 + 1_048_575),         # ~16KB offset
-        ]
+                for start, end in ranges:
+                    data, status, headers = self._request_range(start, end)
+                    self.assertIn(status, {200, 206}, f"Range {start}-{end} should succeed, got {status}")
+                    if status == 206:
+                        cr = headers.get("content-range", "")
+                        self.assertIn("bytes", cr, f"Missing Content-Range for {start}-{end}")
 
-        for start, end in ranges:
-            data, status, headers = self._request_range(start, end)
-            self.assertIn(status, {200, 206}, f"Range {start}-{end} should succeed, got {status}")
-            if status == 206:
-                cr = headers.get("content-range", "")
-                self.assertIn("bytes", cr, f"Missing Content-Range for {start}-{end}")
+                    # Verify response data matches file at same offset
+                    expected = bytes(file_data[start:start + len(data)])
+                    self.assertEqual(
+                        data, expected,
+                        f"Range {start}-{end} returned data that does NOT match file at offset {start}",
+                    )
+                    print(f"  Range {start}-{end}: OK ({len(data)} bytes match file)")
 
-            # Verify response data matches file at same offset
-            expected = file_data[start:start + len(data)]
-            self.assertEqual(
-                data, expected,
-                f"Range {start}-{end} returned data that does NOT match file at offset {start}",
-            )
-            print(f"  Range {start}-{end}: OK ({len(data)} bytes match file)")
-
-        # Critical: overlapping ranges must agree
-        # Request A: 0-65535, Request B: 32768-98303
-        r_a = self.client.get(
-            f"/stream/{SAMPLE_HASH}",
-            headers={"Range": "bytes=0-65535"},
-        )
-        r_b = self.client.get(
-            f"/stream/{SAMPLE_HASH}",
-            headers={"Range": "bytes=32768-98303"},
-        )
-        overlap_a = r_a.content[32768:]
-        overlap_b = r_b.content[:65536 - 32768]
-        self.assertEqual(
-            overlap_a, overlap_b,
-            "Overlapping Safari ranges returned inconsistent data — this causes code=4",
-        )
-        print(f"  Overlap consistency: OK")
+                # Critical: overlapping ranges must agree
+                # Request A: 0-65535, Request B: 32768-98303
+                r_a = self.client.get(
+                    f"/stream/{SAMPLE_HASH}",
+                    headers={"Range": "bytes=0-65535"},
+                )
+                r_b = self.client.get(
+                    f"/stream/{SAMPLE_HASH}",
+                    headers={"Range": "bytes=32768-98303"},
+                )
+                overlap_a = r_a.content[32768:]
+                overlap_b = r_b.content[:65536 - 32768]
+                self.assertEqual(
+                    overlap_a, overlap_b,
+                    "Overlapping Safari ranges returned inconsistent data — this causes code=4",
+                )
+                print(f"  Overlap consistency: OK")
 
     def test_safari_0_1_probe(self) -> None:
         """First request bytes=0-1 must return 206 + 2 bytes (not hole-marked)."""

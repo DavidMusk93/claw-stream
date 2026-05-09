@@ -62,14 +62,15 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     """
     import time as _time
     t0 = _time.perf_counter()
-    path, real_size, head_ready, mime = find_video_state(hash_str)
+    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str)
     t1 = _time.perf_counter()
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
 
     # Protect against reading while libtorrent is checking files (may zero pieces)
     t2 = _time.perf_counter()
-    if _is_torrent_checking(engine, hash_str):
+    is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
+    if is_checking:
         log.debug("stream_video: torrent checking_files, returning 503", extra={"hash": hash_str[:12]})
         raise HTTPException(status_code=503, headers={"Retry-After": "10"}, detail="Torrent checking files")
     t3 = _time.perf_counter()
@@ -141,11 +142,12 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
 @check_router.get("/{hash_str}", response_model=StreamCheckResponse)
 async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     """Check if video head is ready for playback."""
-    local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
+    local_path, local_size, head_ready_fs, mime = await asyncio.to_thread(find_video_state, hash_str)
 
     # If torrent is checking_files, report not ready even if filesystem has data.
     # libtorrent may zero pieces during checking, causing MP4 parse errors.
-    head_ready = head_ready_fs and not _is_torrent_checking(engine, hash_str)
+    is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
+    head_ready = head_ready_fs and not is_checking
 
     return StreamCheckResponse(
         hash=hash_str,

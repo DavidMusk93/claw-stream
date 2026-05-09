@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -68,22 +69,24 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
         raise HTTPException(status_code=400, detail="Missing magnet")
 
     magnet = _resolve_magnet(req.magnet)
-    info = engine.add_torrent(magnet, prefetch=req.prefetch)
+    # add_torrent does synchronous I/O (save metadata, scan filesystem).
+    # Run in thread pool so the event loop stays responsive.
+    info = await asyncio.to_thread(engine.add_torrent, magnet, prefetch=req.prefetch)
     if not info:
         raise HTTPException(status_code=400, detail="Invalid magnet")
 
     hash_str = info["hash"]
 
     if not req.prefetch:
-        engine.set_full_priority(hash_str)
+        await asyncio.to_thread(engine.set_full_priority, hash_str)
 
     h = info["handle"]
     for _ in range(20):
         if h.status().has_metadata:
             break
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
-    status = engine.get_status(hash_str)
+    status = await asyncio.to_thread(engine.get_status, hash_str)
     return TorrentAddResponse(
         hash=hash_str,
         status="added",

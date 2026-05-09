@@ -31,6 +31,12 @@ SPAM_PATTERNS = [re.compile(p, re.I) for p in [
 # 常见番号格式匹配器
 _WORK_CODE_RE = re.compile(r"[A-Z]{2,6}-\d{3,5}", re.I)
 
+# Cache MP4 moov scan results: path -> (moov_start, moov_end).
+# Moov position never changes for a given file, so caching is safe.
+# We only cache successful scans (moov_end > 0) to avoid caching
+# tail-moov files that aren't fully downloaded yet.
+_MOOV_CACHE: dict[str, tuple[int, int]] = {}
+
 
 def _extract_work_code(name: str) -> str | None:
     """从文件名或 torrent 名中提取作品番号（如 ABC-123）。"""
@@ -48,6 +54,10 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
     返回 (moov_start, moov_end)。moov_start=0 且 moov_end>0 表示 head-moov。
     moov_start>0 表示 tail-moov。返回 (0, 0) 表示未找到。
     """
+    cached = _MOOV_CACHE.get(path)
+    if cached is not None:
+        return cached
+
     try:
         file_size = os.path.getsize(path)
         with open(path, "rb") as f:
@@ -72,7 +82,9 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
                 elif size < 8 or size > 100 * 1024 * 1024:
                     break
                 if box_type == b"moov":
-                    return 0, offset + size
+                    result = (0, offset + size)
+                    _MOOV_CACHE[path] = result
+                    return result
                 offset += size
 
             # tail-moov: moov is after mdat
@@ -88,7 +100,9 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
                         box_size = box_size_raw
                     if 0 < box_size < 100 * 1024 * 1024:
                         moov_start = (mdat_end - 1024 if mdat_end >= 1024 else 0) + moov_idx - 4
-                        return moov_start, moov_start + box_size
+                        result = (moov_start, moov_start + box_size)
+                        _MOOV_CACHE[path] = result
+                        return result
     except Exception:
         pass
     return 0, 0
@@ -462,13 +476,15 @@ class TorrentEngine:
         if code_from_file:
             info["work_code"] = code_from_file
 
-        # Create PieceStateTracker — piece-level state replaces filesystem scans
-        info["tracker"] = PieceStateTracker(
-            handle=handle,
-            video_idx=idx,
-            video_size=size,
-            path=info["video_path"],
-        )
+        # Create PieceStateTracker once — repeated calls from add_torrent polling
+        # must NOT recreate it, or all verified-piece state is lost.
+        if not info.get("tracker"):
+            info["tracker"] = PieceStateTracker(
+                handle=handle,
+                video_idx=idx,
+                video_size=size,
+                path=info["video_path"],
+            )
 
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4

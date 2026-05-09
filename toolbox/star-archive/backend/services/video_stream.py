@@ -174,8 +174,10 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     MAX_CHUNK = 8 * 1024 * 1024
     chunk_size = min((end - start) + 1, MAX_CHUNK)
 
-    max_wait = 15.0
-    wait_step = 0.5
+    # Short timeout: thread-pool workers are scarce. If data isn't here yet,
+    # return empty and let the client retry (Safari auto-retries 206/416).
+    max_wait = 2.0
+    wait_step = 0.1
     elapsed = 0.0
     attempt = 0
 
