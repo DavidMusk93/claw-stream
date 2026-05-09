@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -66,6 +68,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifecycle."""
     # Startup
     log.info("Backend starting up...")
+
+    # Scale the default thread pool — most of our work is blocking file I/O
+    # (read_video_range, find_video_state, DuckDB queries, libtorrent calls).
+    # Default min(32, cpu+4) = 7 on a 3-core box is far too small under load.
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="star-io"))
+    log.info("Thread pool scaled to 32 workers")
+
     engine = _get_engine()
     app.state.engine = engine
     log.info(f"TorrentEngine initialized, cache dir: {CACHE_DIR}")
