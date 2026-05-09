@@ -183,16 +183,26 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
 
     while True:
         attempt += 1
+        # Use mmap instead of repeated 16KB read() syscalls.
+        # For an 8MB chunk this cuts syscalls from 512 to 1,
+        # and accesses already-cached pages in userspace.
+        import mmap
         data = bytearray()
-        with open(path, "rb") as f:
-            f.seek(start)
-            remaining = chunk_size
-            while remaining > 0:
-                buf = f.read(min(16384, remaining))
-                if not buf:
-                    break
-                data.extend(buf)
-                remaining -= len(buf)
+        try:
+            with open(path, "rb") as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    data = bytearray(mm[start:start + chunk_size])
+        except (OSError, ValueError):
+            # mmap can fail on exotic filesystems; fallback to plain read
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining > 0:
+                    buf = f.read(min(16384, remaining))
+                    if not buf:
+                        break
+                    data.extend(buf)
+                    remaining -= len(buf)
 
         # Hole detection: all-zero data may be legitimate (e.g. MP4 ftyp size field)
         # Use SEEK_DATA (filesystem-level) as primary check — works regardless of

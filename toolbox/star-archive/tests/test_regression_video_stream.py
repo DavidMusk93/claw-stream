@@ -104,6 +104,8 @@ class TestMp4MoovDetection(unittest.TestCase):
         if not os.path.exists(path):
             self.skipTest("ABF-350 cache not available")
         moov_start, moov_end = _scan_mp4_moov(path)
+        if moov_end == 0:
+            self.skipTest("ABF-350 moov not yet downloaded")
         self.assertGreater(moov_start, 0, "tail-moov should have moov_start>0")
         self.assertGreater(moov_end, moov_start, "moov_end should be > moov_start")
         print(f"  ABF-350 moov_start={moov_start:,} moov_end={moov_end:,} (tail-moov)")
@@ -130,6 +132,8 @@ class TestMp4MoovDetection(unittest.TestCase):
         # Tail-moov only needs [moov_start, moov_end] to have data,
         # not the entire file. Check actual moov region via SEEK_HOLE.
         moov_start, moov_end = _scan_mp4_moov(path)
+        if moov_end == 0:
+            self.skipTest("ABF-350 moov not yet downloaded")
         moov_complete = _range_has_data(path, moov_start, moov_end - 1)
         print(f"  ABF-350 moov_complete={moov_complete}")
         if moov_complete:

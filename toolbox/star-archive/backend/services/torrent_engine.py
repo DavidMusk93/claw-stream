@@ -57,6 +57,9 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
     cached = _MOOV_CACHE.get(path)
     if cached is not None:
         return cached
+    # Note: we intentionally do NOT cache (0, 0) "not found" results.
+    # A file may be partially downloaded when first scanned; once more data
+    # arrives the moov atom becomes visible and must be re-scanned.
 
     try:
         file_size = os.path.getsize(path)
