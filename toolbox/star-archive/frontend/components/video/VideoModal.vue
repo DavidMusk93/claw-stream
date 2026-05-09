@@ -444,9 +444,9 @@ function onCanplay() {
     currentTime: v?.currentTime ?? 0,
     bufferedRanges: v?.buffered?.length ?? 0,
   })
-  // Auto-play only if the user has not explicitly paused.
-  // This prevents play() AbortError when togglePlay races with canplay.
-  if (!v?.paused && !isPlaying.value) {
+  // Auto-play on first canplay, but do not race with a pending togglePlay().
+  // If the user already clicked play (isPlaying true or play pending), skip.
+  if (!isPlaying.value && v?.paused) {
     v?.play().then(() => {
       isPlaying.value = true
     }).catch((err: any) => {
@@ -545,6 +545,7 @@ function onAbort() {
 }
 
 function onError() {
+  isPlaying.value = false
   const v = videoRef.value
   const code = v?.error?.code ?? 0
   const message = v?.error?.message ?? 'unknown'
