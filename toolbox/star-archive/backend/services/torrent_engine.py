@@ -570,10 +570,13 @@ class TorrentEngine:
         # it thinks are already complete.
         # Only do this ONCE — _on_metadata may be called again by add_torrent
         # when the torrent already exists, and repeated rechecks break playback.
-        if not info.get("tracker"):
+        # NOTE: use a separate flag from "tracker"; tracker is created above
+        # and would make this condition always false.
+        if not info.get("_recheck_done"):
             status = handle.status()
             if status.state == lt.torrent_status.finished:
                 handle.force_recheck()
+                info["_recheck_done"] = True
                 log.info(
                     f"recheck triggered: {hash_str[:12]}... (finished state, stale have_pieces)"
                 )
