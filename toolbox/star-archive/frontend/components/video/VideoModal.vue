@@ -41,6 +41,7 @@
           controlsList="nodownload noremoteplayback"
           preload="auto"
           muted
+          crossorigin="anonymous"
           class="w-full h-full"
           @canplay="onCanplay"
           @waiting="onWaiting"
@@ -53,6 +54,7 @@
           @timeupdate="onTimeUpdate"
           @ended="onEnded"
           @loadedmetadata="onLoadedMetadata"
+          @pause="onPause"
         />
 
         <!-- Custom controls overlay -->
@@ -217,7 +219,11 @@ function onProgressClick(e: MouseEvent) {
   if (!v || !v.duration || !bar) return
   const rect = bar.getBoundingClientRect()
   const ratio = (e.clientX - rect.left) / rect.width
-  v.currentTime = v.duration * Math.max(0, Math.min(1, ratio))
+  const newTime = v.duration * Math.max(0, Math.min(1, ratio))
+  v.currentTime = newTime
+  currentTime.value = newTime
+  // Force controls visible briefly so user sees the seek feedback
+  showControls()
 }
 
 // Progress persistence
@@ -421,6 +427,10 @@ function close() {
 }
 
 function onLoadedMetadata() {
+  const v = videoRef.value
+  if (v) {
+    duration.value = v.duration || 0
+  }
   cleanupOldProgress()
   restoreProgress()
 }
@@ -434,9 +444,15 @@ function onCanplay() {
     currentTime: v?.currentTime ?? 0,
     bufferedRanges: v?.buffered?.length ?? 0,
   })
-  v?.play().catch((err: any) => {
-    logError('player', `canplay play() rejected: ${err?.name || err?.message || err}`)
-  })
+  // Auto-play only if the user has not explicitly paused.
+  // This prevents play() AbortError when togglePlay races with canplay.
+  if (!v?.paused && !isPlaying.value) {
+    v?.play().then(() => {
+      isPlaying.value = true
+    }).catch((err: any) => {
+      logError('player', `canplay play() rejected: ${err?.name || err?.message || err}`)
+    })
+  }
 }
 
 function onTimeUpdate() {
@@ -459,12 +475,14 @@ function onTimeUpdate() {
 }
 
 function onEnded() {
+  isPlaying.value = false
   logInfo('player', 'ended')
   clearProgress()
 }
 
 function onWaiting() {
   buffering.value = true
+  isPlaying.value = false
   const v = videoRef.value
   logInfo('player', 'waiting', {
     currentTime: v?.currentTime ?? 0,
@@ -473,6 +491,7 @@ function onWaiting() {
 }
 function onPlaying() {
   buffering.value = false
+  isPlaying.value = true
   logInfo('player', 'playing')
 }
 function onSeeking() {
@@ -487,6 +506,10 @@ function onSeeking() {
 function onSeeked() {
   buffering.value = false
   const v = videoRef.value
+  if (v) {
+    currentTime.value = v.currentTime
+    duration.value = v.duration || 0
+  }
   logInfo('player', 'seeked', {
     currentTime: v?.currentTime ?? 0,
     duration: v?.duration ?? 0,
@@ -494,11 +517,20 @@ function onSeeked() {
   if (v && v.duration && isFinite(v.duration) && props.hash) {
     reportSeek(props.hash, v.currentTime, v.duration)
   }
-  v?.play().catch(() => {})
+  // Only auto-resume if we were playing before the seek started.
+  if (isPlaying.value) {
+    v?.play().catch(() => {})
+  }
+}
+
+function onPause() {
+  isPlaying.value = false
+  logInfo('player', 'pause')
 }
 
 function onStalled() {
   buffering.value = true
+  isPlaying.value = false
   const v = videoRef.value
   logInfo('player', 'stalled', {
     currentTime: v?.currentTime ?? 0,
