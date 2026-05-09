@@ -82,7 +82,10 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
                     if box_type == b"mdat":
                         mdat_end = offset + size
                         break
-                elif size < 8 or size > 100 * 1024 * 1024:
+                elif size < 8 or size > 100 * 1024 * 1024 * 1024:
+                    break
+                elif box_type == b"mdat":
+                    mdat_end = offset + size
                     break
                 if box_type == b"moov":
                     result = (0, offset + size)
