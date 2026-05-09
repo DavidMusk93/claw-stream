@@ -271,6 +271,39 @@ class TorrentEngine:
         self._cleanup_orphaned()
         self._enforce_cache_limit()
 
+        # Startup: preload all cached .torrent files so playback starts instantly.
+        # Without this, every click-play has to re-add the torrent and wait for
+        # libtorrent to initialize / check files.
+        self._preload_thread = threading.Thread(target=self._preload_cached_torrents, daemon=True)
+        self._preload_thread.start()
+
+    def _preload_cached_torrents(self) -> None:
+        """扫描 cache 目录，自动加载所有已缓存的 .torrent 文件。"""
+        if not os.path.isdir(self.cache_dir):
+            return
+        loaded = 0
+        for entry in os.scandir(self.cache_dir):
+            if not entry.is_dir():
+                continue
+            hash_str = entry.name
+            if len(hash_str) != 40:
+                continue
+            torrent_path = os.path.join(entry.path, f"{hash_str}.torrent")
+            if not os.path.exists(torrent_path):
+                continue
+            # Skip if already loaded (shouldn't happen at startup, but be safe)
+            with self.lock:
+                if hash_str in self.torrents:
+                    continue
+            try:
+                magnet = f"magnet:?xt=urn:btih:{hash_str}"
+                self.add_torrent(magnet, prefetch=False)
+                loaded += 1
+            except Exception as e:
+                log.warning(f"preload failed: {hash_str[:12]}... {e}")
+        if loaded:
+            log.info(f"preloaded {loaded} cached torrents from {self.cache_dir}")
+
     def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str]:
         """从 torrent 文件中挑选 hhd800.com 主视频文件。"""
         fs = ti.files()
