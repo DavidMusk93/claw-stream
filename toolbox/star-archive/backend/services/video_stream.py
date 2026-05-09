@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import errno
 import os
 import time
 from typing import Any
@@ -108,7 +110,7 @@ def _is_data_at_offset(path: str, offset: int) -> bool:
         return data_offset == offset
     except OSError as e:
         # ENXIO = 没有更多数据；EINVAL = 不支持 SEEK_DATA
-        if e.errno in (6, 22):  # ENXIO=6, EINVAL=22
+        if e.errno in (errno.ENXIO, errno.EINVAL):
             return False
         raise
     finally:
@@ -134,11 +136,52 @@ def _check_pieces_have(h: Any, ti: Any, fs: Any, idx: int, start_byte: int, data
     return True
 
 
-def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
+def _read_once(path: str, start: int, chunk_size: int) -> bytearray:
+    """Read [start, start+chunk_size) via mmap. Returns bytearray."""
+    import mmap
+    try:
+        with open(path, "rb") as f:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                return bytearray(mm[start:start + chunk_size])
+    except (OSError, ValueError):
+        data = bytearray()
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = chunk_size
+            while remaining > 0:
+                buf = f.read(min(16384, remaining))
+                if not buf:
+                    break
+                data.extend(buf)
+                remaining -= len(buf)
+        return data
+
+
+def _detect_hole(path: str, start: int, data: bytearray, engine: Any, hash_str: str) -> bool:
+    """Check if data is actually a hole. Returns True if hole detected."""
+    if len(data) == 0:
+        return True
+    if not any(data):
+        try:
+            return not _is_data_at_offset(path, start)
+        except OSError:
+            with engine.lock:
+                info = engine.torrents.get(hash_str)
+            if info:
+                h = info["handle"]
+                if h.status().has_metadata and info["video_idx"] is not None:
+                    ti = h.torrent_file()
+                    fs = ti.files()
+                    return not _check_pieces_have(h, ti, fs, info["video_idx"], start, len(data))
+            return True
+    return False
+
+
+async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     """Read video data for a given byte range, stopping at holes.
     Returns the actual data read (may be less than requested if hole encountered).
     """
-    path, real_size, head_ready, mime = find_video_state(hash_str)
+    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str)
     if not path:
         log.debug("read_video_range: video not found", extra={"hash": hash_str[:12], "start": start, "end": end})
         return b""
@@ -150,11 +193,11 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
         h = info["handle"]
         if h.status().has_metadata and info.get("prefetch"):
             info["prefetch"] = False
-            engine._apply_play_priority(h, info)
+            await asyncio.to_thread(engine._apply_play_priority, h, info)
             log.debug("read_video_range: switched prefetch→play", extra={"hash": hash_str[:12]})
 
     # Trigger urgent download for this range
-    seek_priority(hash_str, start, end, engine)
+    await asyncio.to_thread(seek_priority, hash_str, start, end, engine)
 
     # If torrent not in engine, try to re-add from local cache so that
     # seek_priority can set piece priorities for future requests.
@@ -163,19 +206,20 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
     if not info:
         magnet = f"magnet:?xt=urn:btih:{hash_str}"
         try:
-            engine.add_torrent(magnet, prefetch=False)
+            await asyncio.to_thread(engine.add_torrent, magnet, prefetch=False)
             log.debug("read_video_range: auto-added torrent", extra={"hash": hash_str[:12]})
         except Exception as e:
             log.debug("read_video_range: auto-add failed", extra={"hash": hash_str[:12], "error": str(e)})
 
-    total_size = os.path.getsize(path)
+    total_size = await asyncio.to_thread(os.path.getsize, path)
     # 限制单次最大读取 8MB。Safari needs enough data to parse moov + first frames.
     # 1MB truncates range responses too aggressively, causing Safari demuxer issues.
     MAX_CHUNK = 8 * 1024 * 1024
     chunk_size = min((end - start) + 1, MAX_CHUNK)
 
-    # Short timeout: thread-pool workers are scarce. If data isn't here yet,
-    # return empty and let the client retry (Safari auto-retries 206/416).
+    # Short timeout: if data isn't here yet, return empty and let the client retry
+    # (Safari auto-retries 206/416). We use asyncio.sleep so we don't block
+    # thread-pool workers.
     max_wait = 2.0
     wait_step = 0.1
     elapsed = 0.0
@@ -183,51 +227,8 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
 
     while True:
         attempt += 1
-        # Use mmap instead of repeated 16KB read() syscalls.
-        # For an 8MB chunk this cuts syscalls from 512 to 1,
-        # and accesses already-cached pages in userspace.
-        import mmap
-        data = bytearray()
-        try:
-            with open(path, "rb") as f:
-                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                    data = bytearray(mm[start:start + chunk_size])
-        except (OSError, ValueError):
-            # mmap can fail on exotic filesystems; fallback to plain read
-            with open(path, "rb") as f:
-                f.seek(start)
-                remaining = chunk_size
-                while remaining > 0:
-                    buf = f.read(min(16384, remaining))
-                    if not buf:
-                        break
-                    data.extend(buf)
-                    remaining -= len(buf)
-
-        # Hole detection: all-zero data may be legitimate (e.g. MP4 ftyp size field)
-        # Use SEEK_DATA (filesystem-level) as primary check — works regardless of
-        # libtorrent state (checking_files, finished, downloading).
-        # Falls back to have_piece() only when SEEK_DATA is unavailable.
-        hole = False
-        if len(data) > 0 and not any(data):
-            try:
-                has_data = _is_data_at_offset(path, start)
-                hole = not has_data
-            except OSError:
-                # SEEK_DATA not supported, fall back to libtorrent have_piece()
-                with engine.lock:
-                    info = engine.torrents.get(hash_str)
-                if info:
-                    h = info["handle"]
-                    if h.status().has_metadata and info["video_idx"] is not None:
-                        ti = h.torrent_file()
-                        fs = ti.files()
-                        if not _check_pieces_have(h, ti, fs, info["video_idx"], start, len(data)):
-                            hole = True
-                    else:
-                        hole = True
-                else:
-                    hole = True
+        data = await asyncio.to_thread(_read_once, path, start, chunk_size)
+        hole = await asyncio.to_thread(_detect_hole, path, start, data, engine, hash_str)
 
         log.debug(
             "read_video_range attempt",
@@ -267,8 +268,8 @@ def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
             )
             # Return empty bytes so caller can send 416 instead of all-zero data
             return b""
-        time.sleep(wait_step)
+        await asyncio.sleep(wait_step)
         elapsed += wait_step
-        seek_priority(hash_str, start, end, engine)
+        await asyncio.to_thread(seek_priority, hash_str, start, end, engine)
 
     return bytes(data)

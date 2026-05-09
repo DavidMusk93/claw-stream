@@ -56,7 +56,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     """Serve video stream with Range support.
 
     大文件流式播放使用线程池执行文件 I/O，避免阻塞 FastAPI 事件循环。
-    不带 Range 头的请求返回前 1MB（200），避免 Safari 收到 416 后报 code=4。
+    不带 Range 头的请求返回前 8MB（200），避免 Safari 收到 416 后报 code=4。
     带 Range 头的请求返回 206 Partial Content；若请求范围全是 hole 则返回 416。
     若 torrent 处于 checking_files 状态返回 503，防止读取到不一致数据。
     """
@@ -88,9 +88,9 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             headers = {"Accept-Ranges": "bytes", "Content-Type": mime}
             raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
 
-    # 将同步文件 I/O 放到线程池，避免阻塞事件循环
+    # 文件 I/O 通过 read_video_range 内部异步化，不再阻塞事件循环
     t4 = _time.perf_counter()
-    data = await asyncio.to_thread(read_video_range, hash_str, start, end, engine)
+    data = await read_video_range(hash_str, start, end, engine)
     t5 = _time.perf_counter()
     actual_size = len(data)
 
