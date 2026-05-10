@@ -2,7 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Fonts loaded via nuxt.config.ts head.link for non-blocking performance */
+/* =============================================
+   Apple Design System — Star Archive
+   ============================================= */
 
 html {
   scroll-behavior: smooth;
@@ -10,34 +12,16 @@ html {
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+               'Helvetica Neue', 'Segoe UI', 'Inter', sans-serif;
   background: #000000;
-  color: #F8FAFC;
+  color: #ffffff;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.2);
 }
 
 /* Hide scrollbar but keep scrollability */
@@ -49,34 +33,54 @@ body {
   display: none;
 }
 
-/* Ambient light blob animations */
-@keyframes blob {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
-}
+/* =============================================
+   NEW: Apple-style components
+   ============================================= */
 
-@keyframes blob-reverse {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-30px, 30px) scale(0.95); }
-  66% { transform: translate(20px, -40px) scale(1.05); }
-}
-
-/* Water ripple scroll effect - applied to images on scroll */
-@keyframes ripple-in {
-  0% {
-    transform: scale(0.92) translateY(40px);
-    filter: brightness(0.6);
-    opacity: 0.5;
+@layer components {
+  /* System glass for navbars — subtle, Apple HIG compliant */
+  .system-glass {
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    background-color: rgba(0, 0, 0, 0.72);
   }
-  100% {
-    transform: scale(1) translateY(0);
-    filter: brightness(1);
-    opacity: 1;
+
+  /* Media card — Apple TV / App Store style */
+  .media-card {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #1c1c1e;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+                box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .media-card:hover {
+    transform: scale(1.03);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Minimal pill badge */
+  .pill-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #ffffff;
+    letter-spacing: 0.01em;
   }
 }
 
-/* Glass morphism utilities */
+/* =============================================
+   LEGACY: Keep old glass classes for
+   unmodified components (VideoModal, CachePanel, login)
+   ============================================= */
+
 @layer components {
   .glass {
     background: rgba(255,255,255,0.03);
@@ -107,7 +111,6 @@ body {
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   }
 
-  /* Text gradient for headings */
   .text-gradient-rose {
     background: linear-gradient(135deg, #FB7185 0%, #E11D48 50%, #BE123C 100%);
     -webkit-background-clip: text;
@@ -115,50 +118,13 @@ body {
     background-clip: text;
   }
 
-  .text-gradient-violet {
-    background: linear-gradient(135deg, #E879F9 0%, #D946EF 50%, #A21CAF 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
-  .text-gradient-amber {
-    background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 50%, #D97706 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
-  /* Water ripple on scroll - modern browsers only */
-  .ripple-scroll {
-    animation: ripple-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
-    animation-timeline: view();
-    animation-range: entry 0% cover 30%;
-  }
-
-  /* Fallback for browsers without scroll-timeline */
-  @supports not (animation-timeline: view()) {
-    .ripple-scroll {
-      animation: none;
-      opacity: 1;
-      transform: none;
-      filter: none;
-    }
-  }
-
-  /* Glow effect on hover */
   .glow-rose:hover {
     box-shadow: 0 0 40px rgba(225,29,72,0.15), 0 0 80px rgba(225,29,72,0.08);
   }
 
-  .glow-violet:hover {
-    box-shadow: 0 0 40px rgba(217,70,239,0.15), 0 0 80px rgba(217,70,239,0.08);
-  }
-
-  /* Image reveal with subtle distortion */
   .image-reveal {
-    transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1),
-                filter 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                filter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .image-reveal:hover {
