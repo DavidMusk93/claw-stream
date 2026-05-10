@@ -79,15 +79,18 @@
         <button
           v-for="(title, idx) in star.titles"
           :key="title.code"
-          class="shrink-0 relative rounded-lg overflow-hidden bg-black transition-all duration-200"
-          :class="activeIndex === idx ? 'ring-2 ring-white opacity-100' : 'opacity-40 hover:opacity-70'"
-          :style="thumbStyle"
+          class="relative rounded-lg overflow-hidden bg-black transition-all duration-200"
+          :class="[
+            isMobile ? 'flex-1 h-max min-h-[40px]' : 'flex-1 w-max min-w-[60px]',
+            activeIndex === idx ? 'ring-2 ring-white opacity-100' : 'opacity-40 hover:opacity-70'
+          ]"
           @click="activeIndex = idx"
         >
           <img
             :src="title.cover_url"
             :alt="title.code"
-            class="w-full h-full object-contain block"
+            :class="isMobile ? 'w-full h-auto' : 'h-full w-auto'"
+            class="block"
             loading="lazy"
           />
           <!-- Number badge -->
@@ -192,17 +195,6 @@ const dockStyle = computed(() => {
   return { height: `${heroSize.value.height}px` }
 })
 
-const thumbStyle = computed(() => {
-  const count = props.star.titles?.length || 0
-  if (count === 0 || heroSize.value.width === 0) return {}
-
-  if (isMobile.value) {
-    // Mobile: distribute hero width across N thumbs
-    const w = (heroSize.value.width - (count - 1) * gap) / count
-    return { width: `${w}px`, aspectRatio: '2/3' }
-  }
-  // Desktop: distribute hero height across N thumbs
-  const h = (heroSize.value.height - (count - 1) * gap) / count
-  return { height: `${h}px`, aspectRatio: '2/3' }
-})
+// No fixed thumbStyle needed — flex-1 distributes space,
+// and img w-auto/h-auto preserves original aspect ratio exactly.
 </script>
