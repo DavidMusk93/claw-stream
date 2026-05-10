@@ -468,17 +468,22 @@ class TorrentEngine:
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
-            # After file verification, reapply play priority
+            # After file verification, re-sync tracker and reapply play priority
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
                 if hash_str in self.torrents:
                     info = self.torrents[hash_str]
-                    # Re-bootstrap tracker after checking (have_piece now accurate)
+                    # Re-bootstrap tracker after checking — libtorrent zeros pieces
+                    # during checking, which SEEK_HOLE falsely sees as data. The
+                    # reset in _bootstrap_from_filesystem clears stale VERIFIED.
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
                         info["tracker"]._overlay_have_piece()
                     if not info.get("prefetch"):
+                        # Always reapply: recheck may have invalidated pieces that
+                        # were previously thought complete, and they need urgent
+                        # priority again.
                         self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle

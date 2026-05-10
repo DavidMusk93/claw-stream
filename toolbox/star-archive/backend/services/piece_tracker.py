@@ -86,11 +86,17 @@ class PieceStateTracker:
     def _bootstrap_from_filesystem(self) -> None:
         """Use SEEK_HOLE to mark pieces that already have data on disk.
 
-        We scan in 1MB chunks to avoid too many syscalls on large files.
-        A piece is VERIFIED if *any* byte in its range has data.
+        Scanning resets all states first — libtorrent recheck zeros pieces
+        on disk, which SEEK_HOLE sees as data. Without reset, previously
+        verified pieces that turned into holes stay falsely VERIFIED.
+        A piece is VERIFIED only if its *entire* range has no hole.
         """
         if not os.path.exists(self.path):
             return
+
+        # Reset before scan: recheck may have turned verified pieces into holes
+        for p in range(self.start_piece, self.end_piece + 1):
+            self._states[p] = PieceState.NOT_DOWNLOADED
 
         fd = os.open(self.path, os.O_RDONLY)
         try:
@@ -108,12 +114,11 @@ class PieceStateTracker:
                     break
 
                 if hole >= piece_end:
-                    # Entire piece has data
+                    # Entire piece has data — safe to mark VERIFIED
                     self._states[piece] = PieceState.VERIFIED
-                elif hole > offset:
-                    # Partial data — still mark as VERIFIED (libtorrent
-                    # may have downloaded it partially before crash)
-                    self._states[piece] = PieceState.VERIFIED
+                # Partial data is NOT marked: libtorrent may have zeroed
+                # the rest during recheck, and reading that region returns
+                # zeros which causes Safari/Chrome demuxer stutter.
 
                 offset = piece_end
         finally:
