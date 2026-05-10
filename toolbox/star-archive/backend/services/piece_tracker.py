@@ -124,12 +124,25 @@ class PieceStateTracker:
         finally:
             os.close(fd)
 
-    def _overlay_have_piece(self) -> None:
-        """Augment with libtorrent have_piece (used as optimistic hint)."""
+    def _overlay_have_piece(self, strict: bool = False) -> None:
+        """将 libtorrent have_piece 同步到 tracker 状态。
+
+        默认模式下仅在 piece 当前为 NOT_DOWNLOADED 时覆盖（增量同步），
+        避免破坏 tracker 自身的 DOWNLOADING / VERIFIED / CORRUPT 状态。
+
+        strict=True 时做双向同步：have_piece 为 false 的 piece 强制重置为
+        NOT_DOWNLOADED。用于 torrent_checked_alert 之后，因为此时
+        have_piece 是最准确的，可修正 _bootstrap_from_filesystem 因 zeros
+        占据磁盘块而误标的 VERIFIED。
+        """
         for p in range(self.start_piece, self.end_piece + 1):
-            if self._states[p] == PieceState.NOT_DOWNLOADED:
-                if self.handle.have_piece(p):
+            if self.handle.have_piece(p):
+                if self._states[p] == PieceState.NOT_DOWNLOADED:
                     self._states[p] = PieceState.VERIFIED
+            elif strict and self._states[p] == PieceState.VERIFIED:
+                # recheck 完成后 have_piece 为 false 说明该 piece 未通过校验
+                # 或仍是 zeros，不能信任 SEEK_HOLE 的扫描结果
+                self._states[p] = PieceState.NOT_DOWNLOADED
 
     # ── Alert sync ──────────────────────────────────────────
 

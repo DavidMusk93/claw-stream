@@ -479,7 +479,7 @@ class TorrentEngine:
                     # reset in _bootstrap_from_filesystem clears stale VERIFIED.
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
-                        info["tracker"]._overlay_have_piece()
+                        info["tracker"]._overlay_have_piece(strict=True)
                     if not info.get("prefetch"):
                         # Always reapply: recheck may have invalidated pieces that
                         # were previously thought complete, and they need urgent
@@ -579,10 +579,10 @@ class TorrentEngine:
         else:
             # Default: all pieces priority 0 (strict on-demand).
             # head+tail urgent applied later by _apply_play_priority.
-            piece_prios = [0] * num_pieces
-            handle.prioritize_pieces(piece_prios)
-            # 首次 metadata 就绪时应用 play priority，避免重复添加时重置正在播放的窗口
+            # 只在首次 metadata 就绪时执行，避免重复 add_torrent 重置窗口
             if not info.get("_play_priority_applied"):
+                piece_prios = [0] * num_pieces
+                handle.prioritize_pieces(piece_prios)
                 self._apply_play_priority(handle, info)
                 info["_play_priority_applied"] = True
             log.info(f"added: {name} ({format_size(size)})")
