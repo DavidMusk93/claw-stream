@@ -118,17 +118,15 @@ class TestOverlayHavePiece(unittest.TestCase):
     def test_incremental_only_adds_verified(self) -> None:
         """Default mode: only NOT_DOWNLOADED -> VERIFIED, never resets."""
         tracker = make_tracker(have_pieces={2, 3})
-        tracker._states[2] = PieceState.NOT_DOWNLOADED
-        tracker._states[3] = PieceState.NOT_DOWNLOADED
-        tracker._states[4] = PieceState.VERIFIED  # already verified
-        tracker._states[5] = PieceState.CORRUPT   # corrupt stays
+        tracker._verified = 0
+        tracker._corrupt = (1 << 5)
 
         tracker._overlay_have_piece(strict=False)
 
-        self.assertEqual(tracker._states[2], PieceState.VERIFIED)
-        self.assertEqual(tracker._states[3], PieceState.VERIFIED)
-        self.assertEqual(tracker._states[4], PieceState.VERIFIED)
-        self.assertEqual(tracker._states[5], PieceState.CORRUPT)
+        self.assertTrue(tracker.is_verified(2))
+        self.assertTrue(tracker.is_verified(3))
+        self.assertFalse(tracker.is_verified(4))  # was 0, stays 0
+        self.assertEqual(tracker.piece_state(5), PieceState.CORRUPT)
 
     def test_strict_resets_false_verified(self) -> None:
         """Strict mode: have_piece=false forces VERIFIED -> NOT_DOWNLOADED.
@@ -141,28 +139,23 @@ class TestOverlayHavePiece(unittest.TestCase):
         """
         tracker = make_tracker(have_pieces={2})  # only piece 2 is truly valid
         # Simulate _bootstrap_from_filesystem falsely marking pieces 3-4
-        tracker._states[2] = PieceState.VERIFIED   # correct
-        tracker._states[3] = PieceState.VERIFIED   # false positive (zeros on disk)
-        tracker._states[4] = PieceState.VERIFIED   # false positive
-        tracker._states[5] = PieceState.DOWNLOADING  # should not be touched
-        tracker._states[6] = PieceState.CORRUPT      # should not be touched
+        tracker._verified = (1 << 2) | (1 << 3) | (1 << 4)
+        tracker._downloading = (1 << 5)
+        tracker._corrupt = (1 << 6)
 
         tracker._overlay_have_piece(strict=True)
 
-        self.assertEqual(tracker._states[2], PieceState.VERIFIED)
-        self.assertEqual(tracker._states[3], PieceState.NOT_DOWNLOADED)
-        self.assertEqual(tracker._states[4], PieceState.NOT_DOWNLOADED)
-        self.assertEqual(tracker._states[5], PieceState.DOWNLOADING)
-        self.assertEqual(tracker._states[6], PieceState.CORRUPT)
+        self.assertTrue(tracker.is_verified(2))
+        self.assertFalse(tracker.is_verified(3))
+        self.assertFalse(tracker.is_verified(4))
+        self.assertEqual(tracker.piece_state(5), PieceState.DOWNLOADING)
+        self.assertEqual(tracker.piece_state(6), PieceState.CORRUPT)
 
     def test_strict_does_not_affect_not_downloaded(self) -> None:
         """Strict mode should not change NOT_DOWNLOADED pieces."""
         tracker = make_tracker(have_pieces=set())
-        tracker._states[2] = PieceState.NOT_DOWNLOADED
-
         tracker._overlay_have_piece(strict=True)
-
-        self.assertEqual(tracker._states[2], PieceState.NOT_DOWNLOADED)
+        self.assertFalse(tracker.is_verified(2))
 
 
 class TestRequestPieces(unittest.TestCase):
@@ -170,26 +163,24 @@ class TestRequestPieces(unittest.TestCase):
 
     def test_request_pieces_skips_verified(self) -> None:
         """Verified pieces should not be re-requested (regression for requested=0 bug)."""
-        tracker = make_tracker(have_pieces={2, 3, 4})
-        tracker._states[2] = PieceState.VERIFIED
-        tracker._states[3] = PieceState.VERIFIED
-        tracker._states[4] = PieceState.NOT_DOWNLOADED
+        tracker = make_tracker(have_pieces={2, 3})  # piece 4 is NOT have_piece
+        # _overlay_have_piece marked 2,3 as verified; 4 is not_downloaded
 
         requested = tracker.request_pieces(2, 4)
 
         self.assertEqual(requested, 1)  # only piece 4
-        self.assertEqual(tracker._states[4], PieceState.DOWNLOADING)
+        self.assertEqual(tracker.piece_state(4), PieceState.DOWNLOADING)
         self.assertEqual(tracker.handle._deadlines[4], 0)
 
     def test_request_pieces_includes_corrupt(self) -> None:
         """Corrupt pieces should be re-requested."""
         tracker = make_tracker()
-        tracker._states[2] = PieceState.CORRUPT
+        tracker._corrupt = (1 << 2)
 
         requested = tracker.request_pieces(2, 2)
 
         self.assertEqual(requested, 1)
-        self.assertEqual(tracker._states[2], PieceState.DOWNLOADING)
+        self.assertEqual(tracker.piece_state(2), PieceState.DOWNLOADING)
 
 
 class TestHeadReady(unittest.TestCase):
@@ -197,19 +188,19 @@ class TestHeadReady(unittest.TestCase):
 
     def test_head_ready_all_verified(self) -> None:
         tracker = make_tracker()
-        tracker._states[0] = PieceState.VERIFIED
-        tracker._states[1] = PieceState.VERIFIED
-        tracker._states[2] = PieceState.VERIFIED
+        tracker.set_moov_range(0, 524288)
+        tracker._verified |= (1 << 0) | (1 << 1) | (1 << 2)
+        tracker._moov_vc = (tracker._verified & tracker._moov_mask).bit_count()
 
-        self.assertTrue(tracker.head_ready(moov_start=0, moov_end=524288))
+        self.assertTrue(tracker.head_ready())
 
     def test_head_ready_missing_piece(self) -> None:
         tracker = make_tracker()
-        tracker._states[0] = PieceState.VERIFIED
-        tracker._states[1] = PieceState.NOT_DOWNLOADED
-        tracker._states[2] = PieceState.VERIFIED
+        tracker.set_moov_range(0, 524288)
+        tracker._verified |= (1 << 0) | (1 << 2)
+        tracker._moov_vc = (tracker._verified & tracker._moov_mask).bit_count()
 
-        self.assertFalse(tracker.head_ready(moov_start=0, moov_end=524288))
+        self.assertFalse(tracker.head_ready())
 
 
 if __name__ == "__main__":

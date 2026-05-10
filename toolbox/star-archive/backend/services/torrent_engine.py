@@ -542,6 +542,16 @@ class TorrentEngine:
                 path=info["video_path"],
             )
 
+        # Scan moov once and cache into info + tracker. Eliminates repeated
+        # _scan_mp4_moov calls on every /api/check/ poll (was 32MB disk read/s).
+        if info.get("video_path") and os.path.exists(info["video_path"]):
+            if "moov_end" not in info:
+                moov_start, moov_end = _scan_mp4_moov(info["video_path"])
+                info["moov_start"] = moov_start
+                info["moov_end"] = moov_end
+                if info.get("tracker") and moov_end > 0:
+                    info["tracker"].set_moov_range(moov_start, moov_end)
+
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4
         handle.prioritize_files(file_prios)
@@ -750,14 +760,22 @@ class TorrentEngine:
         else:
             local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
 
-        # Use tracker head_ready if available (O(pieces) instead of filesystem scan)
+        # Use tracker head_ready if available (O(1) POPCNT, no disk read).
+        # _on_metadata caches moov into info; if missing fall back to fs scan.
         tracker = info.get("tracker")
         if tracker and local_path:
-            moov_start, moov_end = _scan_mp4_moov(local_path)
-            if moov_end > 0:
-                head_ready = tracker.head_ready(moov_start, moov_end)
+            if tracker._moov_pc > 0:
+                head_ready = tracker.head_ready()
             else:
-                head_ready = head_ready_fs
+                # Fallback: moov not yet cached (rare, new torrent or scan failed)
+                moov_start, moov_end = _scan_mp4_moov(local_path)
+                if moov_end > 0:
+                    info["moov_start"] = moov_start
+                    info["moov_end"] = moov_end
+                    tracker.set_moov_range(moov_start, moov_end)
+                    head_ready = tracker.head_ready()
+                else:
+                    head_ready = head_ready_fs
         else:
             head_ready = head_ready_fs
 
