@@ -27,123 +27,117 @@ from services.torrent_engine import _range_has_data, _scan_mp4_moov, find_video_
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache", "torrent")
 
+# SNOS-171: 100% complete, head-moov (3.8GB)
+HEAD_HASH = "c2fe9437eef243096ce5789a8d5a435df6ee5fa3"
+HEAD_PATH = os.path.join(CACHE_DIR, HEAD_HASH, "SNOS-171", "hhd800.com@SNOS-171.mp4")
+
+# EBWH-322: 100% complete, tail-moov (5.4GB)
+TAIL_HASH = "e277f22f86a346efefe4242fd4dc7f5455dc272d"
+TAIL_PATH = os.path.join(CACHE_DIR, TAIL_HASH, "EBWH-322ch", "EBWH-322ch.mp4")
+
+
+def _make_sparse_file() -> str:
+    """Create a sparse file with data at [0, 4KB) and [1MB, 1MB+4KB), hole in between."""
+    fd, path = tempfile.mkstemp(suffix=".sparse.mp4")
+    try:
+        os.write(fd, b"\x01" * 4096)
+        os.lseek(fd, 1024 * 1024, os.SEEK_SET)
+        os.write(fd, b"\x02" * 4096)
+    finally:
+        os.close(fd)
+    return path
+
 
 class TestSeekDataHoleDetection(unittest.TestCase):
     """Test SEEK_DATA/SEEK_HOLE filesystem-level hole detection on real sparse files."""
 
     def setUp(self) -> None:
-        self.dldss = os.path.join(
-            CACHE_DIR, "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
-            "DLDSS-483", "hhd800.com@DLDSS-483.mp4",
-        )
-        self.abf = os.path.join(
-            CACHE_DIR, "4637fa3c7a508f8394da6f7c3601c152ae51de6b",
-            "ABF-350", "hhd800.com@ABF-350.mp4",
-        )
+        self.sparse_path = _make_sparse_file()
+
+    def tearDown(self) -> None:
+        if os.path.exists(self.sparse_path):
+            os.unlink(self.sparse_path)
 
     def test_is_data_at_offset_with_data(self) -> None:
-        """Offset 0 of DLDSS-483 has actual data (ftyp header)."""
-        if not os.path.exists(self.dldss):
-            self.skipTest("DLDSS-483 not cached")
-        self.assertTrue(_is_data_at_offset(self.dldss, 0))
-        self.assertTrue(_is_data_at_offset(self.dldss, 8))
+        """Offset 0 of SNOS-171 has actual data (ftyp header)."""
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
+        self.assertTrue(_is_data_at_offset(HEAD_PATH, 0))
+        self.assertTrue(_is_data_at_offset(HEAD_PATH, 8))
 
     def test_is_data_at_offset_in_hole(self) -> None:
-        """Offset inside hole returns False."""
-        if not os.path.exists(self.abf):
-            self.skipTest("ABF-350 not cached")
-        # Find first hole after 100MB; exact offset varies with download progress.
-        size = os.path.getsize(self.abf)
-        hole_offset = None
-        for offset in range(100 * 1024 * 1024, size, 1024 * 1024):
-            if not _is_data_at_offset(self.abf, offset):
-                hole_offset = offset
-                break
-        if hole_offset is None:
-            self.skipTest("ABF-350 is nearly complete, no holes found")
-        self.assertFalse(_is_data_at_offset(self.abf, hole_offset))
+        """Offset inside a known hole returns False."""
+        # Use the synthetic sparse file to guarantee a hole regardless of
+        # which torrents are cached.  The hole is at [4096, 1048576).
+        self.assertFalse(_is_data_at_offset(self.sparse_path, 8192))
+        self.assertFalse(_is_data_at_offset(self.sparse_path, 524288))
 
     def test_range_has_data_moov(self) -> None:
-        """DLDSS-483 moov range [0, 7.6MB] has no holes."""
-        if not os.path.exists(self.dldss):
-            self.skipTest("DLDSS-483 not cached")
-        self.assertTrue(_range_has_data(self.dldss, 0, 7_627_019))
+        """SNOS-171 moov range [0, 8.6MB] has no holes."""
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
+        self.assertTrue(_range_has_data(HEAD_PATH, 0, 8_686_350))
 
     def test_range_has_hole(self) -> None:
-        """ABF-350 [0, 100MB] crosses hole."""
-        if not os.path.exists(self.abf):
-            self.skipTest("ABF-350 not cached")
-        self.assertFalse(_range_has_data(self.abf, 0, 100_000_000))
+        """Synthetic sparse file [0, 1MB+4KB] crosses a hole."""
+        self.assertFalse(_range_has_data(self.sparse_path, 0, 1024 * 1024 + 4096))
 
     def test_mp4_first_two_bytes_not_hole(self) -> None:
         """MP4 ftyp size field starts with 00 00 — must NOT be detected as hole."""
-        if not os.path.exists(self.dldss):
-            self.skipTest("DLDSS-483 not cached")
-        self.assertTrue(_is_data_at_offset(self.dldss, 0))
-        self.assertTrue(_is_data_at_offset(self.dldss, 1))
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
+        self.assertTrue(_is_data_at_offset(HEAD_PATH, 0))
+        self.assertTrue(_is_data_at_offset(HEAD_PATH, 1))
 
 
 class TestMp4MoovDetection(unittest.TestCase):
     """Test MP4 moov atom scanning and head_ready logic."""
 
     def test_scan_mp4_moov_head(self) -> None:
-        """DLDSS-483: moov in head, should return moov_start=0, moov_end>0."""
-        path = os.path.join(
-            CACHE_DIR,
-            "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
-            "DLDSS-483",
-            "hhd800.com@DLDSS-483.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("DLDSS-483 cache not available")
-        moov_start, moov_end = _scan_mp4_moov(path)
+        """SNOS-171: moov in head, should return moov_start=0, moov_end>0."""
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
+        moov_start, moov_end = _scan_mp4_moov(HEAD_PATH)
         self.assertEqual(moov_start, 0, "head-moov should have moov_start=0")
         self.assertGreater(moov_end, 0, "moov should be found")
-        print(f"  DLDSS-483 moov_start={moov_start:,} moov_end={moov_end:,}")
+        print(f"  SNOS-171 moov_start={moov_start:,} moov_end={moov_end:,}")
 
     def test_scan_mp4_moov_tail(self) -> None:
-        """ABF-350: moov in tail, should return moov_start>0."""
-        path = os.path.join(
-            CACHE_DIR,
-            "4637fa3c7a508f8394da6f7c3601c152ae51de6b",
-            "ABF-350",
-            "hhd800.com@ABF-350.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("ABF-350 cache not available")
-        moov_start, moov_end = _scan_mp4_moov(path)
+        """EBWH-322: moov in tail, should return moov_start>0."""
+        if not os.path.exists(TAIL_PATH):
+            self.fail(f"EBWH-322 cache must be available: {TAIL_PATH}")
+        moov_start, moov_end = _scan_mp4_moov(TAIL_PATH)
         if moov_end == 0:
-            self.skipTest("ABF-350 moov not yet downloaded")
+            self.fail("EBWH-322 moov must be found (file is 100% complete)")
         self.assertGreater(moov_start, 0, "tail-moov should have moov_start>0")
         self.assertGreater(moov_end, moov_start, "moov_end should be > moov_start")
-        print(f"  ABF-350 moov_start={moov_start:,} moov_end={moov_end:,} (tail-moov)")
+        print(f"  EBWH-322 moov_start={moov_start:,} moov_end={moov_end:,} (tail-moov)")
 
     def test_find_video_state_head_moov(self) -> None:
-        """DLDSS-483: head-moov with complete data → head_ready=True."""
-        hash_str = "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1"
-        path, real_size, head_ready, mime = find_video_state(hash_str)
+        """SNOS-171: head-moov with complete data → head_ready=True."""
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
+        path, real_size, head_ready, mime = find_video_state(HEAD_HASH)
         if not path:
-            self.skipTest("DLDSS-483 not cached")
-        print(f"  DLDSS-483: real_size={real_size:,} head_ready={head_ready}")
-        # If moov is complete, head_ready should be True
-        moov_start, moov_end = _scan_mp4_moov(path)
-        if _range_has_data(path, moov_start, moov_end):
+            self.fail("find_video_state returned None for SNOS-171")
+        print(f"  SNOS-171: real_size={real_size:,} head_ready={head_ready}")
+        moov_start, moov_end = _scan_mp4_moov(HEAD_PATH)
+        if _range_has_data(HEAD_PATH, moov_start, moov_end):
             self.assertTrue(head_ready, "head_ready should be True when moov is complete")
 
     def test_find_video_state_tail_moov(self) -> None:
-        """ABF-350: tail-moov only needs moov region, not whole file."""
-        hash_str = "4637fa3c7a508f8394da6f7c3601c152ae51de6b"
-        path, real_size, head_ready, mime = find_video_state(hash_str)
+        """EBWH-322: tail-moov only needs moov region, not whole file."""
+        if not os.path.exists(TAIL_PATH):
+            self.fail(f"EBWH-322 cache must be available: {TAIL_PATH}")
+        path, real_size, head_ready, mime = find_video_state(TAIL_HASH)
         if not path:
-            self.skipTest("ABF-350 not cached")
-        print(f"  ABF-350: real_size={real_size:,} head_ready={head_ready}")
-        # Tail-moov only needs [moov_start, moov_end] to have data,
-        # not the entire file. Check actual moov region via SEEK_HOLE.
-        moov_start, moov_end = _scan_mp4_moov(path)
+            self.fail("find_video_state returned None for EBWH-322")
+        print(f"  EBWH-322: real_size={real_size:,} head_ready={head_ready}")
+        moov_start, moov_end = _scan_mp4_moov(TAIL_PATH)
         if moov_end == 0:
-            self.skipTest("ABF-350 moov not yet downloaded")
-        moov_complete = _range_has_data(path, moov_start, moov_end - 1)
-        print(f"  ABF-350 moov_complete={moov_complete}")
+            self.fail("EBWH-322 moov must be found")
+        moov_complete = _range_has_data(TAIL_PATH, moov_start, moov_end - 1)
+        print(f"  EBWH-322 moov_complete={moov_complete}")
         if moov_complete:
             self.assertTrue(head_ready, "tail-moov head_ready should be True when moov region is complete")
 
@@ -159,7 +153,7 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
         try:
             # Wait for backend to be ready and not checking_files
             for _ in range(30):
-                r = requests.get(f"{cls.BASE}/api/check/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1")
+                r = requests.get(f"{cls.BASE}/api/check/{HEAD_HASH}")
                 if r.status_code == 200 and r.json().get("head_ready"):
                     cls.backend_ok = True
                     return
@@ -181,9 +175,9 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
     def test_range_probe_2_bytes(self) -> None:
         """Browser first sends bytes=0-1 to probe format."""
         if not self.backend_ok:
-            self.skipTest("backend not running")
+            self.fail("Backend must be running on port 8765 for regression testing")
         r = self._get_with_retry(
-            f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
+            f"{self.BASE}/stream/{HEAD_HASH}",
             headers={"Range": "bytes=0-1"},
         )
         self.assertEqual(r.status_code, 206)
@@ -192,18 +186,21 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
         print(f"  bytes=0-1: {r.content.hex()}")
 
     def test_range_moov_region(self) -> None:
-        """Request 8MB covering moov atom, verify ffprobe can parse."""
+        """Request enough bytes to cover moov atom, verify ffprobe can parse."""
         if not self.backend_ok:
-            self.skipTest("backend not running")
+            self.fail("Backend must be running on port 8765 for regression testing")
+
+        # SNOS-171 moov ends at ~8.7MB; download 10MB to be safe
+        moov_start, moov_end = _scan_mp4_moov(HEAD_PATH)
+        max_bytes = max(10 * 1024 * 1024, moov_end + 1024 * 1024)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         try:
             offset = 0
-            max_bytes = 8 * 1024 * 1024
             while offset < max_bytes:
                 end = offset + 1024 * 1024 - 1
                 r = self._get_with_retry(
-                    f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
+                    f"{self.BASE}/stream/{HEAD_HASH}",
                     headers={"Range": f"bytes={offset}-{end}"},
                 )
                 if r.status_code != 206:
@@ -230,9 +227,9 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
     def test_range_mid_file_not_all_zero(self) -> None:
         """Request 1KB at 1GB position — should not be all zeros."""
         if not self.backend_ok:
-            self.skipTest("backend not running")
+            self.fail("Backend must be running on port 8765 for regression testing")
         r = self._get_with_retry(
-            f"{self.BASE}/stream/a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
+            f"{self.BASE}/stream/{HEAD_HASH}",
             headers={"Range": "bytes=1000000000-1000000999"},
         )
         self.assertEqual(r.status_code, 206)
@@ -244,45 +241,32 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
 class TestFfmpegDecodeIntegrity(unittest.TestCase):
     """Use ffmpeg to verify actual video files can be decoded."""
 
-    def test_dldss483_decode(self) -> None:
-        """DLDSS-483: ffmpeg should decode first 5s without errors."""
-        path = os.path.join(
-            CACHE_DIR,
-            "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
-            "DLDSS-483",
-            "hhd800.com@DLDSS-483.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("DLDSS-483 not cached")
+    def test_snos171_decode(self) -> None:
+        """SNOS-171: ffmpeg should decode first 5s without errors."""
+        if not os.path.exists(HEAD_PATH):
+            self.fail(f"SNOS-171 cache must be available: {HEAD_PATH}")
         result = subprocess.run(
             ["ffmpeg", "-v", "error", "-ss", "0", "-t", "5",
-             "-i", path, "-f", "null", "-"],
+             "-i", HEAD_PATH, "-f", "null", "-"],
             capture_output=True, text=True,
         )
         if result.stderr.strip():
             print(f"  ffmpeg stderr: {result.stderr.strip()[:300]}")
         self.assertEqual(result.returncode, 0, "ffmpeg should decode without fatal errors")
 
-    def test_abf350_decode_fails_as_expected(self) -> None:
-        """ABF-350: tail-moov with holes should fail or show decode errors."""
-        path = os.path.join(
-            CACHE_DIR,
-            "4637fa3c7a508f8394da6f7c3601c152ae51de6b",
-            "ABF-350",
-            "hhd800.com@ABF-350.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("ABF-350 not cached")
+    def test_ebwh322_decode(self) -> None:
+        """EBWH-322: tail-moov complete file should decode successfully."""
+        if not os.path.exists(TAIL_PATH):
+            self.fail(f"EBWH-322 cache must be available: {TAIL_PATH}")
         result = subprocess.run(
             ["ffmpeg", "-v", "error", "-ss", "0", "-t", "2",
-             "-i", path, "-f", "null", "-"],
+             "-i", TAIL_PATH, "-f", "null", "-"],
             capture_output=True, text=True,
         )
-        print(f"  ABF-350 ffmpeg returncode={result.returncode}")
+        print(f"  EBWH-322 ffmpeg returncode={result.returncode}")
         if result.stderr.strip():
             print(f"  stderr: {result.stderr.strip()[:200]}")
-        # ABF-350 has holes → decode errors expected; test documents current behavior
-        self.assertIn(result.returncode, [0, 1], "ffmpeg should either succeed or fail gracefully")
+        self.assertEqual(result.returncode, 0, "ffmpeg should decode tail-moov file without fatal errors")
 
 
 if __name__ == "__main__":

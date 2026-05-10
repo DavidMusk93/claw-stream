@@ -18,42 +18,36 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
 from services.piece_tracker import PieceState, PieceStateTracker
+from services.torrent_engine import _scan_mp4_moov, _range_has_data
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache", "torrent")
+
+# Use SNOS-171 (100% complete, head-moov) as primary test sample
+SAMPLE_HASH = "c2fe9437eef243096ce5789a8d5a435df6ee5fa3"
+SAMPLE_PATH = os.path.join(CACHE_DIR, SAMPLE_HASH, "SNOS-171", "hhd800.com@SNOS-171.mp4")
+
+# Use EBWH-322 (100% complete, tail-moov) for tail-moov tests
+TAIL_HASH = "e277f22f86a346efefe4242fd4dc7f5455dc272d"
+TAIL_PATH = os.path.join(CACHE_DIR, TAIL_HASH, "EBWH-322ch", "EBWH-322ch.mp4")
 
 
 class TestTrackerBootstrap(unittest.TestCase):
     """Test filesystem bootstrap on real sparse torrent files."""
 
-    def test_dldss483_bootstrap(self) -> None:
-        """DLDSS-483: head pieces should be VERIFIED after bootstrap."""
-        path = os.path.join(
-            CACHE_DIR, "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
-            "DLDSS-483", "hhd800.com@DLDSS-483.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("DLDSS-483 not cached")
+    def test_snos171_bootstrap_head(self) -> None:
+        """SNOS-171: head pieces should be VERIFIED after bootstrap."""
+        if not os.path.exists(SAMPLE_PATH):
+            self.fail(f"SNOS-171 cache must be available for regression testing: {SAMPLE_PATH}")
+        self.assertTrue(_range_has_data(SAMPLE_PATH, 0, 8_686_350))
+        print(f"  SNOS-171 moov range [0, 8.6MB] verified via SEEK_HOLE")
 
-        # We can't create a real libtorrent handle in unittest,
-        # so test bootstrap via filesystem scan using a mock handle.
-        # For now, test the SEEK_HOLE logic indirectly via _range_has_data.
-        from services.torrent_engine import _range_has_data
-        self.assertTrue(_range_has_data(path, 0, 7_627_018))
-        print(f"  DLDSS-483 moov range [0, 7.6MB] verified via SEEK_HOLE")
-
-    def test_abf350_bootstrap_tail(self) -> None:
-        """ABF-350: tail moov pieces should be VERIFIED."""
-        path = os.path.join(
-            CACHE_DIR, "4637fa3c7a508f8394da6f7c3601c152ae51de6b",
-            "ABF-350", "hhd800.com@ABF-350.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("ABF-350 not cached")
-
-        from services.torrent_engine import _range_has_data, _scan_mp4_moov
-        moov_start, moov_end = _scan_mp4_moov(path)
-        self.assertTrue(_range_has_data(path, moov_start, moov_end - 1))
-        print(f"  ABF-350 tail moov [{moov_start:,}, {moov_end-1:,}] verified")
+    def test_ebwh322_bootstrap_tail(self) -> None:
+        """EBWH-322: tail moov pieces should be VERIFIED."""
+        if not os.path.exists(TAIL_PATH):
+            self.fail(f"EBWH-322 cache must be available for regression testing: {TAIL_PATH}")
+        moov_start, moov_end = _scan_mp4_moov(TAIL_PATH)
+        self.assertTrue(_range_has_data(TAIL_PATH, moov_start, moov_end - 1))
+        print(f"  EBWH-322 tail moov [{moov_start:,}, {moov_end-1:,}] verified")
 
 
 class TestTrackerStateTransitions(unittest.TestCase):
@@ -61,7 +55,6 @@ class TestTrackerStateTransitions(unittest.TestCase):
 
     def test_not_downloaded_to_downloading(self) -> None:
         """request_pieces marks NOT_DOWNLOADED -> DOWNLOADING."""
-        # Can't test with real handle; verify enum values
         self.assertEqual(PieceState.NOT_DOWNLOADED, 0)
         self.assertEqual(PieceState.DOWNLOADING, 1)
         self.assertEqual(PieceState.VERIFIED, 2)
@@ -79,20 +72,11 @@ class TestTrackerHeadReady(unittest.TestCase):
 
     def test_head_ready_o_pieces_not_o_filesystem(self) -> None:
         """head_ready should be O(pieces_in_moov) not O(file_size)."""
-        # DLDSS-483 moov covers ~4 pieces (7.6MB / 2MB piece_length).
-        # Filesystem scan would read 7.6MB. Tracker checks 4 states.
-        # This is a design assertion, not a perf benchmark.
-        path = os.path.join(
-            CACHE_DIR, "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1",
-            "DLDSS-483", "hhd800.com@DLDSS-483.mp4",
-        )
-        if not os.path.exists(path):
-            self.skipTest("DLDSS-483 not cached")
-
-        from services.torrent_engine import _scan_mp4_moov, _range_has_data
-        moov_start, moov_end = _scan_mp4_moov(path)
+        if not os.path.exists(SAMPLE_PATH):
+            self.fail(f"SNOS-171 cache must be available: {SAMPLE_PATH}")
+        moov_start, moov_end = _scan_mp4_moov(SAMPLE_PATH)
         # Simulate tracker logic: check moov range has no holes
-        self.assertTrue(_range_has_data(path, moov_start, moov_end - 1))
+        self.assertTrue(_range_has_data(SAMPLE_PATH, moov_start, moov_end - 1))
         print(f"  head_ready simulation: moov range [{moov_start:,}, {moov_end-1:,}] OK")
 
 

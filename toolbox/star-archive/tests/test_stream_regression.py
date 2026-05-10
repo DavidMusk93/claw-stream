@@ -36,9 +36,9 @@ from backend.services.video_stream import read_video_range
 
 # ── Config ──────────────────────────────────────────────────────────
 REAL_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "cache", "torrent")
-SAMPLE_HASH = "a801b7b8a46fac6ec4cef0f1f95d0e75f1ebf8b1"
+SAMPLE_HASH = "c2fe9437eef243096ce5789a8d5a435df6ee5fa3"
 SAMPLE_VIDEO_REL = os.path.join(
-    SAMPLE_HASH, "DLDSS-483", "hhd800.com@DLDSS-483.mp4"
+    SAMPLE_HASH, "SNOS-171", "hhd800.com@SNOS-171.mp4"
 )
 
 
@@ -61,7 +61,7 @@ class _SharedEngine:
             return cls._instance, cls._video_path or "", cls._client
 
         if not _has_sample():
-            raise unittest.SkipTest("DLDSS-483 cache not available")
+            raise unittest.SkipTest("SNOS-171 cache not available")
 
         import libtorrent as lt
 
@@ -104,7 +104,7 @@ class _SharedEngine:
 
 
 def _copy_sample_to_temp(temp_cache: str) -> str:
-    """Copy DLDSS-483 cache into temp dir using hard-links for large files.
+    """Copy SNOS-171 cache into temp dir using hard-links for large files.
     Avoids copying 3.8GB sparse file; returns video path.
     """
     src = os.path.join(REAL_CACHE_DIR, SAMPLE_HASH)
@@ -121,7 +121,7 @@ def _copy_sample_to_temp(temp_cache: str) -> str:
                 os.link(src_file, dst_file)
             except OSError:
                 shutil.copy2(src_file, dst_file)
-    return os.path.join(dst, "DLDSS-483", "hhd800.com@DLDSS-483.mp4")
+    return os.path.join(dst, "SNOS-171", "hhd800.com@SNOS-171.mp4")
 
 
 # ── Tear down shared engine at module exit ──────────────────────────
@@ -222,7 +222,7 @@ class TestCheckingFilesBlocking(unittest.TestCase):
 
     def setUp(self) -> None:
         if not _has_sample():
-            self.skipTest("DLDSS-483 cache not available")
+            self.skipTest("SNOS-171 cache not available")
         self.temp_dir = tempfile.mkdtemp(prefix="star_test_cf_")
         self.video_path = _copy_sample_to_temp(self.temp_dir)
         self.app, self.engine = _make_private_app(self.temp_dir)
@@ -483,8 +483,11 @@ class TestFullPlaybackFlow(unittest.TestCase):
 
                 print(f"  Max elapsed: {max_elapsed:.0f}ms")
 
-                # Verify moov region is complete by checking offsets [0, 8MB]
-                moov_region = bytes(file_data[0:8 * 1024 * 1024])
+                # Verify moov region is complete by checking offsets [0, moov_end]
+                from backend.services.torrent_engine import _scan_mp4_moov
+                moov_start, moov_end = _scan_mp4_moov(self.video_path)
+                verify_end = max(8 * 1024 * 1024, moov_end + 1024 * 1024)
+                moov_region = bytes(file_data[0:verify_end])
                 tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
                 try:
                     tmp.write(moov_region)
