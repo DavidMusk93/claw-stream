@@ -93,9 +93,14 @@
             class="block"
             loading="lazy"
           />
-          <!-- Number badge -->
-          <div class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-black/70 text-white">
-            #{{ title.number }}
+          <!-- Number + Date badge -->
+          <div class="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between gap-1">
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-black/70 text-white">
+              #{{ title.number }}
+            </span>
+            <span v-if="title.date" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-black/70 text-white">
+              {{ fmtDate(title.date) }}
+            </span>
           </div>
         </button>
       </div>
@@ -123,6 +128,18 @@ const activeTitle = computed(() => {
   const titles = props.star.titles || []
   return titles[activeIndex.value] || titles[0] || null
 })
+
+function fmtDate(dateStr?: string): string {
+  if (!dateStr) return ''
+  const parts = dateStr.split('/')
+  if (parts.length === 3) {
+    const year = parts[2].slice(-2)
+    const month = parts[0].padStart(2, '0')
+    const day = parts[1].padStart(2, '0')
+    return `${year}/${month}/${day}`
+  }
+  return dateStr
+}
 
 function copyMagnet() {
   const magnet = activeTitle.value?.magnet
