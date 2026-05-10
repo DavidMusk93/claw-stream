@@ -576,6 +576,10 @@ class TorrentEngine:
             # head+tail urgent applied later by _apply_play_priority.
             piece_prios = [0] * num_pieces
             handle.prioritize_pieces(piece_prios)
+            # 首次 metadata 就绪时应用 play priority，避免重复添加时重置正在播放的窗口
+            if not info.get("_play_priority_applied"):
+                self._apply_play_priority(handle, info)
+                info["_play_priority_applied"] = True
             log.info(f"added: {name} ({format_size(size)})")
 
         # If torrent resumed from cache and is in finished state, its have_piece
@@ -752,6 +756,12 @@ class TorrentEngine:
         else:
             head_ready = head_ready_fs
 
+        # libtorrent finished/seeding 状态下 progress 恒为 100%，用实际磁盘大小修正
+        progress = s.progress * 100
+        if s.state in (lt.torrent_status.finished, lt.torrent_status.seeding):
+            if info.get("video_size", 0) > 0:
+                progress = (local_size / info["video_size"]) * 100
+
         return {
             "hash": hash_str,
             "name": s.name,
@@ -760,7 +770,7 @@ class TorrentEngine:
             "cached": local_size > 1024 * 1024,
             "head_ready": head_ready,
             "peers": s.num_peers,
-            "progress": s.progress * 100,
+            "progress": progress,
             "download_rate": s.download_rate,
             "upload_rate": s.upload_rate,
             "video_file": os.path.basename(info["video_path"]) if info["video_path"] else None,
