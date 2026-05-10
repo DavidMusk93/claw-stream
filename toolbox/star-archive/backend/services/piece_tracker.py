@@ -86,8 +86,13 @@ class PieceStateTracker:
         # Scan filesystem once to bootstrap verified pieces
         self._bootstrap_from_filesystem()
 
-        # Overlay libtorrent have_piece (may be stale, but gives a baseline)
-        self._overlay_have_piece()
+        # Sync with libtorrent have_piece.
+        # If torrent is NOT checking_files, have_piece is reliable after recheck.
+        # Use strict=True to override false VERIFIED from zero-filled blocks.
+        # If still checking, have_piece may be stale — use incremental sync only.
+        status = handle.status()
+        checking = getattr(status, "state", None) == lt.torrent_status.checking_files
+        self._overlay_have_piece(strict=not checking)
 
         log.debug(
             "PieceStateTracker init",
