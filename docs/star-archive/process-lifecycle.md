@@ -18,8 +18,10 @@ Star Archive 前后端均为 **systemd 托管的长期运行服务**，通过 Ca
 | 服务 | 端口 | 进程 | systemd unit | 说明 |
 |------|------|------|--------------|------|
 | Frontend | 3000 | `node .output/server/index.mjs` | `star-archive-frontend.service` | Nuxt 3 SSR 生产构建 |
-| Backend | 8765 | `python -m uvicorn backend.main:app` | `star-archive-backend.service` | FastAPI + libtorrent |
+| Backend | 8765 | `uvicorn backend.main:app` | `star-archive-backend.service` | FastAPI + libtorrent |
 | Caddy | 443 | `caddy` | `caddy-claw.service` | HTTPS 反向代理 |
+
+---
 
 ## 2. 修改代码后的重启规则
 
@@ -43,6 +45,8 @@ systemctl restart star-archive-frontend
 systemctl restart star-archive-backend
 ```
 
+> 不要手动 `pkill` + `nohup &` 启动。所有进程由 systemd 托管。
+
 ### Caddy
 
 **`Caddyfile` 或 TLS 配置变更后需要重载或重启。**
@@ -52,6 +56,8 @@ systemctl reload caddy-claw
 # 或
 systemctl restart caddy-claw
 ```
+
+---
 
 ## 3. systemd 服务配置
 
@@ -98,6 +104,8 @@ User=root
 WantedBy=multi-user.target
 ```
 
+---
+
 ## 4. 常用运维命令
 
 ```bash
@@ -117,6 +125,8 @@ systemctl restart star-archive-frontend
 ss -tlnp | grep -E '3000|8765|443'
 ```
 
+---
+
 ## 5. 启动顺序依赖
 
 ```
@@ -126,8 +136,7 @@ network.target
               └─ caddy-claw.service (反向代理到 3000/8765)
 ```
 
-- Frontend 依赖 Backend（`Wants`）：若后端未启动，前端仍能启动，但 API 调用会失败。
-- Caddy 独立运行：配置中 `reverse_proxy localhost:3000` 和 `reverse_proxy localhost:8765`，无需 systemd 层面的 `After` 依赖。
+---
 
 ## 6. 日志文件位置
 
@@ -139,13 +148,3 @@ network.target
 | Piece 追踪 | `logs/piece-tracker.log` | PieceStateTracker 状态变化 |
 | 前端 | `logs/frontend.log` | Nuxt 运行时日志 |
 | systemd | `journalctl` | 进程启动/崩溃/重启记录 |
-
-## 7. 故障排查速查
-
-| 现象 | 排查步骤 |
-|------|----------|
-| 前端 502/404 | `systemctl status star-archive-frontend` → 检查 `npm run build` 是否执行 |
-| API 无响应 | `systemctl status star-archive-backend` → 检查 `logs/torrent-engine.log` |
-| 视频无法播放 | 检查 `logs/video-stream.log` 的 hole timeout 和 `state=finished` 记录 |
-| 缓存显示 100% 但实际未完成 | 见 `ui-design.md` 与 `logs/torrent-engine.log` 的 progress 修正逻辑 |
-| HTTPS 证书错误 | `systemctl status caddy-claw` → 检查 `/var/log/caddy/` |

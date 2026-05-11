@@ -38,3 +38,4 @@ test-*.js
 .DS_Store
 __pycache__/
 toolbox/star-archive/logs/
+!docs/AGENTS.md
