@@ -354,35 +354,157 @@ class TorrentEngine:
         end_piece = (file_offset + prefetch_bytes) // piece_length
         return start_piece, end_piece
 
+    # ── Tiered cache scoring ────────────────────────────────
+
+    def _get_tier(self, info: dict[str, Any]) -> str:
+        """Classify torrent into L1/L2/L3/L4 based on value.
+
+        L1 (hot):     played within 24h  → never evict
+        L2 (warm):    100% complete + accessed within 7d
+        L3 (seed):    100% complete + cold (>7d)
+        L4 (fragment): incomplete + cold  → punch hole or evict
+        """
+        now = time.time()
+        last_play = info.get("_last_play_time", 0)
+        last_access = info["last_access"]
+        progress = info.get("progress", 0)
+
+        if last_play and now - last_play < 86400:
+            return "hot"
+        if progress >= 99.9:
+            if last_access and now - last_access < 604800:
+                return "warm"
+            return "seed"
+        return "fragment"
+
+    def _cache_score(self, info: dict[str, Any]) -> float:
+        """Higher score = more valuable, less evictable.
+
+        Combines: play history, completion, recency, value-per-GB.
+        """
+        now = time.time()
+        last_play = info.get("_last_play_time", 0)
+        last_access = info["last_access"]
+        progress = info.get("progress", 0)
+        size = info.get("video_size", 1024)
+        play_count = info.get("_play_count", 0)
+
+        hours_since_play = (now - last_play) / 3600 if last_play else 9999
+        heat = math.exp(-hours_since_play / 168)  # 7-day half-life
+
+        # Play bonus: played torrents are an order of magnitude more valuable
+        play_bonus = 1000.0 * play_count
+
+        # Completion: 100% = 1000 pts, 50% = 500 pts
+        completion_score = progress * 10
+
+        # Value density: completed 6GB > incomplete 6GB
+        size_gb = size / (1024 ** 3)
+        value_per_gb = (play_bonus + completion_score) / max(size_gb, 0.1)
+
+        return value_per_gb * heat + play_bonus
+
+    def _punch_hole_middle_pieces(self, hash_str: str) -> int:
+        """L4降级: punch holes in non-head-tail pieces to free disk space.
+
+        Returns bytes freed. Only operates on completed (L3) torrents.
+        """
+        info = self.torrents.get(hash_str)
+        if not info:
+            return 0
+        tracker = info.get("tracker")
+        path = info.get("video_path")
+        if not tracker or not path or not os.path.exists(path):
+            return 0
+
+        piece_length = tracker.piece_length
+        file_offset = tracker.file_offset
+        freed = 0
+
+        # Protect head+tail (30 pieces each side)
+        head_end = tracker.start_piece + 30
+        tail_start = tracker.end_piece - 30
+
+        fd = os.open(path, os.O_WRONLY)
+        try:
+            for p in range(tracker.start_piece, tracker.end_piece + 1):
+                if p < head_end or p > tail_start:
+                    continue
+                if not tracker.is_verified(p):
+                    continue
+                start = p * piece_length - file_offset
+                length = piece_length
+                try:
+                    os.fallocate(fd, os.FALLOC_FL_PUNCH_HOLE | os.FALLOC_FL_KEEP_SIZE, start, length)
+                    freed += length
+                except OSError:
+                    pass
+        finally:
+            os.close(fd)
+
+        if freed > 0:
+            tracker._bootstrap_from_filesystem()
+            log.info(
+                f"punch hole: {hash_str[:12]}... freed {format_size(freed)} "
+                f"(kept head+tail {format_size(30 * piece_length * 2)})"
+            )
+        return freed
+
     def _enforce_cache_limit(self) -> None:
-        """LRU 缓存淘汰：当使用量超过 80% 限制时删除最旧的 torrent。"""
+        """Tiered cache eviction: progressive, score-based, with L1 protection.
+
+        Target: 95% soft limit. When exceeded, evict ONE lowest-score torrent
+        per cycle. L1 (hot) torrents are never evicted. L3 torrents are
+        downgraded to L4 (punch hole) before full eviction.
+        """
         total = self._get_cache_size()
-        threshold = int(self.max_size_bytes * 0.8)
+        threshold = int(self.max_size_bytes * 0.95)
         if total <= threshold:
             return
 
-        log.warning(f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}")
+        log.warning(
+            f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}"
+        )
 
         with self.lock:
-            # Sort by last_access ascending (oldest first)
-            candidates = sorted(
-                self.torrents.items(),
-                key=lambda x: x[1]["last_access"]
-            )
+            candidates = [
+                (h, i) for h, i in self.torrents.items()
+                if self._get_tier(i) != "hot"  # L1 never evicted
+            ]
 
-        freed = 0
-        for hash_str, info in candidates:
-            if total - freed <= threshold:
-                break
-            # Protect torrents playing within 5 minutes
-            if time.time() - info["last_access"] < 300:
-                continue
-            log.info(f"evicting torrent {hash_str[:12]}... (last_access {int(time.time() - info['last_access'])}s ago)")
-            self.remove_torrent(hash_str)
-            # remove_torrent deleted files, recalculate
-            freed = total - self._get_cache_size()
+        if not candidates:
+            log.info("all torrents are L1 hot, skipping eviction")
+            return
 
-        log.info(f"cache eviction done: freed {format_size(freed)}, current {format_size(self._get_cache_size())}")
+        # Sort by score ascending (least valuable first)
+        candidates.sort(key=lambda x: self._cache_score(x[1]))
+        hash_str, info = candidates[0]
+
+        tier = self._get_tier(info)
+
+        # L3 (completed, cold) → punch hole before full eviction
+        if tier == "seed" and info.get("progress", 0) >= 99.9:
+            freed = self._punch_hole_middle_pieces(hash_str)
+            if freed > 0:
+                new_size = self._get_cache_size()
+                log.info(
+                    f"eviction: downgraded {hash_str[:12]}... L3→L4, "
+                    f"freed {format_size(freed)}, current {format_size(new_size)}"
+                )
+                if new_size <= threshold:
+                    return
+
+        # L2/L4 or punch-hole-insufficient L3 → full eviction
+        log.info(
+            f"evicting torrent {hash_str[:12]}... "
+            f"(tier={tier}, score={self._cache_score(info):.0f}, "
+            f"size={format_size(info.get('video_size', 0))})"
+        )
+        self.remove_torrent(hash_str)
+        new_size = self._get_cache_size()
+        log.info(
+            f"cache eviction done: current {format_size(new_size)}"
+        )
 
     def add_torrent(self, magnet: str, prefetch: bool = False) -> dict[str, Any] | None:
         """添加一个 magnet 链接到下载队列。"""
@@ -441,6 +563,9 @@ class TorrentEngine:
             "ready": False,
             "prefetch": prefetch,
             "work_code": _extract_work_code(magnet) or None,
+            "_last_play_time": 0,
+            "_play_count": 0,
+            "progress": 0.0,
         }
         with self.lock:
             self.torrents[hash_str] = info
@@ -868,6 +993,9 @@ class TorrentEngine:
             if info.get("video_size", 0) > 0:
                 progress = (local_size / info["video_size"]) * 100
 
+        # Persist progress for tiered cache scoring
+        info["progress"] = progress
+
         return {
             "hash": hash_str,
             "name": s.name,
@@ -885,6 +1013,7 @@ class TorrentEngine:
             "mime": mime,
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
+            "tier": self._get_tier(info),
         }
 
     def touch(self, hash_str: str) -> None:

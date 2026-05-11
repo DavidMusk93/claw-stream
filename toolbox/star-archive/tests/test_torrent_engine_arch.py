@@ -233,6 +233,112 @@ class TestBootstrapFirstVerification(unittest.TestCase):
         )
 
 
+class TestTieredCacheClassification(unittest.TestCase):
+    """Tiered cache: L1 hot / L2 warm / L3 seed / L4 fragment."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _make_info(self, **overrides) -> dict[str, Any]:
+        defaults: dict[str, Any] = {
+            "last_access": time.time(),
+            "_last_play_time": 0,
+            "_play_count": 0,
+            "progress": 0.0,
+            "video_size": 6 * 1024 ** 3,
+        }
+        defaults.update(overrides)
+        return defaults
+
+    def test_tier_hot_when_played_within_24h(self) -> None:
+        info = self._make_info(_last_play_time=time.time() - 3600, progress=50)
+        self.assertEqual(self.engine._get_tier(info), "hot")
+
+    def test_tier_warm_when_completed_and_recent(self) -> None:
+        info = self._make_info(progress=100, last_access=time.time() - 86400)
+        self.assertEqual(self.engine._get_tier(info), "warm")
+
+    def test_tier_seed_when_completed_and_cold(self) -> None:
+        info = self._make_info(progress=100, last_access=time.time() - 900000)
+        self.assertEqual(self.engine._get_tier(info), "seed")
+
+    def test_tier_fragment_when_incomplete(self) -> None:
+        info = self._make_info(progress=50, last_access=time.time() - 900000)
+        self.assertEqual(self.engine._get_tier(info), "fragment")
+
+    def test_hot_overrides_warm(self) -> None:
+        """Played within 24h is always hot, even if 100% complete."""
+        info = self._make_info(
+            _last_play_time=time.time() - 3600,
+            progress=100,
+            last_access=time.time() - 900000,
+        )
+        self.assertEqual(self.engine._get_tier(info), "hot")
+
+    def test_cache_score_play_bonus(self) -> None:
+        """Played torrents have dramatically higher score."""
+        played = self._make_info(_play_count=1, _last_play_time=time.time() - 3600)
+        unplayed = self._make_info(_play_count=0)
+        self.assertGreater(
+            self.engine._cache_score(played),
+            self.engine._cache_score(unplayed) * 10,
+            "played torrent must be 10x more valuable than unplayed",
+        )
+
+    def test_cache_score_completion(self) -> None:
+        """100% complete > 50% complete > 0% complete."""
+        complete = self._make_info(progress=100)
+        half = self._make_info(progress=50)
+        empty = self._make_info(progress=0)
+        self.assertGreater(self.engine._cache_score(complete), self.engine._cache_score(half))
+        self.assertGreater(self.engine._cache_score(half), self.engine._cache_score(empty))
+
+    def test_cache_score_heat_decay(self) -> None:
+        """Older play time = lower score (exponential decay)."""
+        recent = self._make_info(_play_count=1, _last_play_time=time.time() - 1)
+        old = self._make_info(_play_count=1, _last_play_time=time.time() - 86400 * 14)
+        self.assertGreater(self.engine._cache_score(recent), self.engine._cache_score(old))
+
+    def test_tier_returned_in_get_status(self) -> None:
+        """get_status must include tier field."""
+        handle = MockTorrentHandle(state=lt.torrent_status.downloading)
+        hash_str = "d" * 40
+        handle._hash = hash_str
+        video_dir = os.path.join(self.temp_dir, hash_str)
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, "video.mp4")
+        _make_minimal_mp4(video_path)
+        handle._save_path = video_dir
+
+        info: dict[str, object] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": video_path,
+            "video_size": 10 * 2_097_152,
+            "ready": True,
+            "prefetch": False,
+            "_play_count": 0,
+            "_last_play_time": 0,
+            "progress": 0.0,
+        }
+        self.engine.torrents[hash_str] = info
+
+        status = self.engine.get_status(hash_str)
+        self.assertIsNotNone(status)
+        self.assertIn("tier", status)
+        self.assertEqual(status["tier"], "fragment")
+
+
 class TestTouchPreventsGCEviction(unittest.TestCase):
     """Architecture: touch() updates last_access so GC knows torrent is active."""
 

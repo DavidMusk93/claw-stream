@@ -70,6 +70,13 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     # GC protection: any stream request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
 
+    # Tiered cache: mark this torrent as actively played
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if info:
+        info["_last_play_time"] = _time.time()
+        info["_play_count"] = info.get("_play_count", 0) + 1
+
     # Protect against reading while libtorrent is checking files (may zero pieces)
     t2 = _time.perf_counter()
     is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
