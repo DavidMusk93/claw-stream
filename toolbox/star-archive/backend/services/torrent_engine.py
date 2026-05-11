@@ -274,6 +274,7 @@ class TorrentEngine:
         settings["download_rate_limit"] = 0
         settings["upload_rate_limit"] = 0
         settings["checking_mem_usage"] = 1024  # 1GB RAM for faster hash checking
+        settings["alert_queue_size"] = 10000  # prevent alert drop under load
         self.session.apply_settings(settings)
 
         # hash -> { handle, magnet, added_at, last_access, video_idx, video_path, video_size }
@@ -490,7 +491,19 @@ class TorrentEngine:
             hash_str = str(h.info_hash())
             with self.lock:
                 if hash_str in self.torrents:
-                    self.torrents[hash_str]["ready"] = True
+                    info = self.torrents[hash_str]
+                    tracker = info.get("tracker")
+                    # libtorrent may enter finished state before write cache
+                    # is flushed to disk (have_piece true but filesystem hole).
+                    # If moov isn't ready, force recheck so have_piece syncs
+                    # with actual disk state.
+                    if tracker and not tracker.head_ready():
+                        log.warning(
+                            f"finished but head not ready: {hash_str[:12]}... force recheck"
+                        )
+                        h.force_recheck()
+                    else:
+                        info["ready"] = True
         elif isinstance(alert, lt.piece_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -499,6 +512,12 @@ class TorrentEngine:
                     tracker = self.torrents[hash_str].get("tracker")
                     if tracker:
                         tracker.on_piece_finished(alert.piece_index)
+                        if tracker.start_piece <= alert.piece_index <= tracker.end_piece:
+                            log.info(
+                                f"piece finished: {hash_str[:12]}... piece={alert.piece_index} "
+                                f"verified={tracker.verified_count()}/{tracker.end_piece - tracker.start_piece + 1} "
+                                f"head_ready={tracker.head_ready()}"
+                            )
         elif isinstance(alert, lt.hash_failed_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -547,6 +566,22 @@ class TorrentEngine:
         if info.get("video_path") and os.path.exists(info["video_path"]):
             if "moov_end" not in info:
                 moov_start, moov_end = _scan_mp4_moov(info["video_path"])
+                # Tail-moov fallback: if the file is too small for _scan_mp4_moov
+                # to find moov, assume moov is in the last 30 pieces (tail).
+                # This allows head_ready() to track progress before moov data
+                # is physically on disk (libtorrent write cache may delay flush).
+                if moov_end == 0 and info.get("tracker"):
+                    tracker = info["tracker"]
+                    tail_start = max(
+                        tracker.start_piece,
+                        tracker.end_piece - 30 + 1,
+                    )
+                    moov_start = tail_start * tracker.piece_length - tracker.file_offset
+                    moov_end = info["video_size"]
+                    log.info(
+                        f"tail-moov fallback: {hash_str[:12]}... "
+                        f"assumed moov in tail pieces {tail_start}-{tracker.end_piece}"
+                    )
                 info["moov_start"] = moov_start
                 info["moov_end"] = moov_end
                 if info.get("tracker") and moov_end > 0:
@@ -691,7 +726,7 @@ class TorrentEngine:
         if tracker:
             count = tracker.request_head_tail(head_count=30, tail_count=30)
             log.info(
-                f"play priority: {info['hash'][:12]}... head+tail via tracker",
+                f"play priority: {info['hash'][:12]}... head+tail via tracker ({count} pcs)",
                 extra={"requested_pieces": count},
             )
             return True
@@ -748,6 +783,9 @@ class TorrentEngine:
         if not info:
             return None
 
+        # Keep alive: any status query from frontend counts as activity.
+        info["last_access"] = time.time()
+
         h = info["handle"]
         s = h.status()
 
@@ -764,18 +802,28 @@ class TorrentEngine:
         # _on_metadata caches moov into info; if missing fall back to fs scan.
         tracker = info.get("tracker")
         if tracker and local_path:
+            # Periodic sync: libtorrent may drop piece_finished_alert under
+            # heavy load. Re-sync have_piece to tracker so head_ready stays
+            # accurate. Use incremental sync (strict=False) to avoid undoing
+            # strict recheck results.
+            tracker._overlay_have_piece(strict=False)
             if tracker._moov_pc > 0:
                 head_ready = tracker.head_ready()
             else:
-                # Fallback: moov not yet cached (rare, new torrent or scan failed)
+                # Fallback: moov not yet cached (new torrent or scan failed)
                 moov_start, moov_end = _scan_mp4_moov(local_path)
-                if moov_end > 0:
-                    info["moov_start"] = moov_start
-                    info["moov_end"] = moov_end
-                    tracker.set_moov_range(moov_start, moov_end)
-                    head_ready = tracker.head_ready()
-                else:
-                    head_ready = head_ready_fs
+                if moov_end == 0:
+                    # Tail-moov fallback: assume moov is in the last 30 pieces
+                    tail_start = max(
+                        tracker.start_piece,
+                        tracker.end_piece - 30 + 1,
+                    )
+                    moov_start = tail_start * tracker.piece_length - tracker.file_offset
+                    moov_end = info["video_size"]
+                info["moov_start"] = moov_start
+                info["moov_end"] = moov_end
+                tracker.set_moov_range(moov_start, moov_end)
+                head_ready = tracker.head_ready()
         else:
             head_ready = head_ready_fs
 

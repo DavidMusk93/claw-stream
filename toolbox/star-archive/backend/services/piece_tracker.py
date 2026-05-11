@@ -178,13 +178,17 @@ class PieceStateTracker:
             while offset < file_end:
                 piece = offset // piece_len
                 piece_end = min((piece + 1) * piece_len, file_end)
+                # fd is the video file; lseek offset must be relative to
+                # the video file, not the torrent's absolute offset.
+                offset_in_file = offset - self.file_offset
+                piece_end_in_file = piece_end - self.file_offset
 
                 try:
-                    hole = os.lseek(fd, offset, os.SEEK_HOLE)
+                    hole = os.lseek(fd, offset_in_file, os.SEEK_HOLE)
                 except OSError:
                     break
 
-                if hole >= piece_end:
+                if hole >= piece_end_in_file:
                     # Entire piece has data — safe to mark VERIFIED
                     self._verified |= (1 << piece)
                 # Partial data is NOT marked: libtorrent may have zeroed
@@ -202,13 +206,18 @@ class PieceStateTracker:
         避免破坏 tracker 自身的 DOWNLOADING / VERIFIED / CORRUPT 状态。
 
         strict=True 时做双向同步：have_piece 为 false 的 piece 强制重置为
-        NOT_DOWNLOADED。用于 torrent_checked_alert 之后，因为此时
-        have_piece 是最准确的，可修正 _bootstrap_from_filesystem 因 zeros
-        占据磁盘块而误标的 VERIFIED。
+        NOT_DOWNLOADED；have_piece 为 true 但 _bootstrap 未标记的 piece
+        不强制标记（防止 recheck 时 page cache 误报）。
+        用于 torrent_checked_alert 之后。
         """
         for p in range(self.start_piece, self.end_piece + 1):
             if self.handle.have_piece(p):
                 if not (self._verified & (1 << p)):
+                    # Strict mode: only trust have_piece if filesystem scan
+                    # already confirmed data. Prevents page-cache false positives
+                    # where libtorrent recheck reads stale cached zeros as valid.
+                    if strict:
+                        continue
                     self._set_verified(p)
             elif strict and (self._verified & (1 << p)):
                 # recheck 完成后 have_piece 为 false 说明该 piece 未通过校验
@@ -284,15 +293,35 @@ class PieceStateTracker:
         unavailable = (self._verified | self._downloading) & mask
         need = (mask & ~unavailable) >> start  # align LSB to piece 'start'
 
+        # Batch set priorities via prioritize_pieces — piece_priority() is
+        # unreliable in libtorrent Python bindings (often silently ignored).
+        pieces_to_set = []
+        p = start
+        temp = need
+        while temp:
+            if temp & 1:
+                pieces_to_set.append(p)
+            temp >>= 1
+            p += 1
+
+        if pieces_to_set:
+            prios = list(self.handle.piece_priorities())
+            for p in pieces_to_set:
+                self.handle.set_piece_deadline(p, 0)
+                if prios[p] != 7:
+                    prios[p] = 7
+            self.handle.prioritize_pieces(prios)
+
         count = 0
         p = start
         while need:
             if need & 1:
-                self.handle.set_piece_deadline(p, 0)
-                old = self.handle.piece_priority(p)
-                if old != 7:
-                    self.handle.piece_priority(p, 7)
-                self._set_downloading(p)
+                # If libtorrent already has this piece (e.g. recheck left it
+                # complete), mark VERIFIED immediately instead of DOWNLOADING.
+                if self.handle.have_piece(p):
+                    self._set_verified(p)
+                else:
+                    self._set_downloading(p)
                 count += 1
             need >>= 1
             p += 1
