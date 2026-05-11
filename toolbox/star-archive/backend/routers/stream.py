@@ -67,6 +67,14 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
 
+    # Block streaming during hash recheck to avoid reading inconsistent data
+    if _is_torrent_checking(engine, hash_str):
+        raise HTTPException(
+            status_code=503,
+            detail="Torrent is checking files",
+            headers={"Retry-After": "10"},
+        )
+
     # GC protection: any stream request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
 
@@ -158,6 +166,10 @@ async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
 
     # GC protection: any check request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
+
+    # Conservatively report not-ready during hash recheck
+    if _is_torrent_checking(engine, hash_str):
+        head_ready_fs = False
 
     # Allow playback if filesystem head is ready, even during recheck.
     # Recheck only re-validates hashes; already-downloaded head data is safe.

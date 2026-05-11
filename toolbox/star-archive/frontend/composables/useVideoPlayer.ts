@@ -69,33 +69,24 @@ export function useVideoPlayer() {
     const start = Date.now()
     logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} start`)
 
+    // Ensure torrent is added once before polling.
+    // add_torrent is idempotent; if already added it returns immediately.
+    try {
+      await $fetch('/torrent/add', {
+        baseURL: config.public.apiBase,
+        method: 'POST',
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        body: { magnet: `magnet:?xt=urn:btih:${hash}` },
+      })
+    } catch {
+      // already added or other error
+    }
+
     while (Date.now() - start < timeoutSec * 1000) {
       if (await checkHeadReady(hash)) {
-        // Ensure torrent is in engine so seek_priority can set piece priorities.
-        // add_torrent is idempotent; if already added it returns immediately.
-        try {
-          await $fetch('/torrent/add', {
-            baseURL: config.public.apiBase,
-            method: 'POST',
-            headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
-            body: { magnet: `magnet:?xt=urn:btih:${hash}` },
-          })
-        } catch {
-          // already added or other error
-        }
         loading.value = false
         logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} success in ${((Date.now() - start) / 1000).toFixed(1)}s`)
         return true
-      }
-      try {
-        await $fetch('/torrent/add', {
-          baseURL: config.public.apiBase,
-          method: 'POST',
-          headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
-          body: { magnet: `magnet:?xt=urn:btih:${hash}` },
-        })
-      } catch {
-        // already added or other error
       }
       await new Promise(r => setTimeout(r, 1500))
     }

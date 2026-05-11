@@ -720,7 +720,7 @@ class TorrentEngine:
                         tracker.start_piece,
                         tracker.end_piece - 30 + 1,
                     )
-                    moov_start = tail_start * tracker.piece_length - tracker.file_offset
+                    moov_start = max(0, tail_start * tracker.piece_length - tracker.file_offset)
                     moov_end = info["video_size"]
                     log.info(
                         f"tail-moov fallback: {hash_str[:12]}... "
@@ -999,7 +999,7 @@ class TorrentEngine:
                         tracker.start_piece,
                         tracker.end_piece - 30 + 1,
                     )
-                    moov_start = tail_start * tracker.piece_length - tracker.file_offset
+                    moov_start = max(0, tail_start * tracker.piece_length - tracker.file_offset)
                     moov_end = info["video_size"]
                 info["moov_start"] = moov_start
                 info["moov_end"] = moov_end
@@ -1134,7 +1134,17 @@ class TorrentEngine:
             log.info(f"orphaned cleanup done: freed {format_size(freed)}")
 
     def shutdown(self) -> None:
-        """关闭引擎，停止 alert 处理线程。"""
+        """关闭引擎，停止后台线程并释放 libtorrent session 资源。"""
         self._stop = True
         self._alert_thread.join(timeout=5)
         self._clean_thread.join(timeout=5)
+        self._preload_thread.join(timeout=5)
+        # Remove all torrents to release file handles (critical in tests)
+        for hash_str in list(self.torrents.keys()):
+            try:
+                info = self.torrents.get(hash_str)
+                if info and info.get("handle"):
+                    self.session.remove_torrent(info["handle"])
+            except Exception:
+                pass
+        self.session.pause()

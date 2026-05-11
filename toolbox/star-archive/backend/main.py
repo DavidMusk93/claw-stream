@@ -137,8 +137,8 @@ app.include_router(test_router)
 if os.path.exists(IMAGES_DIR):
     app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
-if os.path.exists(CACHE_DIR):
-    app.mount("/cache", StaticFiles(directory=CACHE_DIR), name="cache")
+# NOTE: /cache is intentionally NOT mounted as StaticFiles to prevent
+# direct download of video files. Use /api/cache/* and /stream/* instead.
 
 
 @app.get("/api/health")

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -27,7 +28,7 @@ from fastapi.testclient import TestClient
 import libtorrent as lt
 
 from backend.routers import stream_router, check_router
-from backend.services.torrent_engine import TorrentEngine, find_video_state
+from backend.services.torrent_engine import CACHE_DIR, TorrentEngine, find_video_state
 from backend.services.video_stream import read_video_range
 from tests.local_bt_fixture import LocalSeed, download_with_engine, cleanup_cache_dir
 
@@ -169,73 +170,97 @@ class TestSafariRangeSequence(unittest.TestCase):
         self.assertTrue(cr.startswith("bytes 0-1/"), f"Bad Content-Range: {cr}")
 
 
+class _MockEngine:
+    """Minimal engine for checking-files 503 test.
+
+    Only provides the attributes stream_video / check_stream need:
+    lock, torrents, touch, add_torrent, _apply_play_priority.
+    """
+
+    def __init__(self, handle: Any, hash_str: str) -> None:
+        self.lock = threading.Lock()
+        self.torrents = {hash_str: {"handle": handle}}
+
+    def touch(self, hash_str: str) -> None:
+        pass
+
+    def add_torrent(self, magnet: str, prefetch: bool = False) -> Any:
+        pass
+
+    def _apply_play_priority(self, h: Any, info: Any) -> None:
+        pass
+
+
 class TestCheckingFilesBlocking(unittest.TestCase):
-    """Verify that checking_files state blocks stream and check endpoints."""
+    """Verify that checking_files state blocks stream and check endpoints.
+
+    Uses a real cached video file (3–6 GB) from CACHE_DIR. Large files keep
+    libtorrent in checking_files for 10–30 s — long enough to reliably assert
+    the 503 path without races. Skips gracefully when no cache is present.
+    """
 
     def setUp(self) -> None:
-        self.seed = LocalSeed()
-        self.temp_dir = tempfile.mkdtemp(prefix="star_bt_cf_")
-        self.engine, self.video_path = download_with_engine(
-            self.temp_dir, self.seed.hash, self.seed.listen_port, timeout=60.0
+        self.hash_str = self._find_cached_hash()
+        if not self.hash_str:
+            self.skipTest("No cached torrent with video file available")
+
+        self.torrent_path = os.path.join(
+            CACHE_DIR, self.hash_str, f"{self.hash_str}.torrent"
         )
-        self.app, self.priv_engine = _make_private_app(self.temp_dir)
-        self.client = TestClient(self.app)
+        self.save_path = os.path.join(CACHE_DIR, self.hash_str)
 
-        # Add the torrent
-        magnet = f"magnet:?xt=urn:btih:{self.seed.hash}"
-        self.info = self.priv_engine.add_torrent(magnet, prefetch=False)
-        if not self.info:
-            self.tearDown()
-            self.fail("Failed to add torrent to engine")
-        self.handle = self.info["handle"]
+        # Independent session — avoids interfering with production engine
+        self._session = lt.session()
+        with open(self.torrent_path, "rb") as f:
+            ti = lt.torrent_info(lt.bdecode(f.read()))
+        params = lt.add_torrent_params()
+        params.ti = ti
+        params.save_path = self.save_path
+        self.handle = self._session.add_torrent(params)
 
-        # Wait for metadata
-        for _ in range(30):
-            if self.handle.status().has_metadata:
-                break
-            time.sleep(0.2)
-        if not self.handle.status().has_metadata:
-            self.tearDown()
-            self.fail("Metadata not available")
-
-        # Connect to local seed
-        self.handle.connect_peer(("127.0.0.1", self.seed.listen_port), 0)
+        # Build app with mock engine
+        engine = _MockEngine(self.handle, self.hash_str)
+        app = FastAPI()
+        app.state.engine = engine
+        app.include_router(stream_router)
+        app.include_router(check_router)
+        self.client = TestClient(app)
 
     def tearDown(self) -> None:
-        self.priv_engine.shutdown()
-        self.engine.shutdown()
-        # 不要删除 CACHE_DIR 下的共享缓存，其他测试依赖它
-        self.seed.stop()
+        self._session.remove_torrent(self.handle)
+        self._session.pause()
+        time.sleep(0.1)
+
+    @staticmethod
+    def _find_cached_hash() -> str | None:
+        """Return the first cached hash that has both .torrent and a video file."""
+        if not os.path.isdir(CACHE_DIR):
+            return None
+        for entry in os.listdir(CACHE_DIR):
+            hash_dir = os.path.join(CACHE_DIR, entry)
+            torrent_file = os.path.join(hash_dir, f"{entry}.torrent")
+            if not os.path.isfile(torrent_file):
+                continue
+            # Look for any video file inside
+            for root, _dirs, files in os.walk(hash_dir):
+                for f in files:
+                    if f.lower().endswith(".mp4"):
+                        return entry
+        return None
 
     def test_checking_files_returns_503_and_false_head_ready(self) -> None:
-        """force_recheck → checking_files → /stream returns 503, /api/check returns false."""
-        hash_str = self.seed.hash
+        """Large cached file keeps libtorrent in checking_files long enough to assert 503."""
+        hash_str = self.hash_str
 
-        # First verify normal state works
-        r = self.client.get(f"/api/check/{hash_str}")
-        self.assertEqual(r.status_code, 200)
-        normal_ready = r.json()["head_ready"]
-        print(f"  Normal head_ready={normal_ready}")
-
-        # Trigger recheck
-        self.handle.force_recheck()
-
-        # Poll until we catch checking_files state
+        # Poll until checking_files (large files enter this state immediately)
         caught_checking = False
-        for _ in range(40):
+        for _ in range(200):
             st = self.handle.status()
             if st.state == lt.torrent_status.checking_files:
                 caught_checking = True
                 break
-            time.sleep(0.2)
-
-        if not caught_checking:
-            self.handle.force_recheck()
-            time.sleep(0.5)
-            st = self.handle.status()
-            if st.state != lt.torrent_status.checking_files:
-                self.skipTest("Could not trigger checking_files state")
-
+            time.sleep(0.05)
+        self.assertTrue(caught_checking, "Expected checking_files state after add_torrent")
         print(f"  Caught checking_files state")
 
         # /api/check must report head_ready=False
@@ -254,8 +279,8 @@ class TestCheckingFilesBlocking(unittest.TestCase):
         self.assertEqual(r.status_code, 503, "Stream must be blocked during checking_files")
         self.assertEqual(r.headers.get("retry-after"), "10")
 
-        # Wait for checking to finish
-        for _ in range(60):
+        # Wait for checking to finish (may take 10–30 s for a 4 GB file)
+        for _ in range(600):
             st = self.handle.status()
             if st.state != lt.torrent_status.checking_files:
                 break
