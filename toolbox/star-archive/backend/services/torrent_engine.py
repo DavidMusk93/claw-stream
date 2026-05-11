@@ -516,8 +516,11 @@ class TorrentEngine:
             existing = self.torrents.get(hash_str)
         if existing:
             existing["last_access"] = time.time()
-            # Re-pick video file in case logic changed (outside lock to avoid deadlock)
-            if existing["handle"].status().has_metadata:
+            # Only re-run _on_metadata if tracker is missing (first time metadata
+            # becomes available after a bare-hash add). Repeated _on_metadata
+            # calls spam logs, overwrite .torrent files, and can race with
+            # bootstrap/recheck state transitions.
+            if existing["handle"].status().has_metadata and not existing.get("tracker"):
                 self._on_metadata(existing["handle"])
             return existing
 
@@ -623,10 +626,24 @@ class TorrentEngine:
                     # If moov isn't ready, force recheck so have_piece syncs
                     # with actual disk state.
                     if tracker and not tracker.head_ready():
-                        log.warning(
-                            f"finished but head not ready: {hash_str[:12]}... force recheck"
-                        )
-                        h.force_recheck()
+                        # Rate-limit recheck to prevent infinite loops when
+                        # filesystem holes persist (page-cache vs disk mismatch).
+                        now = time.time()
+                        recheck_count = info.get("_recheck_count", 0)
+                        last_recheck = info.get("_last_recheck_time", 0)
+                        if recheck_count >= 3 or now - last_recheck < 60:
+                            log.warning(
+                                f"finished but head not ready: {hash_str[:12]}... "
+                                f"skipping recheck (count={recheck_count}, "
+                                f"last={int(now - last_recheck)}s ago)"
+                            )
+                        else:
+                            info["_recheck_count"] = recheck_count + 1
+                            info["_last_recheck_time"] = now
+                            log.warning(
+                                f"finished but head not ready: {hash_str[:12]}... force recheck"
+                            )
+                            h.force_recheck()
                     else:
                         info["ready"] = True
         elif isinstance(alert, lt.piece_finished_alert):
@@ -781,6 +798,8 @@ class TorrentEngine:
                 # Slow path: bootstrap shows missing data or stale have_pieces
                 handle.force_recheck()
                 info["_recheck_done"] = True
+                info["_recheck_count"] = info.get("_recheck_count", 0) + 1
+                info["_last_recheck_time"] = time.time()
                 log.info(
                     f"recheck triggered: {hash_str[:12]}... (finished state, bootstrap shows missing)"
                 )

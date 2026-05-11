@@ -513,5 +513,180 @@ class TestCacheWarmingRetry(unittest.TestCase):
         )
 
 
+class FakeTorrentFinishedAlert:
+    """Mock alert that looks like lt.torrent_finished_alert to _handle_alert.
+    We patch lt.torrent_finished_alert in tests so isinstance() matches."""
+    def __init__(self, handle: MockTorrentHandle) -> None:
+        self.handle = handle
+
+
+class TestRecheckRateLimit(unittest.TestCase):
+    """IPZZ-802 regression: torrent_finished_alert must not infinitely recheck
+    when filesystem holes persist (page-cache vs disk mismatch)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _inject_torrent(self, head_ready: bool = False) -> tuple[MockTorrentHandle, dict[str, object], str]:
+        hash_str = "e" * 40
+        handle = MockTorrentHandle(state=lt.torrent_status.finished)
+        handle._hash = hash_str
+        tracker = MockTracker(head_ready_val=head_ready, moov_pc=5)
+
+        video_dir = os.path.join(self.temp_dir, hash_str)
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, "video.mp4")
+        _make_minimal_mp4(video_path)
+        handle._save_path = video_dir
+
+        info: dict[str, object] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": video_path,
+            "video_size": 10 * 2_097_152,
+            "ready": False,
+            "prefetch": False,
+            "tracker": tracker,
+        }
+        self.engine.torrents[hash_str] = info
+        return handle, info, hash_str
+
+    def _dispatch_finished_alert(self, handle: MockTorrentHandle) -> None:
+        """Send a fake torrent_finished_alert through _handle_alert."""
+        alert = FakeTorrentFinishedAlert(handle)
+        with patch.object(lt, "torrent_finished_alert", FakeTorrentFinishedAlert):
+            self.engine._handle_alert(alert)
+
+    def test_finished_alert_triggers_recheck_first_time(self) -> None:
+        """First torrent_finished_alert with head not ready → recheck allowed."""
+        handle, info, hash_str = self._inject_torrent(head_ready=False)
+        self._dispatch_finished_alert(handle)
+
+        self.assertTrue(handle._force_recheck_called, "first alert must trigger recheck")
+        self.assertEqual(info.get("_recheck_count"), 1)
+
+    def test_finished_alert_limits_recheck_to_three(self) -> None:
+        """After 3 rechecks, further torrent_finished_alert must skip."""
+        handle, info, hash_str = self._inject_torrent(head_ready=False)
+        info["_recheck_count"] = 3
+        info["_last_recheck_time"] = time.time() - 120
+        self._dispatch_finished_alert(handle)
+
+        self.assertFalse(handle._force_recheck_called, "must skip recheck after 3 attempts")
+        self.assertEqual(info.get("_recheck_count"), 3)
+
+    def test_finished_alert_throttles_recheck_within_60s(self) -> None:
+        """If last recheck was <60s ago, skip to prevent hammering."""
+        handle, info, hash_str = self._inject_torrent(head_ready=False)
+        info["_recheck_count"] = 1
+        info["_last_recheck_time"] = time.time() - 30
+        self._dispatch_finished_alert(handle)
+
+        self.assertFalse(handle._force_recheck_called, "must throttle recheck within 60s")
+        self.assertEqual(info.get("_recheck_count"), 1)
+
+    def test_finished_alert_allows_recheck_after_60s(self) -> None:
+        """If last recheck was >60s ago and count <3, allow recheck."""
+        handle, info, hash_str = self._inject_torrent(head_ready=False)
+        info["_recheck_count"] = 1
+        info["_last_recheck_time"] = time.time() - 120
+        self._dispatch_finished_alert(handle)
+
+        self.assertTrue(handle._force_recheck_called, "must allow recheck after 60s cooldown")
+        self.assertEqual(info.get("_recheck_count"), 2)
+
+    def test_finished_alert_sets_ready_when_head_ready(self) -> None:
+        """If tracker.head_ready() is true, set ready=True without recheck."""
+        handle, info, hash_str = self._inject_torrent(head_ready=True)
+        self._dispatch_finished_alert(handle)
+
+        self.assertFalse(handle._force_recheck_called, "must not recheck when head ready")
+        self.assertTrue(info.get("ready"), "ready must be True when head ready")
+
+
+class TestAddTorrentExistingNoRerunOnMetadata(unittest.TestCase):
+    """IPZZ-802 regression: repeated add_torrent must not spam _on_metadata."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _inject_existing(self, has_tracker: bool = True) -> tuple[dict[str, object], str]:
+        hash_str = "f" * 40
+        handle = MockTorrentHandle(state=lt.torrent_status.downloading)
+        handle._hash = hash_str
+        video_dir = os.path.join(self.temp_dir, hash_str)
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, "video.mp4")
+        _make_minimal_mp4(video_path)
+        handle._save_path = video_dir
+
+        info: dict[str, object] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": video_path,
+            "video_size": 10 * 2_097_152,
+            "ready": True,
+            "prefetch": False,
+        }
+        if has_tracker:
+            info["tracker"] = MockTracker(head_ready_val=True, moov_pc=5)
+        self.engine.torrents[hash_str] = info
+        return info, hash_str
+
+    def test_existing_with_tracker_skips_on_metadata(self) -> None:
+        """add_torrent on existing torrent with tracker must NOT call _on_metadata."""
+        info, hash_str = self._inject_existing(has_tracker=True)
+        original_on_metadata = self.engine._on_metadata
+        calls = []
+
+        def spy_on_metadata(handle):
+            calls.append(handle)
+            return original_on_metadata(handle)
+
+        self.engine._on_metadata = spy_on_metadata  # type: ignore[method-assign]
+        magnet = f"magnet:?xt=urn:btih:{hash_str}"
+
+        self.engine.add_torrent(magnet, prefetch=False)
+
+        self.assertEqual(len(calls), 0, "_on_metadata must NOT be called when tracker already exists")
+
+    def test_existing_without_tracker_runs_on_metadata(self) -> None:
+        """add_torrent on existing torrent WITHOUT tracker should still call _on_metadata."""
+        info, hash_str = self._inject_existing(has_tracker=False)
+        original_on_metadata = self.engine._on_metadata
+        calls = []
+
+        def spy_on_metadata(handle):
+            calls.append(handle)
+            return original_on_metadata(handle)
+
+        self.engine._on_metadata = spy_on_metadata  # type: ignore[method-assign]
+        magnet = f"magnet:?xt=urn:btih:{hash_str}"
+
+        self.engine.add_torrent(magnet, prefetch=False)
+
+        self.assertEqual(len(calls), 1, "_on_metadata MUST be called when tracker is missing")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -137,19 +137,22 @@ class PieceStateTracker:
     def _set_corrupt(self, piece: int) -> None:
         """Mark a single piece as CORRUPT."""
         bit = 1 << piece
+        was_verified = bool(self._verified & bit)
         self._corrupt |= bit
         self._verified &= ~bit
         self._downloading &= ~bit
-        if bit & self._moov_mask:
+        if was_verified and (bit & self._moov_mask):
             self._moov_vc -= 1
 
     def _set_downloading(self, piece: int) -> None:
         """Mark a single piece as DOWNLOADING."""
         bit = 1 << piece
+        was_verified = bool(self._verified & bit)
         self._downloading |= bit
         self._verified &= ~bit
         self._corrupt &= ~bit
-        # downloading does NOT affect moov_vc
+        if was_verified and (bit & self._moov_mask):
+            self._moov_vc -= 1
 
     # ── Bootstrap ───────────────────────────────────────────
 

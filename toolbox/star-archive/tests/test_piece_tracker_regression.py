@@ -231,6 +231,68 @@ class TestTailMoovFallbackHeadReady(unittest.TestCase):
         self.assertTrue(tracker.head_ready())
 
 
+class TestMoovVcConsistency(unittest.TestCase):
+    """Regression: _moov_vc must never go negative and must stay consistent
+    with _verified & _moov_mask. IPZZ-802 root cause."""
+
+    def _moov_range_covering_piece_3(self, tracker: PieceStateTracker) -> None:
+        """Compute a moov range that covers piece 3 for the default tracker."""
+        pl = tracker.piece_length
+        # piece 3 starts at offset 3*pl in absolute terms;
+        # moov range must span [3*pl, 4*pl) at minimum.
+        tracker.set_moov_range(3 * pl, 4 * pl)
+
+    def test_set_corrupt_only_decrements_when_was_verified(self) -> None:
+        tracker, _ = make_tracker(num_pieces=20)
+        self._moov_range_covering_piece_3(tracker)
+        # piece 3 is NOT verified — corrupting it must NOT touch _moov_vc
+        tracker._set_corrupt(3)
+        self.assertEqual(tracker._moov_vc, 0)
+        self.assertEqual(tracker.piece_state(3), PieceState.CORRUPT)
+
+    def test_set_corrupt_decrements_when_was_verified(self) -> None:
+        tracker, _ = make_tracker(num_pieces=20)
+        self._moov_range_covering_piece_3(tracker)
+        tracker._set_verified(3)
+        self.assertEqual(tracker._moov_vc, 1)
+        tracker._set_corrupt(3)
+        self.assertEqual(tracker._moov_vc, 0)
+        self.assertEqual(tracker.piece_state(3), PieceState.CORRUPT)
+
+    def test_repeated_corrupt_does_not_go_negative(self) -> None:
+        tracker, _ = make_tracker(num_pieces=20)
+        self._moov_range_covering_piece_3(tracker)
+        tracker._set_verified(3)
+        self.assertEqual(tracker._moov_vc, 1)
+        tracker._set_corrupt(3)
+        tracker._set_corrupt(3)
+        tracker._set_corrupt(3)
+        self.assertEqual(tracker._moov_vc, 0)
+
+    def test_set_downloading_decrements_when_clearing_verified(self) -> None:
+        tracker, _ = make_tracker(num_pieces=20)
+        self._moov_range_covering_piece_3(tracker)
+        tracker._set_verified(3)
+        self.assertEqual(tracker._moov_vc, 1)
+        tracker._set_downloading(3)
+        self.assertEqual(tracker._moov_vc, 0)
+        self.assertEqual(tracker.piece_state(3), PieceState.DOWNLOADING)
+
+    def test_overlay_strict_clears_verified_and_updates_moov_vc(self) -> None:
+        """Regression: _overlay_have_piece(strict=True) clears VERIFIED when
+        have_piece becomes false, and must update _moov_vc. IPZZ-802 recheck
+        loop root cause."""
+        tracker, h = make_tracker(num_pieces=20)
+        self._moov_range_covering_piece_3(tracker)
+        tracker._set_verified(3)
+        self.assertEqual(tracker._moov_vc, 1)
+        # Simulate recheck: libtorrent now says have_piece(3)=False
+        h._have = set()
+        tracker._overlay_have_piece(strict=True)
+        self.assertEqual(tracker.piece_state(3), PieceState.NOT_DOWNLOADED)
+        self.assertEqual(tracker._moov_vc, 0)
+
+
 class TestGetStatusUpdatesLastAccess(unittest.TestCase):
     """Regression: get_status must update last_access to prevent eviction."""
 
