@@ -67,6 +67,9 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
 
+    # GC protection: any stream request counts as active use
+    await asyncio.to_thread(engine.touch, hash_str)
+
     # Protect against reading while libtorrent is checking files (may zero pieces)
     t2 = _time.perf_counter()
     is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
@@ -143,6 +146,9 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
 async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     """Check if video head is ready for playback."""
     local_path, local_size, head_ready_fs, mime = await asyncio.to_thread(find_video_state, hash_str)
+
+    # GC protection: any check request counts as active use
+    await asyncio.to_thread(engine.touch, hash_str)
 
     # If torrent is checking_files, report not ready even if filesystem has data.
     # libtorrent may zero pieces during checking, causing MP4 parse errors.

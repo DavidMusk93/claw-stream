@@ -632,22 +632,32 @@ class TorrentEngine:
                 info["_play_priority_applied"] = True
             log.info(f"added: {name} ({format_size(size)})")
 
-        # If torrent resumed from cache and is in finished state, its have_piece
-        # bitmap may be stale (doesn't match actual sparse file content).
-        # Force a recheck to sync have_pieces with disk, otherwise head_ready
-        # will stay false forever because libtorrent won't re-download pieces
-        # it thinks are already complete.
-        # Only do this ONCE — _on_metadata may be called again by add_torrent
-        # when the torrent already exists, and repeated rechecks break playback.
-        # NOTE: use a separate flag from "tracker"; tracker is created above
-        # and would make this condition always false.
+        # ── Architecture: bootstrap-first verification ─────────────────
+        # For finished torrents, avoid unconditional force_recheck (minutes of
+        # blocking). Use SEEK_HOLE bootstrap (seconds) to verify disk state.
+        # Only fall back to hash recheck if bootstrap shows data is missing.
+        # This turns "completed torrent → minutes of recheck → ready" into
+        # "completed torrent → seconds of lseek → ready" for the common case
+        # where sparse file is actually intact.
         if not info.get("_recheck_done"):
             status = handle.status()
             if status.state == lt.torrent_status.finished:
+                tracker = info.get("tracker")
+                if tracker:
+                    tracker._bootstrap_from_filesystem()
+                    tracker._overlay_have_piece(strict=True)
+                    if tracker.head_ready():
+                        info["_recheck_done"] = True
+                        info["ready"] = True
+                        log.info(
+                            f"bootstrap-first: {hash_str[:12]}... data intact, skip recheck"
+                        )
+                        return
+                # Slow path: bootstrap shows missing data or stale have_pieces
                 handle.force_recheck()
                 info["_recheck_done"] = True
                 log.info(
-                    f"recheck triggered: {hash_str[:12]}... (finished state, stale have_pieces)"
+                    f"recheck triggered: {hash_str[:12]}... (finished state, bootstrap shows missing)"
                 )
 
         info["ready"] = True
@@ -807,6 +817,31 @@ class TorrentEngine:
             # accurate. Use incremental sync (strict=False) to avoid undoing
             # strict recheck results.
             tracker._overlay_have_piece(strict=False)
+
+            # Architecture: cache-warming retry. Peers may disconnect or
+            # libtorrent may drop urgency after initial setup. Re-apply play
+            # priority every 10 seconds while head_ready is false, so tail-moov
+            # pieces keep getting pushed to the front of the download queue.
+            if (
+                not tracker.head_ready()
+                and info.get("_play_priority_applied")
+                and info.get("moov_end", 0) > 0
+            ):
+                now = time.time()
+                last_warm = info.get("_last_warm_attempt", 0)
+                if now - last_warm > 10:
+                    self._apply_play_priority(h, info)
+                    info["_last_warm_attempt"] = now
+                    log.debug(
+                        "cache warming retry",
+                        extra={
+                            "hash": hash_str[:12],
+                            "verified": tracker.verified_count(),
+                            "moov_vc": tracker._moov_vc,
+                            "moov_pc": tracker._moov_pc,
+                        },
+                    )
+
             if tracker._moov_pc > 0:
                 head_ready = tracker.head_ready()
             else:
@@ -851,6 +886,17 @@ class TorrentEngine:
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
         }
+
+    def touch(self, hash_str: str) -> None:
+        """Update last_access to prevent GC eviction.
+
+        Called by high-frequency endpoints (/stream, /api/check) that do not
+        go through get_status() but still indicate active user interest.
+        """
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if info:
+            info["last_access"] = time.time()
 
     def get_all_status(self) -> list[dict[str, Any]]:
         """获取所有 torrent 的状态列表。"""
