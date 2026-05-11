@@ -77,12 +77,10 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         info["_last_play_time"] = _time.time()
         info["_play_count"] = info.get("_play_count", 0) + 1
 
-    # Protect against reading while libtorrent is checking files (may zero pieces)
+    # Recheck only reads disk data to compute hashes; it does not modify
+    # the file. Streaming from already-verified head/tail regions during
+    # recheck is safe — hole detection below catches any missing data.
     t2 = _time.perf_counter()
-    is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
-    if is_checking:
-        log.debug("stream_video: torrent checking_files, returning 503", extra={"hash": hash_str[:12]})
-        raise HTTPException(status_code=503, headers={"Retry-After": "10"}, detail="Torrent checking files")
     t3 = _time.perf_counter()
 
     total_size = os.path.getsize(path)
@@ -157,10 +155,9 @@ async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     # GC protection: any check request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
 
-    # If torrent is checking_files, report not ready even if filesystem has data.
-    # libtorrent may zero pieces during checking, causing MP4 parse errors.
-    is_checking = await asyncio.to_thread(_is_torrent_checking, engine, hash_str)
-    head_ready = head_ready_fs and not is_checking
+    # Allow playback if filesystem head is ready, even during recheck.
+    # Recheck only re-validates hashes; already-downloaded head data is safe.
+    head_ready = head_ready_fs
 
     return StreamCheckResponse(
         hash=hash_str,

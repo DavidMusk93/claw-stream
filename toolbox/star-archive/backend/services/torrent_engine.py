@@ -269,7 +269,9 @@ class TorrentEngine:
         self.session = lt.session()
 
         settings = self.session.get_settings()
-        settings["alert_mask"] = int(lt.alert.category_t.status_notification)
+        settings["alert_mask"] = int(
+            lt.alert.category_t.status_notification | lt.alert.category_t.progress_notification
+        )
         settings["connections_limit"] = 200
         settings["download_rate_limit"] = 0
         settings["upload_rate_limit"] = 0
