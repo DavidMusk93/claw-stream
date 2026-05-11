@@ -8,7 +8,7 @@
 #   /cache/*   → FastAPI backend (localhost:8765)
 #   /*         → Nuxt frontend (localhost:3000)
 
-rn.guohuasun.com {
+cc.guohuasun.com {
     # API / stream / torrent → FastAPI backend
     handle /api/* {
         reverse_proxy localhost:8765
@@ -33,7 +33,7 @@ rn.guohuasun.com {
     }
 
     log {
-        output file /root/.openclaw/workspace/toolbox/star-archive/logs/caddy-access.log {
+        output file /root/claw-stream/toolbox/star-archive/logs/caddy-access.log {
             roll_size 10MB
             roll_keep 5
         }

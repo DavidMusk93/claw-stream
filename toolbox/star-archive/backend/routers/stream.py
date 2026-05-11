@@ -93,7 +93,11 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         try:
             start, end = _parse_range(range_hdr, total_size)
         except ValueError:
-            headers = {"Accept-Ranges": "bytes", "Content-Type": mime}
+            headers = {
+                "Content-Range": f"bytes */{total_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Type": mime,
+            }
             raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
 
     # 文件 I/O 通过 read_video_range 内部异步化，不再阻塞事件循环

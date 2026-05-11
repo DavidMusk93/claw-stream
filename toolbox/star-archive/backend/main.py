@@ -19,7 +19,7 @@ import base64
 
 import duckdb
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, stars
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, stars, test_router
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
 
@@ -131,6 +131,7 @@ app.include_router(auth_router)
 app.include_router(log_router)
 app.include_router(stars.router)
 app.include_router(sync_router)
+app.include_router(test_router)
 
 # Static files
 if os.path.exists(IMAGES_DIR):
@@ -161,30 +162,53 @@ def _get_cover_db() -> duckdb.DuckDBPyConnection:
 
 @app.get("/api/cover/{code}")
 async def cover_image(code: str):
-    """从 DuckDB cover_b64 字段读取封面并返回二进制图片"""
-    conn = _get_cover_db()
-    row = conn.execute(
-        "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
-        (code.upper(),),
-    ).fetchone()
-    if not row or not row[0]:
-        return JSONResponse(status_code=404, content={"detail": "Cover not found"})
+    """从 DuckDB cover_b64 字段读取封面，或回退到 images/titles/{code}/ 文件系统。"""
+    code_upper = code.upper()
 
-    b64_data = row[0]
-    # 去掉 data:image/jpeg;base64, 前缀（如果存在）
-    if b64_data.startswith("data:image/"):
-        b64_data = b64_data.split(",", 1)[1]
-
+    # 1. 优先从 DuckDB 读取
     try:
-        image_bytes = base64.b64decode(b64_data)
+        conn = _get_cover_db()
+        row = conn.execute(
+            "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
+            (code_upper,),
+        ).fetchone()
+        if row and row[0]:
+            b64_data = row[0]
+            if b64_data.startswith("data:image/"):
+                b64_data = b64_data.split(",", 1)[1]
+            try:
+                image_bytes = base64.b64decode(b64_data)
+                return Response(
+                    content=image_bytes,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=604800"},
+                )
+            except Exception:
+                pass
     except Exception:
-        return JSONResponse(status_code=500, content={"detail": "Invalid base64"})
+        pass
 
-    return Response(
-        content=image_bytes,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=604800"},
-    )
+    # 2. 回退到文件系统 images/titles/{code}/{code}.jpg
+    code_lower = code.upper().lower()
+    cover_dir = os.path.join(IMAGES_DIR, "titles", code_lower)
+    if os.path.isdir(cover_dir):
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
+            file_path = os.path.join(cover_dir, f"{code_lower}{ext}")
+            if os.path.exists(file_path):
+                media_type = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                }.get(ext, "image/jpeg")
+                with open(file_path, "rb") as f:
+                    return Response(
+                        content=f.read(),
+                        media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=604800"},
+                    )
+
+    return JSONResponse(status_code=404, content={"detail": "Cover not found"})
 
 
 if __name__ == "__main__":
