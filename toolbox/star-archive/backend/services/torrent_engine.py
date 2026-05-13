@@ -568,7 +568,7 @@ class TorrentEngine:
             "ready": False,
             "prefetch": prefetch,
             "work_code": _extract_work_code(magnet) or None,
-            "_last_play_time": 0,
+            "_last_play_time": time.time() if not prefetch else 0,
             "_play_count": 0,
             "progress": 0.0,
         }
@@ -1038,15 +1038,19 @@ class TorrentEngine:
         }
 
     def touch(self, hash_str: str) -> None:
-        """Update last_access to prevent GC eviction.
+        """Update last_access and _last_play_time to prevent GC eviction.
 
         Called by high-frequency endpoints (/stream, /api/check) that do not
         go through get_status() but still indicate active user interest.
+        Updating _last_play_time promotes the torrent to L1 (hot) tier so it
+        is never evicted while the user is waiting for it to become ready.
         """
         with self.lock:
             info = self.torrents.get(hash_str)
         if info:
-            info["last_access"] = time.time()
+            now = time.time()
+            info["last_access"] = now
+            info["_last_play_time"] = now
 
     def get_all_status(self) -> list[dict[str, Any]]:
         """获取所有 torrent 的状态列表。"""

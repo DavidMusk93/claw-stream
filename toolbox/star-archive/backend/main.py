@@ -33,7 +33,7 @@ IMAGES_DIR = os.path.join(SCRIPT_DIR, "images")
 
 def _get_engine() -> TorrentEngine:
     """Create TorrentEngine singleton."""
-    return TorrentEngine(CACHE_DIR, max_size_gb=20)
+    return TorrentEngine(CACHE_DIR, max_size_gb=30)
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
