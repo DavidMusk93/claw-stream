@@ -149,17 +149,6 @@ async def health():
 
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
-# 持久化只读 DuckDB 连接（封面查询复用）
-_cover_db: duckdb.DuckDBPyConnection | None = None
-
-
-def _get_cover_db() -> duckdb.DuckDBPyConnection:
-    global _cover_db
-    if _cover_db is None:
-        _cover_db = duckdb.connect(DB_PATH, read_only=True)
-    return _cover_db
-
-
 @app.get("/api/cover/{code}")
 async def cover_image(code: str):
     """从 DuckDB cover_b64 字段读取封面，或回退到 images/titles/{code}/ 文件系统。"""
@@ -167,24 +156,27 @@ async def cover_image(code: str):
 
     # 1. 优先从 DuckDB 读取
     try:
-        conn = _get_cover_db()
-        row = conn.execute(
-            "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
-            (code_upper,),
-        ).fetchone()
-        if row and row[0]:
-            b64_data = row[0]
-            if b64_data.startswith("data:image/"):
-                b64_data = b64_data.split(",", 1)[1]
-            try:
-                image_bytes = base64.b64decode(b64_data)
-                return Response(
-                    content=image_bytes,
-                    media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=604800"},
-                )
-            except Exception:
-                pass
+        conn = duckdb.connect(DB_PATH, read_only=True)
+        try:
+            row = conn.execute(
+                "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
+                (code_upper,),
+            ).fetchone()
+            if row and row[0]:
+                b64_data = row[0]
+                if b64_data.startswith("data:image/"):
+                    b64_data = b64_data.split(",", 1)[1]
+                try:
+                    image_bytes = base64.b64decode(b64_data)
+                    return Response(
+                        content=image_bytes,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"},
+                    )
+                except Exception:
+                    pass
+        finally:
+            conn.close()
     except Exception:
         pass
 

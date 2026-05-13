@@ -16,16 +16,6 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 
-# 持久化 DuckDB 连接（避免每次请求 36ms 连接开销）
-_db_conn: duckdb.DuckDBPyConnection | None = None
-
-
-def _get_db() -> duckdb.DuckDBPyConnection:
-    global _db_conn
-    if _db_conn is None:
-        _db_conn = duckdb.connect(DB_PATH, read_only=True)
-    return _db_conn
-
 
 def _load_config() -> dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -48,10 +38,10 @@ def _build_stars_response() -> list[dict[str, Any]]:
     config = _load_config()
     solo = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
-    conn = _get_db()
-
-    # Query 1: titles aggregated per star (top 3 by date)
-    title_rows = conn.execute("""
+    conn = duckdb.connect(DB_PATH, read_only=True)
+    try:
+        # Query 1: titles aggregated per star (top 5 by date)
+        title_rows = conn.execute("""
         WITH ranked AS (
             SELECT *,
                 ROW_NUMBER() OVER (
@@ -83,90 +73,92 @@ def _build_stars_response() -> list[dict[str, Any]]:
         ORDER BY s.name
     """).fetchall()
 
-    # Query 2: posts aggregated per star (top 3 by date)
-    post_rows = conn.execute("""
-        WITH ranked AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY star_id
-                    ORDER BY COALESCE(posted_at, created_at) DESC
-                ) AS rn
-            FROM social_posts
-        )
-        SELECT
-            s.code,
-            COALESCE(array_agg(struct_pack(
-                platform := r.platform,
-                content := r.content,
-                url := IFNULL(r.post_url, ''),
-                posted_at := IFNULL(CAST(r.posted_at AS VARCHAR), '')
-            ) ORDER BY r.rn) FILTER (WHERE r.content IS NOT NULL), []) AS posts
-        FROM stars s
-        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
-        GROUP BY s.id, s.code, s.name
-    """).fetchall()
+        # Query 2: posts aggregated per star (top 5 by date)
+        post_rows = conn.execute("""
+            WITH ranked AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY star_id
+                        ORDER BY COALESCE(posted_at, created_at) DESC
+                    ) AS rn
+                FROM social_posts
+            )
+            SELECT
+                s.code,
+                COALESCE(array_agg(struct_pack(
+                    platform := r.platform,
+                    content := r.content,
+                    url := IFNULL(r.post_url, ''),
+                    posted_at := IFNULL(CAST(r.posted_at AS VARCHAR), '')
+                ) ORDER BY r.rn) FILTER (WHERE r.content IS NOT NULL), []) AS posts
+            FROM stars s
+            LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
+            GROUP BY s.id, s.code, s.name
+        """).fetchall()
 
-    db_data: dict[str, dict[str, Any]] = {}
-    for row in title_rows:
-        db_data[row[0]] = {"titles": row[1], "posts": []}
-    for row in post_rows:
-        code = row[0]
-        if code not in db_data:
-            db_data[code] = {"titles": [], "posts": []}
-        db_data[code]["posts"] = row[1]
+        db_data: dict[str, dict[str, Any]] = {}
+        for row in title_rows:
+            db_data[row[0]] = {"titles": row[1], "posts": []}
+        for row in post_rows:
+            code = row[0]
+            if code not in db_data:
+                db_data[code] = {"titles": [], "posts": []}
+            db_data[code]["posts"] = row[1]
 
-    result = []
-    for a in solo:
-        code = a["code"]
-        data = db_data.get(code, {"titles": [], "posts": []})
+        result = []
+        for a in solo:
+            code = a["code"]
+            data = db_data.get(code, {"titles": [], "posts": []})
 
-        # Rewrite cover_url to proxy URL (bypass CDN referer restriction)
-        titles = data.get("titles", [])
-        for t in titles:
-            if t.get("cover_url"):
-                t["cover_url"] = f"/api/cover/{t['code']}"
+            # Rewrite cover_url to proxy URL (bypass CDN referer restriction)
+            titles = data.get("titles", [])
+            for t in titles:
+                if t.get("cover_url"):
+                    t["cover_url"] = f"/api/cover/{t['code']}"
 
-        # Deduplicate posts by content (defensive)
-        seen = set()
-        posts = []
-        for p in data.get("posts", []):
-            if p["content"] not in seen:
-                seen.add(p["content"])
-                posts.append(p)
-                if len(posts) >= 3:
-                    break
+            # Deduplicate posts by content (defensive)
+            seen = set()
+            posts = []
+            for p in data.get("posts", []):
+                if p["content"] not in seen:
+                    seen.add(p["content"])
+                    posts.append(p)
+                    if len(posts) >= 3:
+                        break
 
-        result.append({
-            "name": a["name"],
-            "jp": a.get("jp", ""),
-            "handle": a.get("handle", ""),
-            "code": code,
-            "type": a.get("type", "solo"),
-            "note": a.get("note", ""),
-            "titles": titles,
-            "posts": posts,
-        })
+            result.append({
+                "name": a["name"],
+                "jp": a.get("jp", ""),
+                "handle": a.get("handle", ""),
+                "code": code,
+                "type": a.get("type", "solo"),
+                "note": a.get("note", ""),
+                "titles": titles,
+                "posts": posts,
+            })
 
-    # Sort stars by latest title date descending (newest star first)
-    def _latest_date(star):
-        titles = star.get("titles", [])
-        if titles and titles[0].get("date"):
-            d = titles[0]["date"]
-            if d and "/" in d:
-                parts = d.split("/")
-                return f"{parts[2]}{parts[1].zfill(2)}{parts[0].zfill(2)}"
-        return "99999999"
+        # Sort stars by latest title date descending (newest star first)
+        def _latest_date(star):
+            titles = star.get("titles", [])
+            if titles and titles[0].get("date"):
+                d = titles[0]["date"]
+                if d and "/" in d:
+                    parts = d.split("/")
+                    return f"{parts[2]}{parts[1].zfill(2)}{parts[0].zfill(2)}"
+            return "99999999"
 
-    result.sort(key=_latest_date, reverse=True)
+        result.sort(key=_latest_date, reverse=True)
 
-    # Assign global numbers to all titles in star order (star[0] -> #1,2,3, star[1] -> #4,5,6...)
-    number = 1
-    for star in result:
-        for t in star.get("titles", []):
-            t["number"] = number
-            number += 1
+        # Assign global numbers to all titles in star order (star[0] -> #1,2,3, star[1] -> #4,5,6...)
+        number = 1
+        for star in result:
+            for t in star.get("titles", []):
+                t["number"] = number
+                number += 1
 
-    return result
+        return result
+    finally:
+        conn.close()
 
 
 @router.get("")
