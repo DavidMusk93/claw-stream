@@ -370,56 +370,54 @@ def _pick_best_magnet(item: dict) -> dict:
     }
 
 
-async def fetch_star(name: str, config_code: str, handle: str, star_page_url: str):
-    """从star 个人主页获取单体作品数据，写入 DuckDB"""
+async def fetch_star(browser, name: str, config_code: str, handle: str, star_page_url: str):
+    """从 star 个人主页获取作品数据，写入 DuckDB。
+
+    browser 由调用方创建并复用，本函数只负责创建/关闭 page context。
+    """
     star_id = db.upsert_star(name=name, handle=handle, code=config_code)
 
     titles: list[dict] = []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, chromium_sandbox=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        ctx = await browser.new_context(
-            user_agent=random.choice(USER_AGENTS),
-            viewport={"width": 1400, "height": 900}
-        )
-        page = await ctx.new_page()
-        try:
-            if not star_page_url:
-                log.warning(f"no star_page_url for {name}, skipping")
-                return {"name": name, "titles": [], "count": 0}
+    ctx = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        viewport={"width": 1400, "height": 900}
+    )
+    page = await ctx.new_page()
+    try:
+        if not star_page_url:
+            log.warning(f"no star_page_url for {name}, skipping")
+            return {"name": name, "titles": [], "count": 0}
 
-            await page.goto(star_page_url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(random.randint(2000, 4000))
+        await page.goto(star_page_url, wait_until="domcontentloaded", timeout=15000)
+        await page.wait_for_timeout(random.randint(500, 1500))
 
-            html = await page.content()
-            raw_items = _parse_video_items(html)
-            log.info(f"{name}: {len(raw_items)} total items on page")
+        html = await page.content()
+        raw_items = _parse_video_items(html)
+        log.info(f"{name}: {len(raw_items)} total items on page")
 
-            # Include all works (solo + co-star)
-            log.info(f"{name}: {len(raw_items)} items (including co-stars)")
+        # Include all works (solo + co-star)
+        log.info(f"{name}: {len(raw_items)} items (including co-stars)")
 
-            for it in raw_items:
-                best = _pick_best_magnet(it)
-                titles.append({
-                    "code": it["code"],
-                    "title": it["title"],
-                    "date": it["date"],
-                    "views": it["views"],
-                    "likes": it["downloads"],
-                    "cover_url": it["cover_url"],
-                    "magnet": best["magnet"],
-                    "resolution": best["resolution"],
-                    "download_url": "",
-                    "all_magnets": best["all_magnets"],
-                })
+        for it in raw_items:
+            best = _pick_best_magnet(it)
+            titles.append({
+                "code": it["code"],
+                "title": it["title"],
+                "date": it["date"],
+                "views": it["views"],
+                "likes": it["downloads"],
+                "cover_url": it["cover_url"],
+                "magnet": best["magnet"],
+                "resolution": best["resolution"],
+                "download_url": "",
+                "all_magnets": best["all_magnets"],
+            })
 
-        except Exception as e:
-            log.error(f"fetch failed: {name}: {type(e).__name__}", exc_info=True)
-        finally:
-            await browser.close()
+    except Exception as e:
+        log.error(f"fetch failed: {name}: {type(e).__name__}", exc_info=True)
+    finally:
+        await ctx.close()
 
     # Deduplicate + sort by date desc + take latest 3
     seen = set()
@@ -499,15 +497,30 @@ async def main():
     stars = config.get("stars", [])
 
     log.info("fetching titles from star pages...")
-    for a in stars:
-        log.info(f"fetching: {a['name']}...")
-        await fetch_star(
-            a["name"],
-            a["code"],
-            a.get("handle", ""),
-            a.get("star_page_url", "")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True, chromium_sandbox=False,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
-        await random_delay(1.0, 2.5)
+        try:
+            sem = asyncio.Semaphore(4)
+
+            async def _fetch_one(a):
+                async with sem:
+                    return await fetch_star(
+                        browser,
+                        a["name"],
+                        a["code"],
+                        a.get("handle", ""),
+                        a.get("star_page_url", "")
+                    )
+
+            results = await asyncio.gather(*[_fetch_one(a) for a in stars])
+            for r in results:
+                log.info(f"{r['name']}: {r['count']} titles")
+        finally:
+            await browser.close()
 
     # Stats (single GROUP BY query)
     conn = db._conn()
