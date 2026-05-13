@@ -377,6 +377,7 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
   errorMsg.value = ''
   canplayFired.value = false
   buffering.value = true
+  retryCount.value = 0
   logInfo('player', `open video hash=${hash.slice(0, 12)}`)
 
   const ready = await waitForHeadReady(hash)
