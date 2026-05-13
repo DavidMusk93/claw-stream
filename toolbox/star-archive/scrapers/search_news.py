@@ -398,11 +398,10 @@ async def fetch_star(name: str, config_code: str, handle: str, star_page_url: st
             raw_items = _parse_video_items(html)
             log.info(f"{name}: {len(raw_items)} total items on page")
 
-            # Filter solo works only
-            solo_items = [it for it in raw_items if it["star_count"] == 1]
-            log.info(f"{name}: {len(solo_items)} solo items after filtering")
+            # Include all works (solo + co-star)
+            log.info(f"{name}: {len(raw_items)} items (including co-stars)")
 
-            for it in solo_items:
+            for it in raw_items:
                 best = _pick_best_magnet(it)
                 titles.append({
                     "code": it["code"],
