@@ -5,6 +5,7 @@ import os
 import time
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from typing import Any
 
 import duckdb
@@ -33,7 +34,13 @@ def _load_config() -> dict[str, Any]:
 
 # 内存缓存: { data, ts }
 _stars_cache: dict[str, Any] = {"data": None, "ts": 0}
-CACHE_TTL = 60  # 秒
+CACHE_TTL = 5  # 秒 — 缩短 TTL，同步完成后几乎立即生效
+
+
+def invalidate_stars_cache() -> None:
+    """清除 stars 内存缓存，供同步完成后调用。"""
+    global _stars_cache
+    _stars_cache = {"data": None, "ts": 0}
 
 
 def _build_stars_response() -> list[dict[str, Any]]:
@@ -70,7 +77,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 magnet := IFNULL(m.magnet, '')
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
-        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 3
+        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
         LEFT JOIN magnets m ON m.title_id = r.id AND m.is_primary = true
         GROUP BY s.id, s.code, s.name
         ORDER BY s.name
@@ -95,7 +102,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 posted_at := IFNULL(CAST(r.posted_at AS VARCHAR), '')
             ) ORDER BY r.rn) FILTER (WHERE r.content IS NOT NULL), []) AS posts
         FROM stars s
-        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 3
+        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
         GROUP BY s.id, s.code, s.name
     """).fetchall()
 
@@ -164,12 +171,18 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
 @router.get("")
 async def get_stars():
-    """Get all stars with their latest titles and posts (cached, TTL=60s)."""
+    """Get all stars with their latest titles and posts (cached, TTL=5s)."""
     global _stars_cache
     now = time.time()
     if _stars_cache["data"] is not None and (now - _stars_cache["ts"]) < CACHE_TTL:
-        return _stars_cache["data"]
+        return JSONResponse(
+            content=_stars_cache["data"],
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        )
 
     data = _build_stars_response()
     _stars_cache = {"data": data, "ts": now}
-    return data
+    return JSONResponse(
+        content=data,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )

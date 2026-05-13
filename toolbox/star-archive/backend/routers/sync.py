@@ -8,6 +8,7 @@ import time
 from fastapi import APIRouter
 from typing import Any
 
+from backend.routers.stars import invalidate_stars_cache
 from core import get_logger
 
 router = APIRouter(prefix="/api/stars", tags=["sync"])
@@ -55,6 +56,7 @@ def _run_sync_bg() -> None:
             log.error("sync failed", extra={"returncode": proc.returncode, "stderr": proc.stderr[:500]})
         else:
             log.info("sync completed", extra={"lines": len(_sync_state["log_lines"])})
+            invalidate_stars_cache()
     except subprocess.TimeoutExpired:
         _sync_state["last_error"] = "sync timeout after 300s"
         log.error("sync timeout")
