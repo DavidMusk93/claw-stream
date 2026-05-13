@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from typing import Any
 
 import libtorrent as lt
@@ -66,14 +66,6 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     t1 = _time.perf_counter()
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")
-
-    # Block streaming during hash recheck to avoid reading inconsistent data
-    if _is_torrent_checking(engine, hash_str):
-        raise HTTPException(
-            status_code=503,
-            detail="Torrent is checking files",
-            headers={"Retry-After": "10"},
-        )
 
     # GC protection: any stream request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
@@ -167,19 +159,19 @@ async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     # GC protection: any check request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
 
-    # Conservatively report not-ready during hash recheck
-    if _is_torrent_checking(engine, hash_str):
-        head_ready_fs = False
-
     # Allow playback if filesystem head is ready, even during recheck.
     # Recheck only re-validates hashes; already-downloaded head data is safe.
+    # find_video_state already verifies data presence via SEEK_HOLE/SEEK_DATA.
     head_ready = head_ready_fs
 
-    return StreamCheckResponse(
-        hash=hash_str,
-        cached=local_size > 1024 * 1024,
-        head_ready=head_ready,
-        path=local_path or "",
-        size=local_size,
-        mime=mime,
+    return JSONResponse(
+        content=StreamCheckResponse(
+            hash=hash_str,
+            cached=local_size > 1024 * 1024,
+            head_ready=head_ready,
+            path=local_path or "",
+            size=local_size,
+            mime=mime,
+        ).model_dump(),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )

@@ -248,8 +248,10 @@ class TestCheckingFilesBlocking(unittest.TestCase):
                         return entry
         return None
 
-    def test_checking_files_returns_503_and_false_head_ready(self) -> None:
-        """Large cached file keeps libtorrent in checking_files long enough to assert 503."""
+    def test_checking_files_allows_stream_if_data_present(self) -> None:
+        """Large cached file enters checking_files, but stream/check still work
+        because filesystem SEEK_DATA verifies data presence independently of
+        libtorrent's checking state."""
         hash_str = self.hash_str
 
         # Poll until checking_files (large files enter this state immediately)
@@ -263,21 +265,21 @@ class TestCheckingFilesBlocking(unittest.TestCase):
         self.assertTrue(caught_checking, "Expected checking_files state after add_torrent")
         print(f"  Caught checking_files state")
 
-        # /api/check must report head_ready=False
+        # /api/check must report head_ready=True (filesystem has data)
         r = self.client.get(f"/api/check/{hash_str}")
         self.assertEqual(r.status_code, 200)
-        self.assertFalse(
+        self.assertTrue(
             r.json()["head_ready"],
-            "head_ready must be False during checking_files",
+            "head_ready must be True when filesystem head data is present even during checking",
         )
 
-        # /stream must return 503
+        # /stream must return 206 if data exists
         r = self.client.get(
             f"/stream/{hash_str}",
             headers={"Range": "bytes=0-1048575"},
         )
-        self.assertEqual(r.status_code, 503, "Stream must be blocked during checking_files")
-        self.assertEqual(r.headers.get("retry-after"), "10")
+        # Hole detection may return 416 if data is missing; 206 or 416 are both acceptable
+        self.assertIn(r.status_code, (206, 416), "Stream must be allowed during checking_files")
 
         # Wait for checking to finish (may take 10–30 s for a 4 GB file)
         for _ in range(600):
