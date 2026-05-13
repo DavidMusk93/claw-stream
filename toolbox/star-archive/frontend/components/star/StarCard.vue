@@ -69,21 +69,23 @@
         </div>
       </div>
 
-      <!-- Thumbnail dock -->
+      <!-- Thumbnail dock: 3 visible, swipeable for more -->
       <div
         ref="dockRef"
-        class="flex gap-2 shrink-0"
-        :class="isMobile ? 'flex-row' : 'flex-col'"
+        class="flex gap-2 shrink-0 scrollbar-hide"
+        :class="[
+          isMobile
+            ? 'flex-row overflow-x-auto snap-x snap-mandatory'
+            : 'flex-col overflow-y-auto snap-y snap-mandatory'
+        ]"
         :style="dockStyle"
       >
         <button
           v-for="(title, idx) in star.titles"
           :key="title.code"
-          class="relative rounded-lg overflow-hidden bg-black transition-all duration-200"
-          :class="[
-            isMobile ? 'flex-1 h-max min-h-[40px]' : 'flex-1 w-max min-w-[60px]',
-            activeIndex === idx ? 'ring-2 ring-white opacity-100' : 'opacity-40 hover:opacity-70'
-          ]"
+          class="relative rounded-lg overflow-hidden bg-black transition-all duration-200 snap-start shrink-0"
+          :class="activeIndex === idx ? 'ring-2 ring-white opacity-100' : 'opacity-40 hover:opacity-70'"
+          :style="thumbStyle"
           @click="activeIndex = idx"
         >
           <img
@@ -212,6 +214,18 @@ const dockStyle = computed(() => {
   return { height: `${heroSize.value.height}px` }
 })
 
-// No fixed thumbStyle needed — flex-1 distributes space,
-// and img w-auto/h-auto preserves original aspect ratio exactly.
+const thumbCount = 3 // Number of thumbs aligned with the hero
+
+const thumbStyle = computed(() => {
+  if (isMobile.value) {
+    const w = heroSize.value.width > 0
+      ? (heroSize.value.width - gap * (thumbCount - 1)) / thumbCount
+      : 120
+    return { width: `${w}px`, height: 'auto' }
+  }
+  const h = heroSize.value.height > 0
+    ? (heroSize.value.height - gap * (thumbCount - 1)) / thumbCount
+    : 160
+  return { width: 'auto', height: `${h}px` }
+})
 </script>
