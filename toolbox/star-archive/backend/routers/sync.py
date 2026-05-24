@@ -1,12 +1,17 @@
+"""backend/routers/sync.py — 女优作品同步路由
+
+核心变更：取消 subprocess，改为进程内直接调用 scrapers.v2.tasks.sync_titles，
+配合全局 DuckDB 串行写队列，彻底消除跨进程锁冲突。
+"""
+
 from __future__ import annotations
 
-import os
-import subprocess
+import asyncio
 import threading
 import time
+from typing import Any
 
 from fastapi import APIRouter
-from typing import Any
 
 from backend.routers.stars import invalidate_stars_cache
 from core import get_logger
@@ -14,62 +19,42 @@ from core import get_logger
 router = APIRouter(prefix="/api/stars", tags=["sync"])
 log = get_logger("sync")
 
-SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 _sync_lock = threading.Lock()
 _sync_state: dict[str, Any] = {
     "running": False,
     "started_at": None,
     "log_lines": [],
     "last_error": None,
-    "returncode": None,
 }
 
 
 def _run_sync_bg() -> None:
-    """后台线程：运行 search_news.py 抓取女优最新作品。"""
+    """后台线程：进程内运行 sync-titles，消除跨进程 DuckDB 锁冲突。"""
     global _sync_state
     _sync_state["log_lines"] = []
     _sync_state["last_error"] = None
-    _sync_state["returncode"] = None
 
     try:
-        env = os.environ.copy()
-        env["PYTHONPATH"] = SCRIPT_DIR
-        proc = subprocess.run(
-            [
-                os.path.join(SCRIPT_DIR, ".venv", "bin", "python"),
-                "scrapers/search_news.py",
-                "config.json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=SCRIPT_DIR,
-            env=env,
-        )
-        _sync_state["log_lines"] = proc.stdout.splitlines()[-30:]
-        _sync_state["returncode"] = proc.returncode
-        if proc.returncode != 0:
-            err = proc.stderr[-2000:] if proc.stderr else "unknown error"
-            _sync_state["last_error"] = err
-            log.error("sync failed", extra={"returncode": proc.returncode, "stderr": proc.stderr[:500]})
-        else:
-            log.info("sync completed", extra={"lines": len(_sync_state["log_lines"])})
-            invalidate_stars_cache()
-    except subprocess.TimeoutExpired:
-        _sync_state["last_error"] = "sync timeout after 300s"
-        log.error("sync timeout")
+        from scrapers.v2.tasks.sync_titles import run as run_sync_titles
+
+        # 在线程中创建独立事件循环运行 async 爬虫
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        results = loop.run_until_complete(run_sync_titles("config.json"))
+        log_lines = [f"{r['name']}: {r['count']} titles" for r in results]
+        _sync_state["log_lines"] = log_lines[-30:]
+        log.info("sync completed", extra={"lines": len(log_lines)})
+        invalidate_stars_cache()
     except Exception as e:
         _sync_state["last_error"] = str(e)
-        log.error(f"sync exception: {e}")
+        log.error(f"sync exception: {e}", exc_info=True)
     finally:
         _sync_state["running"] = False
 
 
 @router.post("/sync")
 async def start_sync() -> dict[str, Any]:
-    """启动女优作品同步（后台运行 search_news.py）。不可重复启动。"""
+    """启动女优作品同步（后台运行，不可重复启动）。"""
     with _sync_lock:
         if _sync_state["running"]:
             return {
