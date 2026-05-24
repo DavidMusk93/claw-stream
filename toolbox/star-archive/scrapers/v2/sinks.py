@@ -1,0 +1,158 @@
+"""scrapers/v2/sinks.py — 统一写入层
+
+将抽取结果写入 DuckDB，所有写操作通过全局串行队列执行，
+彻底消除并发锁冲突。
+"""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from core import db
+from core.db.write_queue import db_write
+from scrapers.v2.schemas import VideoItem, JableMeta, SocialPost, MagnetCandidate
+
+
+class Sink(Protocol):
+    """写入器协议"""
+
+    async def write(self, item):
+        ...
+
+
+class TitleSyncSink:
+    """同步作品数据到 DuckDB
+
+    处理 insert / update 逻辑，保留已有 cover，管理 magnet 优先级。
+    所有 DB 写操作通过全局串行队列执行。
+    """
+
+    def __init__(self, star_id: int, name: str):
+        self.star_id = star_id
+        self.name = name
+
+    async def write(self, item: VideoItem) -> None:
+        from scrapers.v2.cover_utils import download_cover_b64
+
+        code = item.code
+        views = item.views
+        likes = item.likes
+
+        exists = await db_write(db.title_exists, self.star_id, code)
+        if exists:
+            # 更新元数据，保留已有 cover
+            conn = db._conn()
+            row = conn.execute(
+                "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
+                (self.star_id, code),
+            ).fetchone()
+            title_id, existing_cover = row if row else (None, None)
+            conn.close()
+
+            await db_write(
+                db.upsert_title,
+                star_id=self.star_id,
+                code=code,
+                title=item.title,
+                release_date=item.release_date,
+                views=views,
+                likes=likes,
+                resolution=self._best_resolution(item),
+                download_url="",
+                cover_url=item.cover_url,
+                cover_b64=existing_cover,
+            )
+            # 存储所有 magnet
+            for idx, m in enumerate(item.all_magnet_urls):
+                if m:
+                    await db_write(db.upsert_magnet, title_id, m, is_primary=(idx == 0))
+        else:
+            # 新 title：下载封面后插入
+            cover_b64 = await download_cover_b64(item.cover_url or "", code)
+            title_id = await db_write(
+                db.upsert_title,
+                star_id=self.star_id,
+                code=code,
+                title=item.title,
+                release_date=item.release_date,
+                views=views,
+                likes=likes,
+                resolution=self._best_resolution(item),
+                download_url="",
+                cover_url=item.cover_url,
+                cover_b64=cover_b64,
+            )
+            for idx, m in enumerate(item.all_magnet_urls):
+                if m:
+                    await db_write(db.upsert_magnet, title_id, m, is_primary=(idx == 0))
+
+    @staticmethod
+    def _best_resolution(item: VideoItem) -> str:
+        """从 candidates 中挑选最佳 resolution 字符串（用于 titles 表）"""
+        if not item.magnets:
+            return ""
+        best = max(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m))
+        return best.resolution
+
+    @staticmethod
+    def _score_magnet(m: MagnetCandidate) -> float:
+        """MagnetCandidate 评分"""
+        res_score = 0
+        res = m.resolution
+        if "[4K]" in res or "4k" in res.lower():
+            res_score = 600
+        elif "[FHDC]" in res:
+            res_score = 500
+        elif "[FHD]" in res:
+            res_score = 400
+        elif "1080p" in res:
+            res_score = 300
+        elif "[HD]" in res:
+            res_score = 200
+        elif "720p" in res:
+            res_score = 100
+        size_mb = 0.0
+        if m.size:
+            try:
+                size_mb = float(m.size.lower().replace("gb", "").strip()) * 1024
+            except ValueError:
+                pass
+        return res_score + m.seed + size_mb / 100
+
+
+class SocialSyncSink:
+    """同步社交帖子到 DuckDB"""
+
+    def __init__(self, star_id: int):
+        self.star_id = star_id
+
+    async def write(self, item: SocialPost) -> None:
+        url = item.post_url
+        if url and not url.startswith("http"):
+            url = f"https://x.com{url}"
+        await db_write(
+            db.upsert_social_post,
+            star_id=self.star_id,
+            platform=item.platform,
+            content=item.content,
+            post_url=url,
+            posted_at=item.posted_at,
+        )
+
+
+class JableSyncSink:
+    """同步 jable 元数据到 DuckDB"""
+
+    def __init__(self, title_id: int, code: str):
+        self.title_id = title_id
+        self.code = code
+
+    async def write(self, item: JableMeta) -> None:
+        await db_write(db.update_jable, self.title_id, item.m3u8_url, item.cover_url)
+
+
+class StdoutSink:
+    """调试用：直接打印"""
+
+    async def write(self, item):
+        print(item)
