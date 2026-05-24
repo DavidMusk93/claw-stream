@@ -19,6 +19,7 @@ class TorrentStatus(BaseModel):
     local_size: int = 0
     mime: str = "video/mp4"
     state: str = ""
+    verified_pieces: int = 0
 
 
 class TorrentAddRequest(BaseModel):

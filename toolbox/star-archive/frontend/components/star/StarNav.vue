@@ -28,7 +28,7 @@ const activeStar = ref('')
 
 function scrollToStar(code: string) {
   activeStar.value = code
-  const el = document.getElementById(code.toLowerCase())
+  const el = document.getElementById(`star-${code.toLowerCase()}`)
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -48,7 +48,7 @@ onMounted(() => {
   )
 
   props.stars.forEach((star) => {
-    const el = document.getElementById(star.code.toLowerCase())
+    const el = document.getElementById(`star-${star.code.toLowerCase()}`)
     if (el) observer.observe(el)
   })
 

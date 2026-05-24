@@ -118,8 +118,37 @@
           class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-void/80 z-10"
         >
           <div class="w-10 h-10 rounded-full border-4 border-white/10 border-t-rose animate-spin" />
-          <p class="text-white text-sm">
+
+          <!-- Progress bar -->
+          <div class="w-64 max-w-[80vw]">
+            <div class="h-2 bg-white/10 rounded-full overflow-hidden">
+              <div
+                class="h-full bg-rose rounded-full transition-all duration-500"
+                :style="{ width: Math.min(status?.progress || 0, 100) + '%' }"
+              />
+            </div>
+            <div class="mt-1.5 flex justify-between text-xs text-white/50">
+              <span>
+                {{ status?.state?.includes('checking') ? '校验进度' : '下载进度' }}
+                {{ (status?.progress || 0).toFixed(1) }}%
+              </span>
+              <span v-if="status?.video_size">{{ (status.video_size / 1024 / 1024 / 1024).toFixed(1) }} GB</span>
+            </div>
+          </div>
+
+          <!-- Main status -->
+          <p class="text-white text-base font-medium">
             {{ statusText }}
+          </p>
+
+          <!-- Cache ratio (local_size / video_size) -->
+          <p class="text-white/60 text-xs">
+            {{ cacheRatio }}
+          </p>
+
+          <!-- Detail status -->
+          <p class="text-white/40 text-xs">
+            {{ detailStatus }}
           </p>
         </div>
 
@@ -328,6 +357,33 @@ const gestureHintText = ref('')
 
 const streamUrl = computed(() => props.hash ? `/stream/${props.hash}` : '')
 
+const cacheRatio = computed(() => {
+  if (!status.value) return ''
+  const s = status.value
+  if (!s.video_size) return ''
+  const pct = (s.local_size / s.video_size * 100).toFixed(1)
+  const mb = (s.local_size / 1024 / 1024).toFixed(0)
+  const gb = (s.video_size / 1024 / 1024 / 1024).toFixed(1)
+  return `已缓存 ${mb}MB / ${gb}GB (${pct}%)`
+})
+
+const detailStatus = computed(() => {
+  if (!status.value) return ''
+  const s = status.value
+  const parts: string[] = []
+  if (s.peers > 0) parts.push(`${s.peers} peers`)
+  if (s.download_rate > 0) parts.push(formatSpeed(s.download_rate))
+  if (s.verified_pieces > 0 && s.state?.includes('checking')) parts.push(`已校验 ${s.verified_pieces} pcs`)
+  // ETA for non-ready or buffering states
+  if (!s.ready || !s.head_ready) {
+    const eta = s.download_rate > 0 && s.video_size > s.local_size
+      ? formatEta((s.video_size - s.local_size) / s.download_rate)
+      : ''
+    if (eta) parts.push(`ETA ${eta}`)
+  }
+  return parts.join(' | ')
+})
+
 function formatEta(seconds: number): string {
   if (seconds < 60) return `${Math.ceil(seconds)}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.ceil(seconds % 60)}s`
@@ -337,36 +393,52 @@ function formatEta(seconds: number): string {
 const statusText = computed(() => {
   if (!status.value) return '连接种子...'
   const s = status.value
-  if (!s.ready) return '连接种子...'
+
+  const stateMap: Record<string, string> = {
+    checking_files: '校验文件中',
+    checking_resume_data: '校验数据中',
+    downloading_metadata: '获取元数据',
+    downloading: '下载中',
+    finished: '已完成',
+    seeding: '做种中',
+    allocating: '分配空间',
+  }
+  const stateText = stateMap[s.state] || s.state || '连接种子'
+
   const peers = s.peers > 0 ? `${s.peers} peers` : ''
+  const speed = formatSpeed(s.download_rate)
+  const pct = s.progress.toFixed(1)
+  const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
+  const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
+  const verified = s.verified_pieces ? `${s.verified_pieces} pcs` : ''
+
+  if (!s.ready) {
+    const parts = [stateText]
+    if (peers) parts.push(peers)
+    if (s.download_rate > 0) parts.push(speed)
+    if (verified && s.state.includes('checking')) parts.push(`已校验 ${verified}`)
+    return parts.join(' | ')
+  }
+
   if (!s.head_ready) {
-    const speed = formatSpeed(s.download_rate)
-    const pct = s.progress.toFixed(1)
-    const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
-    const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
-    const eta = s.download_rate > 0 && s.video_size > s.local_size
-      ? formatEta((s.video_size - s.local_size) / s.download_rate)
-      : ''
     const parts = ['缓冲中']
     if (peers) parts.push(peers)
     parts.push(speed)
-    if (buf) parts.push(`已缓存 ${buf}`)
-    if (total) parts.push(`/ ${total}`)
-    parts.push(`(${pct}%)`)
+    const eta = s.download_rate > 0 && s.video_size > s.local_size
+      ? formatEta((s.video_size - s.local_size) / s.download_rate)
+      : ''
     if (eta) parts.push(`ETA ${eta}`)
     return parts.join(' | ')
   }
+
   if (s.download_rate > 0) {
-    const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
-    const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
     const parts = ['播放中']
     if (peers) parts.push(peers)
     parts.push(formatSpeed(s.download_rate))
-    if (buf) parts.push(`已缓存 ${buf}`)
-    if (total) parts.push(`/ ${total}`)
     return parts.join(' | ')
   }
-  return '准备播放...'
+
+  return '已就绪 | 等待数据'
 })
 
 // 同时 watch hash 和 isOpen，避免 Vue 响应式时序导致两者不同时更新时漏触发

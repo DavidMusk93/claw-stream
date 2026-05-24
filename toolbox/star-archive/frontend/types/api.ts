@@ -23,6 +23,7 @@ export interface TorrentStatus {
   local_size: number
   mime: string
   state: string
+  verified_pieces: number
 }
 
 export interface CacheMetrics {

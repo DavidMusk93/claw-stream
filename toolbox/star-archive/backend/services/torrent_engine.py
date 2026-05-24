@@ -1029,11 +1029,15 @@ class TorrentEngine:
         # Persist progress for tiered cache scoring
         info["progress"] = progress
 
+        # 校验期间不应该认为 ready，避免前端在 recheck 时开始播放后卡住
+        checking_states = (lt.torrent_status.checking_files, lt.torrent_status.checking_resume_data)
+        is_ready = info["ready"] and s.has_metadata and s.state not in checking_states
+
         return {
             "hash": hash_str,
             "name": s.name,
             "work_code": info.get("work_code") or _extract_work_code(s.name) or "",
-            "ready": info["ready"] and s.has_metadata,
+            "ready": is_ready,
             "cached": local_size > 1024 * 1024,
             "head_ready": head_ready,
             "peers": s.num_peers,
