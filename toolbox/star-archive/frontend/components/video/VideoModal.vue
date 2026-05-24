@@ -12,6 +12,7 @@
         @touchstart="onTouchStart"
         @touchend="onTouchEnd"
         @touchmove="onTouchMove"
+        @mousemove="showControls"
       >
         <!-- Close button -->
         <button
@@ -55,6 +56,7 @@
           @ended="onEnded"
           @loadedmetadata="onLoadedMetadata"
           @pause="onPause"
+          @click="onVideoClick"
         />
 
         <!-- Custom controls overlay -->
@@ -613,6 +615,12 @@ function onPause() {
   logInfo('player', 'pause')
 }
 
+function onVideoClick() {
+  // Click anywhere on the video to bring back controls.
+  // If controls are already visible, this also resets the hide timer.
+  showControls()
+}
+
 function onStalled() {
   buffering.value = true
   isPlaying.value = false
@@ -904,6 +912,11 @@ onMounted(() => {
       e.preventDefault()
       v.muted = !v.muted
       logInfo('player', `key M muted=${v.muted}`)
+    } else if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault()
+      controlsHidden.value = !controlsHidden.value
+      logInfo('player', `key C controlsHidden=${controlsHidden.value}`)
+      if (!controlsHidden.value && controlsHideTimer) clearTimeout(controlsHideTimer)
     } else if (e.key >= '0' && e.key <= '9') {
       e.preventDefault()
       const pct = parseInt(e.key) / 10
