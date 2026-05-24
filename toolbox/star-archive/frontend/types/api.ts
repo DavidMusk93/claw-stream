@@ -24,6 +24,7 @@ export interface TorrentStatus {
   mime: string
   state: string
   verified_pieces: number
+  quality: string
 }
 
 export interface CacheMetrics {

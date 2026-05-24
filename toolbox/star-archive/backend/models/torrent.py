@@ -20,6 +20,7 @@ class TorrentStatus(BaseModel):
     mime: str = "video/mp4"
     state: str = ""
     verified_pieces: int = 0
+    quality: str = "SD"
 
 
 class TorrentAddRequest(BaseModel):

@@ -325,10 +325,11 @@ class TorrentEngine:
         if loaded:
             log.info(f"preloaded {loaded} cached torrents from {self.cache_dir}")
 
-    def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str]:
-        """从 torrent 文件中挑选 hhd800.com 主视频文件。"""
+    def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str, bool]:
+        """从 torrent 文件中挑选视频文件。优先 hhd800.com 高清源，否则选最大的。"""
         fs = ti.files()
         hhd800_candidates = []
+        all_video_candidates = []
         for idx in range(fs.num_files()):
             name = fs.file_path(idx)
             size = fs.file_size(idx)
@@ -339,11 +340,15 @@ class TorrentEngine:
                 continue
             if "hhd800" in name.lower():
                 hhd800_candidates.append((size, idx, name))
+            all_video_candidates.append((size, idx, name))
         if hhd800_candidates:
             hhd800_candidates.sort(reverse=True)
-            return hhd800_candidates[0]
-        # 没有 hhd800 视频文件，返回空标记
-        return (0, -1, "")
+            return (*hhd800_candidates[0], True)
+        # 没有 hhd800 时回退到最大的视频文件
+        if all_video_candidates:
+            all_video_candidates.sort(reverse=True)
+            return (*all_video_candidates[0], False)
+        return (0, -1, "", False)
 
     def _calc_prefetch_pieces(self, ti: lt.torrent_info, video_idx: int) -> tuple[int, int]:
         """计算预下载的 piece 范围（前 2%）。"""
@@ -694,12 +699,15 @@ class TorrentEngine:
         ti = handle.torrent_file()
         fs = ti.files()
 
-        size, idx, name = self._pick_video_file(ti)
+        size, idx, name, is_hd = self._pick_video_file(ti)
         if idx == -1:
-            log.warning(f"metadata: {hash_str[:12]}... no hhd800 video file found")
+            log.warning(f"metadata: {hash_str[:12]}... no video file found")
             info["ready"] = False
             return
 
+        if not is_hd:
+            log.info(f"metadata: {hash_str[:12]}... no hhd800, using fallback {name}")
+        info["quality"] = "HD" if is_hd else "SD"
         info["video_idx"] = idx
         info["video_path"] = os.path.join(info["handle"].status().save_path, name)
         info["video_size"] = size
@@ -1050,6 +1058,7 @@ class TorrentEngine:
             "mime": mime,
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
+            "quality": info.get("quality", "SD"),
             "tier": self._get_tier(info),
         }
 
