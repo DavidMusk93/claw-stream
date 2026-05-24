@@ -1,111 +1,151 @@
 {
-  "title": "SOLO Collection 2026",
-  "sort_by": "date_desc",
-  "stars": [
-    {
-      "name": "白峰ミウ",
-      "jp": "Shiromine Miu",
-      "handle": "miu_shiromine",
-      "code": "SAME-234",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/miu-shiromine-21671"
-    },
-    {
-      "name": "夢実かなえ",
-      "jp": "Yumemi Kanae",
-      "handle": "yumemi_kanae",
-      "code": "MFYD-115",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/kanae-yumemi-26966"
-    },
-    {
-      "name": "柏木ふみか",
-      "jp": "Kashiwagi Fumika",
-      "handle": "fumika_kashiwagi",
-      "code": "EBWH-322",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/fumika-kashiwagi-29173"
-    },
-    {
-      "name": "森日菜子",
-      "jp": "Mori Hinako",
-      "handle": "mori_hinako",
-      "code": "MIKR-089",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/mori-hinako-20051"
-    },
-    {
-      "name": "miru",
-      "jp": "miru",
-      "handle": "miru_12345",
-      "code": "SNOS-177",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/miru-sakamichi-1646"
-    },
-    {
-      "name": "金松季歩",
-      "jp": "Kanematsu Kiho",
-      "handle": "kiho_kanematsu",
-      "code": "SNOS-148",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/kiho-kanematsu-27288"
-    },
-    {
-      "name": "神木玲",
-      "jp": "Kamiki Rei",
-      "handle": "rei_kamiki",
-      "code": "START-542",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/rei-kamiki-23668"
-    },
-    {
-      "name": "瀧本雫葉",
-      "jp": "Takimoto Shizuha",
-      "handle": "shizuhakitamoto",
-      "code": "ABF-340",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/shizuha-kitamoto-29292"
-    },
-    {
-      "name": "天宮響",
-      "jp": "Amamiya Hibiki",
-      "handle": "hibiki_amamiya",
-      "code": "VEMA-258",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/hibiki-amamiya-26973"
-    },
-    {
-      "name": "楓カレン",
-      "jp": "Kaede Karen",
-      "handle": "karen_kaede",
-      "code": "IPZZ-802",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/karen-kaede-6028"
-    },
-    {
-      "name": "美ノ瀬すずめ",
-      "jp": "Mino Se Suzume",
-      "handle": "suzume_mino",
-      "code": "DLDSS-314",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/suzume-mino-16608"
-    },
-    {
-      "name": "涼森れむ",
-      "jp": "Suzumori Remu",
-      "handle": "remu_suzumori",
-      "code": "ABF-338",
-      "type": "solo",
-      "star_page_url": "https://ijavtorrent.com/actress/remu-suzumori-10857"
-    },
-    {
-      "name": "瀬戸環奈",
-      "jp": "Seto Kanna",
-      "handle": "kanna_seto0510",
-      "code": "SNOS-131",
-      "type": "solo",
-      "note": "2025/01 S1 debut SONE-614 | Latest: 2026/04 SNOS-131",
-      "star_page_url": "https://ijavtorrent.com/actress/kanna-seto-28701"
-    }
-  ]
+    "title": "SOLO Collection 2026",
+    "sort_by": "date_desc",
+    "stars": [
+        {
+            "name": "白峰ミウ",
+            "jp": "Shiromine Miu",
+            "handle": "miu_shiromine",
+            "code": "SAME-234",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/miu-shiromine-21671"
+        },
+        {
+            "name": "夢実かなえ",
+            "jp": "Yumemi Kanae",
+            "handle": "yumemi_kanae",
+            "code": "MFYD-115",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/kanae-yumemi-26966"
+        },
+        {
+            "name": "柏木ふみか",
+            "jp": "Kashiwagi Fumika",
+            "handle": "fumika_kashiwagi",
+            "code": "EBWH-322",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/fumika-kashiwagi-29173"
+        },
+        {
+            "name": "森日菜子",
+            "jp": "Mori Hinako",
+            "handle": "mori_hinako",
+            "code": "MIKR-089",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/mori-hinako-20051"
+        },
+        {
+            "name": "miru",
+            "jp": "miru",
+            "handle": "miru_12345",
+            "code": "SNOS-177",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/miru-sakamichi-1646"
+        },
+        {
+            "name": "金松季歩",
+            "jp": "Kanematsu Kiho",
+            "handle": "kiho_kanematsu",
+            "code": "SNOS-148",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/kiho-kanematsu-27288"
+        },
+        {
+            "name": "神木玲",
+            "jp": "Kamiki Rei",
+            "handle": "rei_kamiki",
+            "code": "START-542",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/rei-kamiki-23668"
+        },
+        {
+            "name": "瀧本雫葉",
+            "jp": "Takimoto Shizuha",
+            "handle": "shizuhakitamoto",
+            "code": "ABF-340",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/shizuha-kitamoto-29292"
+        },
+        {
+            "name": "天宮響",
+            "jp": "Amamiya Hibiki",
+            "handle": "hibiki_amamiya",
+            "code": "VEMA-258",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/hibiki-amamiya-26973"
+        },
+        {
+            "name": "楓カレン",
+            "jp": "Kaede Karen",
+            "handle": "karen_kaede",
+            "code": "IPZZ-802",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/karen-kaede-6028"
+        },
+        {
+            "name": "美ノ瀬すずめ",
+            "jp": "Mino Se Suzume",
+            "handle": "suzume_mino",
+            "code": "DLDSS-314",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/suzume-mino-16608"
+        },
+        {
+            "name": "涼森れむ",
+            "jp": "Suzumori Remu",
+            "handle": "remu_suzumori",
+            "code": "ABF-338",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/remu-suzumori-10857"
+        },
+        {
+            "name": "瀬戸環奈",
+            "jp": "Seto Kanna",
+            "handle": "kanna_seto0510",
+            "code": "SNOS-131",
+            "type": "solo",
+            "note": "2025/01 S1 debut SONE-614 | Latest: 2026/04 SNOS-131",
+            "star_page_url": "https://ijavtorrent.com/actress/kanna-seto-28701"
+        },
+        {
+            "name": "juhanarin (Nanasaki Fuuka)",
+            "jp": "juhanarin (Nanasaki Fuuka)",
+            "handle": "saika_kawakita",
+            "code": "RBD-328",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/saika-kawakita-8981"
+        },
+        {
+            "name": "Emika Shirakami",
+            "jp": "Emika Shirakami",
+            "handle": "emika_shirakami",
+            "code": "SNOS-239",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/emika-shirakami-27591"
+        },
+        {
+            "name": "Kana Momonogi",
+            "jp": "Kana Momonogi",
+            "handle": "kana_momonogi",
+            "code": "IPX-934",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/kana-momonogi-451"
+        },
+        {
+            "name": "Mio Ishikawa",
+            "jp": "Mio Ishikawa",
+            "handle": "mio_ishikawa",
+            "code": "MIDV-267",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/mio-ishikawa-22385"
+        },
+        {
+            "name": "Momo Sakura",
+            "jp": "Momo Sakura",
+            "handle": "momo_sakura",
+            "code": "IPX-980",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/momo-sakura-463"
+        }
+    ]
 }
