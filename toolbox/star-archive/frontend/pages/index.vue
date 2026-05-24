@@ -1,18 +1,16 @@
 <template>
   <div class="min-h-screen bg-black">
-    <!-- Top bar: Apple-style minimal. Pure black, no glass, no border. -->
+    <!-- Top bar -->
     <header class="fixed top-0 left-0 right-0 z-40 bg-black/90 backdrop-blur-xl">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 h-12 flex items-center justify-between">
         <h1 class="text-[17px] font-semibold text-white tracking-tight">
           Star Archive
         </h1>
         <div class="flex items-center gap-4">
-          <!-- Minimal health dot -->
           <span
             class="w-2 h-2 rounded-full"
             :class="health?.status === 'ok' ? 'bg-[#30d158]' : 'bg-[#ff453a]'"
           />
-          <!-- Sync button: Apple-style pill -->
           <button
             class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1c1c1e] text-[13px] text-white transition-colors duration-200 hover:bg-[#2c2c2e] active:bg-[#3a3a3c] disabled:opacity-40 disabled:cursor-not-allowed"
             :disabled="syncRunning"
@@ -55,12 +53,67 @@
 
     <!-- Star navigation pills -->
     <div class="fixed top-12 left-0 right-0 z-30 bg-black/90 backdrop-blur-xl">
-      <StarNav :stars="stars ?? []" />
+      <StarNav :stars="displayStars" />
     </div>
 
     <!-- Main content -->
     <main class="pt-[100px] pb-24">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 space-y-8">
+        <!-- Add Star Panel -->
+        <div class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-[15px] font-semibold text-white">添加女优</h2>
+            <span class="text-[12px] text-[#8e8e93]">ijavtorrent actress 页面</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <input
+              v-model="newStarUrl"
+              type="text"
+              placeholder="https://ijavtorrent.com/actress/xxx-xxx-12345"
+              class="flex-1 h-11 px-4 rounded-xl bg-black text-[14px] text-white placeholder:text-[#8e8e93]/50 outline-none border border-white/[0.06] focus:border-[#ff375f]/40 transition-colors"
+              @keydown.enter="addStar"
+            />
+            <button
+              class="h-11 px-5 rounded-xl bg-[#ff375f] text-white text-[14px] font-medium transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="addingStar || !newStarUrl.trim()"
+              @click="addStar"
+            >
+              <span v-if="addingStar" class="flex items-center gap-2">
+                <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M21 12a9 9 0 1 1-6.22-8.56" />
+                </svg>
+                添加中
+              </span>
+              <span v-else>添加</span>
+            </button>
+          </div>
+          <p v-if="addError" class="mt-2.5 text-[13px] text-[#ff453a]">{{ addError }}</p>
+          <p v-if="addSuccess" class="mt-2.5 text-[13px] text-[#30d158]">{{ addSuccess }}</p>
+        </div>
+
+        <!-- Recently Added Panel -->
+        <div v-if="recentStars.length" class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-[15px] font-semibold text-white">最近添加</h2>
+            <button class="text-[12px] text-[#8e8e93] hover:text-white transition-colors" @click="clearRecent">
+              清空
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <div
+              v-for="s in recentStars"
+              :key="s.code"
+              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#2c2c2e] text-[13px] text-white hover:bg-[#3a3a3c] transition-colors cursor-pointer"
+              @click="scrollToStar(s.code)"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-[#ff375f]" />
+              {{ s.name }}
+              <span class="text-[#8e8e93]">{{ s.code }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Loading / Error -->
         <div v-if="pending" class="flex items-center justify-center py-40 gap-3 text-[#8e8e93]">
           <div class="w-5 h-5 rounded-full border-2 border-[#2c2c2e] border-t-white animate-spin" />
           <span class="text-[15px]">Loading...</span>
@@ -70,20 +123,23 @@
           <p class="text-[15px] text-[#ff453a]">Failed to load data</p>
         </div>
 
+        <!-- Star Cards -->
         <div v-else class="space-y-14 md:space-y-20">
           <StarCard
-            v-for="(star, index) in stars"
+            v-for="(star, index) in displayStars"
+            :id="`star-${star.code}`"
             :key="star.code"
             :star="star"
             :index="index"
             @play="openVideo"
+            @deleted="onStarDeleted"
           />
         </div>
       </div>
     </main>
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
-    <CachePanel :stars="stars ?? []" />
+    <CachePanel :stars="displayStars" />
   </div>
 </template>
 
@@ -94,21 +150,97 @@ interface HealthResponse {
   status: string
 }
 
+interface RecentStar {
+  name: string
+  code: string
+  url: string
+  addedAt: number
+}
+
 const config = useRuntimeConfig()
 const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase })
 const { stars, pending, error } = useStars()
 const { preheat } = useCachePreheat()
 
+const deletedCodes = ref<Set<string>>(new Set())
+const displayStars = computed(() => stars.value?.filter(s => !deletedCodes.value.has(s.code)) ?? [])
+
 const modalOpen = ref(false)
 const activeHash = ref('')
 const preheated = ref(false)
 
-// Sync state
-const syncRunning = ref(false)
-const syncElapsed = ref(0)
-const syncError = ref('')
-let syncTimer: ReturnType<typeof setInterval> | null = null
-let syncStartTime = 0
+// Add Star
+const newStarUrl = ref('')
+const addingStar = ref(false)
+const addError = ref('')
+const addSuccess = ref('')
+const recentStars = ref<RecentStar[]>([])
+
+// Load recent from localStorage
+onMounted(() => {
+  try {
+    const raw = localStorage.getItem('recentStars')
+    if (raw) recentStars.value = JSON.parse(raw)
+  } catch { /* ignore */ }
+})
+
+function saveRecent() {
+  localStorage.setItem('recentStars', JSON.stringify(recentStars.value.slice(0, 20)))
+}
+
+function clearRecent() {
+  recentStars.value = []
+  localStorage.removeItem('recentStars')
+}
+
+function scrollToStar(code: string) {
+  const el = document.getElementById(`star-${code}`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
+function onStarDeleted(code: string) {
+  deletedCodes.value.add(code)
+  recentStars.value = recentStars.value.filter(s => s.code !== code)
+  saveRecent()
+}
+
+async function addStar() {
+  const url = newStarUrl.value.trim()
+  if (!url) return
+  addError.value = ''
+  addSuccess.value = ''
+  addingStar.value = true
+
+  try {
+    const res = await $fetch('/api/stars/add', {
+      baseURL: config.public.apiBase,
+      method: 'POST',
+      body: { star_page_url: url },
+    }) as any
+
+    addSuccess.value = `已添加 ${res.name} (${res.code})，发现 ${res.titles_found} 部作品，后台同步中...`
+    newStarUrl.value = ''
+
+    // Push to recent
+    recentStars.value.unshift({
+      name: res.name,
+      code: res.code,
+      url: res.star_page_url,
+      addedAt: Date.now(),
+    })
+    saveRecent()
+
+    // Refresh stars list
+    await refreshNuxtData('stars')
+  } catch (e: any) {
+    const msg = e?.data?.detail || e?.message || '添加失败'
+    addError.value = msg
+  } finally {
+    addingStar.value = false
+  }
+}
 
 function openVideo(magnet: string) {
   const match = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
@@ -117,6 +249,13 @@ function openVideo(magnet: string) {
     modalOpen.value = true
   }
 }
+
+// Sync state
+const syncRunning = ref(false)
+const syncElapsed = ref(0)
+const syncError = ref('')
+let syncTimer: ReturnType<typeof setInterval> | null = null
+let syncStartTime = 0
 
 async function startSync() {
   if (syncRunning.value) return

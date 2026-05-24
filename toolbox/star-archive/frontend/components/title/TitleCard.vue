@@ -7,14 +7,15 @@
     <!-- Cover: full image display, black background blends with page -->
     <div class="relative rounded-2xl overflow-hidden aspect-[2/3] bg-black">
       <img
-        v-if="title.cover_url"
+        v-if="title.cover_url && !imgError"
         :src="title.cover_url"
         :alt="title.code"
         class="w-full h-full object-contain block"
         loading="lazy"
+        @error="imgError = true"
       />
       <div
-        v-else
+        v-if="!title.cover_url || imgError"
         class="w-full h-full flex items-center justify-center text-[#333] text-sm font-medium"
       >
         {{ title.code }}
@@ -49,6 +50,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { Title } from '~/types/api'
 
 defineProps<{
@@ -61,4 +63,6 @@ defineProps<{
 defineEmits<{
   (e: 'play', magnet: string): void
 }>()
+
+const imgError = ref(false)
 </script>

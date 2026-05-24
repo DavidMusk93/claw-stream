@@ -5,9 +5,23 @@
       <h2 class="text-[26px] font-bold text-white tracking-tight">
         {{ star.name }}
       </h2>
-      <span class="text-[13px] text-[#8e8e93]">
-        {{ star.titles?.length ?? 0 }}
-      </span>
+      <div class="flex items-center gap-3">
+        <button
+          class="text-[#8e8e93] hover:text-[#ff453a] transition-colors"
+          title="删除女优"
+          @click="onDelete"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+        </button>
+        <span class="text-[13px] text-[#8e8e93]">
+          {{ star.titles?.length ?? 0 }}
+        </span>
+      </div>
     </div>
 
     <!-- Main area: big image + dock -->
@@ -16,16 +30,17 @@
       <div class="flex-1 min-w-0">
         <div ref="heroWrap" class="relative rounded-2xl overflow-hidden bg-black">
           <img
-            v-if="activeTitle?.cover_url"
+            v-if="activeTitle?.cover_url && !heroError"
             ref="heroImg"
             :src="activeTitle.cover_url"
             :alt="activeTitle.code"
             class="w-full h-auto block"
             loading="lazy"
             @load="onHeroLoad"
+            @error="heroError = true"
           />
           <div
-            v-else
+            v-if="!activeTitle?.cover_url || heroError"
             class="w-full aspect-[2/3] flex items-center justify-center text-[#333] text-sm font-medium"
           >
             {{ activeTitle?.code || star.code }}
@@ -89,11 +104,13 @@
           @click="activeIndex = idx"
         >
           <img
+            v-if="title.cover_url && !thumbErrors[title.code]"
             :src="title.cover_url"
             :alt="title.code"
             :class="isMobile ? 'w-full h-auto' : 'h-full w-auto'"
             class="block"
             loading="lazy"
+            @error="thumbErrors[title.code] = true"
           />
           <!-- Number + Date badge -->
           <div class="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between gap-1">
@@ -118,13 +135,16 @@ const props = defineProps<{
   index?: number
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'play', magnet: string): void
+  (e: 'deleted', code: string): void
 }>()
 
 const id = computed(() => props.star.code.toLowerCase())
 const activeIndex = ref(0)
 const copied = ref(false)
+const heroError = ref(false)
+const thumbErrors = ref<Record<string, boolean>>({})
 
 const activeTitle = computed(() => {
   const titles = props.star.titles || []
@@ -150,6 +170,24 @@ function copyMagnet() {
     copied.value = true
     setTimeout(() => copied.value = false, 1500)
   })
+}
+
+const deleting = ref(false)
+
+async function onDelete() {
+  if (!confirm(`确定要删除女优「${props.star.name}」及其所有作品数据吗？\n（cache 中的下载文件会被保留）`)) {
+    return
+  }
+  deleting.value = true
+  try {
+    const { deleteStar } = useApi()
+    await deleteStar(props.star.code)
+    emit('deleted', props.star.code)
+  } catch (e: any) {
+    alert(e?.message || '删除失败')
+  } finally {
+    deleting.value = false
+  }
 }
 
 // ── Layout sizing: dock aligns to hero image ──

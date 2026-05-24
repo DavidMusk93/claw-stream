@@ -45,6 +45,7 @@ export interface Title {
   resolution?: string
   cover_url?: string
   magnet?: string
+  number?: number
 }
 
 export interface Post {

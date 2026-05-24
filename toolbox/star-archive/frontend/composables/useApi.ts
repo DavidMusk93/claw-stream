@@ -64,6 +64,16 @@ export function useApi() {
     return res._data
   }
 
+  async function deleteStar(code: string) {
+    const res = await $fetch.raw(`/api/stars/${code}`, {
+      baseURL: config.public.apiBase,
+      method: 'DELETE',
+      headers: _headers(),
+    })
+    syncTraceIdFromResponse(res.response)
+    return res._data
+  }
+
   return {
     checkStream,
     getTorrentStatus,
@@ -71,5 +81,6 @@ export function useApi() {
     getCacheMetrics,
     getCacheItems,
     deleteCache,
+    deleteStar,
   }
 }
