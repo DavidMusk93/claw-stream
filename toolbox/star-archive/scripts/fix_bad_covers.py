@@ -3,12 +3,15 @@
 
 用法: cd toolbox/star-archive && python3 scripts/fix_bad_covers.py
 """
-import sys, os, base64, struct, asyncio
+from __future__ import annotations
+
+import sys, os, base64, asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import duckdb
-from scrapers.search_news import download_cover_b64, _parse_image_size
+from scrapers.v2.cover_utils import download_cover_b64, parse_image_size, is_good_cover
+
 
 def main():
     db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'claw.duckdb')
@@ -26,8 +29,8 @@ def main():
         if b64.startswith('data:image/'):
             b64 = b64.split(',', 1)[1]
         data = base64.b64decode(b64)
-        w, h = _parse_image_size(data)
-        if len(data) < 15 * 1024 or w < 200 or h < 200:
+        w, h = parse_image_size(data)
+        if not is_good_cover(data):
             bad.append((title_id, code, cover_url))
             print(f"BAD: {code}: {w}x{h}, {len(data)/1024:.1f}KB")
 
@@ -58,6 +61,7 @@ def main():
     conn.commit()
     conn.close()
     print("Done.")
+
 
 if __name__ == "__main__":
     main()
