@@ -71,6 +71,19 @@ def parse_image_size(data: bytes) -> tuple[int, int]:
     return (0, 0)
 
 
+def _guess_mime(data: bytes) -> str:
+    """根据二进制头部推断图片 MIME 类型。"""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and len(data) > 12 and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 def is_good_cover(data: bytes) -> bool:
     """检查封面是否足够高清：>= 15KB 且尺寸 >= 200x200"""
     if len(data) < 15 * 1024:
@@ -104,7 +117,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
         data = await _fetch_jable_cover(code)
         if data and is_good_cover(data):
             b64 = base64.b64encode(data).decode()
-            return f"data:image/jpeg;base64,{b64}"
+            return f"data:{_guess_mime(data)};base64,{b64}"
         elif data:
             pass  # too small, continue fallback
 
@@ -119,7 +132,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                     data = await fetcher.fetch_bytes(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
                     if data and is_good_cover(data):
                         b64 = base64.b64encode(data).decode()
-                        return f"data:image/jpeg;base64,{b64}"
+                        return f"data:{_guess_mime(data)};base64,{b64}"
             except Exception:
                 pass
 
@@ -139,7 +152,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                 )
                 if data and is_good_cover(data):
                     b64 = base64.b64encode(data).decode()
-                    return f"data:image/jpeg;base64,{b64}"
+                    return f"data:{_guess_mime(data)};base64,{b64}"
         except Exception:
                 pass
 

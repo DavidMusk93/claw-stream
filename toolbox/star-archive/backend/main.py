@@ -31,6 +31,21 @@ CACHE_DIR = os.path.join(SCRIPT_DIR, "cache", "torrent")
 IMAGES_DIR = os.path.join(SCRIPT_DIR, "images")
 
 
+def _guess_image_mime(data: bytes) -> str:
+    """根据二进制头部推断图片 MIME 类型。"""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and len(data) > 12 and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return "image/jpeg"  # 默认回退
+
+
 def _get_engine() -> TorrentEngine:
     """Create TorrentEngine singleton."""
     return TorrentEngine(CACHE_DIR, max_size_gb=30)
@@ -168,9 +183,10 @@ async def cover_image(code: str):
                     b64_data = b64_data.split(",", 1)[1]
                 try:
                     image_bytes = base64.b64decode(b64_data)
+                    media_type = _guess_image_mime(image_bytes)
                     return Response(
                         content=image_bytes,
-                        media_type="image/jpeg",
+                        media_type=media_type,
                         headers={"Cache-Control": "public, max-age=604800"},
                     )
                 except Exception:
