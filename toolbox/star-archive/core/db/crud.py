@@ -165,3 +165,37 @@ def upsert_social_post(star_id, platform, content, post_url=None, posted_at=None
     conn.commit()
     conn.close()
     return row[0]
+
+
+@trace_db
+def delete_star_by_code(code: str) -> bool:
+    """删除女优及其所有关联数据（titles, magnets, social_posts）。
+
+    返回是否成功找到并删除。
+    """
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT id FROM stars WHERE code = ?", (code,)).fetchone()
+        if not row:
+            conn.close()
+            return False
+        star_id = row[0]
+
+        # 获取该 star 的所有 title ids
+        title_rows = conn.execute(
+            "SELECT id FROM titles WHERE star_id = ?", (star_id,)
+        ).fetchall()
+        title_ids = [r[0] for r in title_rows]
+
+        # 按外键依赖顺序删除：magnets → titles → social_posts → stars
+        if title_ids:
+            placeholders = ", ".join(["?"] * len(title_ids))
+            conn.execute(f"DELETE FROM magnets WHERE title_id IN ({placeholders})", title_ids)
+            conn.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
+
+        conn.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
+        conn.execute("DELETE FROM stars WHERE id = ?", (star_id,))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
