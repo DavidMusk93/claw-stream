@@ -70,9 +70,6 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
 
     hash_str = info["hash"]
 
-    if not req.prefetch:
-        await asyncio.to_thread(engine.set_full_priority, hash_str)
-
     # Do NOT wait for has_metadata here — that blocks the event loop and
     # serializes playback startup. Frontend already polls /api/check.
     status = await asyncio.to_thread(engine.get_status, hash_str)

@@ -792,8 +792,12 @@ class TorrentEngine:
             if not info.get("_play_priority_applied"):
                 piece_prios = [0] * num_pieces
                 handle.prioritize_pieces(piece_prios)
-                self._apply_play_priority(handle, info)
-                info["_play_priority_applied"] = True
+                # 如果用户已暂停（如关闭播放器），不自动开始下载 head+tail
+                if not info.get("_paused"):
+                    self._apply_play_priority(handle, info)
+                    info["_play_priority_applied"] = True
+                else:
+                    log.info(f"metadata: {hash_str[:12]}... paused, skip head+tail priority")
             log.info(f"added: {name} ({format_size(size)})")
 
         # ── Architecture: bootstrap-first verification ─────────────────
@@ -1022,6 +1026,7 @@ class TorrentEngine:
                 not tracker.head_ready()
                 and info.get("_play_priority_applied")
                 and info.get("moov_end", 0) > 0
+                and not info.get("_paused")
             ):
                 now = time.time()
                 last_warm = info.get("_last_warm_attempt", 0)

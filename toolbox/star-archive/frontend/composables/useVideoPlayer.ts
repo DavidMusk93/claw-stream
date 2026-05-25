@@ -82,6 +82,18 @@ export function useVideoPlayer() {
       // already added or other error
     }
 
+    // Trigger head+tail download so head_ready can be detected.
+    try {
+      await $fetch('/torrent/resume', {
+        baseURL: config.public.apiBase,
+        method: 'POST',
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        body: { hash, time: 0, duration: 0 },
+      })
+    } catch {
+      // ignore
+    }
+
     while (Date.now() - start < timeoutSec * 1000) {
       if (await checkHeadReady(hash)) {
         loading.value = false
