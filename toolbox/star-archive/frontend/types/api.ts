@@ -64,6 +64,7 @@ export interface Star {
   code: string
   type?: string
   note?: string
+  number?: number
   titles: Title[]
   posts: Post[]
 }

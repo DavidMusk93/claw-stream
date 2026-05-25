@@ -12,6 +12,7 @@
         @click.prevent="scrollToStar(star.code)"
       >
         {{ star.name }}
+        <span v-if="star.number" class="ml-1 text-[10px] text-[#8e8e93]/60">#{{ star.number }}</span>
       </a>
     </div>
   </nav>
