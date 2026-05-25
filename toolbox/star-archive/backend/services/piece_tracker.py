@@ -347,12 +347,12 @@ class PieceStateTracker:
 
     def reset_priorities(self) -> None:
         """Reset all video pieces to priority 0 (used on pause/stop)."""
-        # Only iterate over pieces that are currently DOWNLOADING
-        downloading = self._downloading >> self.start_piece
-        p = self.start_piece
-        while downloading:
-            if downloading & 1:
-                self.handle.piece_priority(p, 0)
-            downloading >>= 1
-            p += 1
+        prios = list(self.handle.piece_priorities())
+        changed = False
+        for p in range(self.start_piece, self.end_piece + 1):
+            if prios[p] > 0:
+                prios[p] = 0
+                changed = True
+        if changed:
+            self.handle.prioritize_pieces(prios)
         self._downloading = 0

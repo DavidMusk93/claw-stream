@@ -952,6 +952,36 @@ class TorrentEngine:
             info["last_access"] = time.time()
         return result
 
+    def pause_download(self, hash_str: str) -> bool:
+        """暂停下载：将所有 piece 优先级设为 0，保留已完成的 piece。"""
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return False
+        tracker = info.get("tracker")
+        if tracker:
+            tracker.reset_priorities()
+            log.info(f"pause download: {hash_str[:12]}... all piece priorities reset to 0")
+        info["_paused"] = True
+        return True
+
+    def resume_download(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
+        """恢复下载：重新设置 head+tail+当前窗口。"""
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return False
+        info["_paused"] = False
+        h = info["handle"]
+        # 先恢复 head+tail
+        self._apply_play_priority(h, info)
+        # 再恢复播放窗口
+        result = self._set_stream_window(h, info, time_sec, duration_sec, window_pcs=30)
+        if result:
+            log.info(f"resume download: {hash_str[:12]}... t={time_sec:.1f}s")
+            info["last_access"] = time.time()
+        return result
+
     def get_status(self, hash_str: str) -> dict[str, Any] | None:
         """获取指定 torrent 的播放和下载状态。"""
         with self.lock:

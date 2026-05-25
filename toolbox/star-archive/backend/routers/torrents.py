@@ -101,3 +101,21 @@ async def progress_torrent(req: ProgressRequest, engine: Any = Depends(get_engin
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found or not ready")
     return {"ok": True}
+
+
+@router.post("/pause")
+async def pause_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
+    """暂停下载：将所有 piece 优先级设为 0，保留已完成的 piece。"""
+    ok = await asyncio.to_thread(engine.pause_download, req.hash)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Torrent not found")
+    return {"ok": True}
+
+
+@router.post("/resume")
+async def resume_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
+    """恢复下载：重新设置 head+tail+当前播放窗口。"""
+    ok = await asyncio.to_thread(engine.resume_download, req.hash, req.time, req.duration)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Torrent not found or not ready")
+    return {"ok": True}

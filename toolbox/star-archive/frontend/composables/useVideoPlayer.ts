@@ -127,6 +127,36 @@ export function useVideoPlayer() {
     }
   }
 
+  async function reportPause(hash: string) {
+    if (!hash) return
+    try {
+      logInfo('player', `reportPause ${hash.slice(0, 12)}`)
+      await $fetch('/torrent/pause', {
+        baseURL: config.public.apiBase,
+        method: 'POST',
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        body: { hash, time: 0, duration: 0 },
+      })
+    } catch (e: any) {
+      logError('player', `reportPause ${hash.slice(0, 12)} failed: ${e.message || e}`)
+    }
+  }
+
+  async function reportResume(hash: string, time: number, duration: number) {
+    if (!hash || !duration || duration === Infinity) return
+    try {
+      logInfo('player', `reportResume ${hash.slice(0, 12)} time=${time.toFixed(1)}s`)
+      await $fetch('/torrent/resume', {
+        baseURL: config.public.apiBase,
+        method: 'POST',
+        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        body: { hash, time, duration },
+      })
+    } catch (e: any) {
+      logError('player', `reportResume ${hash.slice(0, 12)} failed: ${e.message || e}`)
+    }
+  }
+
   function formatSpeed(rate: number): string {
     if (rate > 1024 * 1024) return `${(rate / 1024 / 1024).toFixed(1)} MB/s`
     if (rate > 1024) return `${(rate / 1024).toFixed(1)} KB/s`
@@ -145,6 +175,8 @@ export function useVideoPlayer() {
     waitForHeadReady,
     reportSeek,
     reportProgress,
+    reportPause,
+    reportResume,
     formatSpeed,
   }
 }

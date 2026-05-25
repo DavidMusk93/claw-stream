@@ -41,7 +41,6 @@
           x5-video-player-fullscreen="false"
           controlsList="nodownload noremoteplayback"
           preload="auto"
-          muted
           crossorigin="anonymous"
           class="w-full h-full"
           @canplay="onCanplay"
@@ -100,6 +99,12 @@
                 @click="togglePlay"
               >
                 {{ isPlaying ? '⏸' : '▶' }}
+              </button>
+              <button
+                class="w-8 h-8 flex items-center justify-center text-white text-sm touch-manipulation hover:text-rose transition-colors"
+                @click="toggleMute"
+              >
+                {{ isMuted ? '🔇' : '🔊' }}
               </button>
               <span class="text-xs text-white/90 font-mono tabular-nums">
                 {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
@@ -194,11 +199,12 @@ const props = defineProps<{ hash?: string }>()
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
 const progressBarRef = ref<HTMLDivElement>()
-const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, reportProgress, formatSpeed } = useVideoPlayer()
+const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, reportProgress, reportPause, reportResume, formatSpeed } = useVideoPlayer()
 
 const buffering = ref(false)
 const errorMsg = ref('')
 const isFullscreen = ref(false)
+const isMuted = ref(false)
 const retryCount = ref(0)
 const MAX_RETRIES = 3
 
@@ -484,6 +490,9 @@ watch(isOpen, (open) => {
     stopPolling()
     if (controlsHideTimer) clearTimeout(controlsHideTimer)
     controlsHidden.value = false
+    if (props.hash) {
+      reportPause(props.hash)
+    }
     if (videoRef.value) {
       videoRef.value.pause()
       videoRef.value.removeAttribute('src')
@@ -529,6 +538,9 @@ function onCanplay() {
   if (!isPlaying.value && v?.paused) {
     v?.play().then(() => {
       isPlaying.value = true
+      if (props.hash && v.duration && isFinite(v.duration)) {
+        reportResume(props.hash, v.currentTime, v.duration)
+      }
     }).catch((err: any) => {
       logError('player', `canplay play() rejected: ${err?.name || err?.message || err}`)
     })
@@ -573,6 +585,10 @@ function onPlaying() {
   buffering.value = false
   isPlaying.value = true
   logInfo('player', 'playing')
+  const v = videoRef.value
+  if (props.hash && v && v.duration && isFinite(v.duration)) {
+    reportResume(props.hash, v.currentTime, v.duration)
+  }
 }
 function onSeeking() {
   buffering.value = true
@@ -606,6 +622,9 @@ function onSeeked() {
   if (wasPlayingBeforeSeek.value) {
     v?.play().then(() => {
       isPlaying.value = true
+      if (props.hash && v && v.duration && isFinite(v.duration)) {
+        reportResume(props.hash, v.currentTime, v.duration)
+      }
     }).catch(() => {})
   }
 }
@@ -613,6 +632,9 @@ function onSeeked() {
 function onPause() {
   isPlaying.value = false
   logInfo('player', 'pause')
+  if (props.hash) {
+    reportPause(props.hash)
+  }
 }
 
 function onVideoClick() {
@@ -724,6 +746,14 @@ function toggleFullscreen() {
     exitFullscreen()
     logInfo('player', 'exit fullscreen')
   }
+}
+
+function toggleMute() {
+  const v = videoRef.value
+  if (!v) return
+  v.muted = !v.muted
+  isMuted.value = v.muted
+  logInfo('player', `toggleMute muted=${v.muted}`)
 }
 
 function enterFullscreen(el: HTMLElement) {
@@ -910,8 +940,7 @@ onMounted(() => {
       toggleFullscreen()
     } else if (e.key === 'm' || e.key === 'M') {
       e.preventDefault()
-      v.muted = !v.muted
-      logInfo('player', `key M muted=${v.muted}`)
+      toggleMute()
     } else if (e.key === 'c' || e.key === 'C') {
       e.preventDefault()
       controlsHidden.value = !controlsHidden.value
