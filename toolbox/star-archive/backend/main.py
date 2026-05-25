@@ -164,11 +164,12 @@ async def health():
 
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
-@app.get("/api/cover/{code}")
-async def cover_image(code: str):
-    """从 DuckDB cover_b64 字段读取封面，或回退到 images/titles/{code}/ 文件系统。"""
-    code_upper = code.upper()
+# 内存缓存：避免重复查询 DuckDB（封面不会变化）
+_cover_cache: dict[str, tuple[bytes, str]] = {}
 
+
+def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
+    """同步函数：从 DuckDB 或文件系统读取封面，返回 (image_bytes, media_type)。"""
     # 1. 优先从 DuckDB 读取
     try:
         conn = duckdb.connect(DB_PATH, read_only=True)
@@ -184,11 +185,7 @@ async def cover_image(code: str):
                 try:
                     image_bytes = base64.b64decode(b64_data)
                     media_type = _guess_image_mime(image_bytes)
-                    return Response(
-                        content=image_bytes,
-                        media_type=media_type,
-                        headers={"Cache-Control": "public, max-age=604800"},
-                    )
+                    return image_bytes, media_type
                 except Exception:
                     pass
         finally:
@@ -197,7 +194,7 @@ async def cover_image(code: str):
         pass
 
     # 2. 回退到文件系统 images/titles/{code}/{code}.jpg
-    code_lower = code.upper().lower()
+    code_lower = code_upper.lower()
     cover_dir = os.path.join(IMAGES_DIR, "titles", code_lower)
     if os.path.isdir(cover_dir):
         for ext in (".jpg", ".jpeg", ".png", ".webp"):
@@ -210,11 +207,41 @@ async def cover_image(code: str):
                     ".webp": "image/webp",
                 }.get(ext, "image/jpeg")
                 with open(file_path, "rb") as f:
-                    return Response(
-                        content=f.read(),
-                        media_type=media_type,
-                        headers={"Cache-Control": "public, max-age=604800"},
-                    )
+                    return f.read(), media_type
+    return None
+
+
+@app.get("/api/cover/{code}")
+async def cover_image(code: str):
+    """从 DuckDB cover_b64 字段读取封面，或回退到 images/titles/{code}/ 文件系统。
+    
+    使用线程池执行同步 I/O，避免阻塞事件循环。并发大量封面请求时，
+    不会串行阻塞其他 API。
+    """
+    code_upper = code.upper()
+
+    # 内存缓存命中直接返回（无需线程切换）
+    cached = _cover_cache.get(code_upper)
+    if cached:
+        image_bytes, media_type = cached
+        return Response(
+            content=image_bytes,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
+
+    result = await asyncio.to_thread(_read_cover_from_db, code_upper)
+    if result:
+        image_bytes, media_type = result
+        # 限制缓存大小，防止内存无限增长（简单 LRU：超过 1000 时清空）
+        if len(_cover_cache) > 1000:
+            _cover_cache.clear()
+        _cover_cache[code_upper] = result
+        return Response(
+            content=image_bytes,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
 
     return JSONResponse(status_code=404, content={"detail": "Cover not found"})
 
