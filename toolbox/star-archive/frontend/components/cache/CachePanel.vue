@@ -18,7 +18,7 @@
     <Transition name="slide">
       <div
         v-if="isOpen"
-        class="absolute bottom-14 right-0 w-[420px] max-h-[75vh] bg-[#1c1c1e] border border-white/[0.06] rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+        class="absolute bottom-14 right-0 w-[92vw] sm:w-[420px] max-h-[75vh] bg-[#1c1c1e] border border-white/[0.06] rounded-2xl shadow-2xl overflow-hidden flex flex-col"
       >
         <!-- Header -->
         <div class="p-4 border-b border-white/[0.06] flex items-center justify-between">
