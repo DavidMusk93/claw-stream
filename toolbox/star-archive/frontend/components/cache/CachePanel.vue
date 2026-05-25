@@ -179,7 +179,7 @@ const hashToInfo = computed(() => {
 })
 
 const enrichedItems = computed(() => {
-  return items.value.map(item => {
+  const list = items.value.map(item => {
     const info = hashToInfo.value[item.hash]
     const code = item.work_code
       || info?.code
@@ -192,6 +192,13 @@ const enrichedItems = computed(() => {
       number: info?.number || 0,
       displayCode: code || item.name || item.hash.slice(0, 12),
     }
+  })
+  // 按 #id 排序，无编号放最后
+  return list.sort((a, b) => {
+    if (a.number && b.number) return a.number - b.number
+    if (a.number) return -1
+    if (b.number) return 1
+    return 0
   })
 })
 
