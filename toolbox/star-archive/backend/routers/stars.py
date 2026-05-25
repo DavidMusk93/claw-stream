@@ -151,7 +151,6 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 "note": a.get("note", ""),
                 "titles": titles,
                 "posts": posts,
-                "number": titles[0]["number"] if titles else None,
             })
 
         def _latest_date(star):
@@ -167,8 +166,11 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
         number = 1
         for star in result:
+            star["number"] = None
             for t in star.get("titles", []):
                 t["number"] = number
+                if star["number"] is None:
+                    star["number"] = number
                 number += 1
 
         return result
