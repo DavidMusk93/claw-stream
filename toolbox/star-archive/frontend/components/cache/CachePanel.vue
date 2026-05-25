@@ -2,7 +2,7 @@
   <div class="fixed bottom-4 right-4 z-50">
     <!-- Toggle button -->
     <button
-      class="w-12 h-12 rounded-full bg-gradient-to-br from-rose to-violet text-white flex items-center justify-center shadow-glass transition-all duration-200 active:scale-95 relative hover:shadow-rose-glow"
+      class="w-12 h-12 rounded-full bg-[#1c1c1e] border border-white/[0.08] text-white flex items-center justify-center shadow-lg transition-all duration-200 active:scale-95 relative hover:border-white/20"
       @click="isOpen = !isOpen"
       title="缓存管理"
     >
@@ -11,7 +11,6 @@
         <polyline points="17 8 12 3 7 8"/>
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
-      <!-- 下载中指示点 -->
       <span v-if="activeCount > 0" class="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-void shadow-[0_0_8px_rgba(52,211,153,0.4)]" />
     </button>
 
@@ -19,72 +18,95 @@
     <Transition name="slide">
       <div
         v-if="isOpen"
-        class="absolute bottom-14 right-0 w-96 max-h-[70vh] glass-strong rounded-glass-lg shadow-glass overflow-hidden flex flex-col"
+        class="absolute bottom-14 right-0 w-[420px] max-h-[75vh] bg-[#1c1c1e] border border-white/[0.06] rounded-2xl shadow-2xl overflow-hidden flex flex-col"
       >
-        <div class="p-4 border-b border-glass-border flex items-center justify-between">
-          <h3 class="font-semibold text-sm">缓存管理</h3>
-          <div class="text-xs text-foreground-muted font-mono tabular-nums">
+        <!-- Header -->
+        <div class="p-4 border-b border-white/[0.06] flex items-center justify-between">
+          <h3 class="font-semibold text-sm text-white">缓存管理</h3>
+          <div class="text-xs text-[#8e8e93] font-mono tabular-nums">
             {{ metrics?.used_human ?? '0 B' }} / {{ metrics?.max_human ?? '0 B' }}
           </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto p-2">
-          <div v-if="enrichedItems.length === 0" class="text-center py-8 text-foreground-muted text-sm">
+        <!-- Summary bar -->
+        <div class="px-4 py-2.5 bg-black/30 border-b border-white/[0.04] flex items-center gap-3 text-[11px] text-[#8e8e93]">
+          <span>共 {{ items.length }} 个</span>
+          <span v-if="activeCount > 0" class="text-emerald-400">活跃 {{ activeCount }} 个</span>
+          <span v-if="hdCount > 0" class="text-rose">高清 {{ hdCount }} 个</span>
+          <span v-if="sdCount > 0" class="text-amber">标清 {{ sdCount }} 个</span>
+        </div>
+
+        <!-- List -->
+        <div class="flex-1 overflow-y-auto p-2 space-y-1">
+          <div v-if="enrichedItems.length === 0" class="text-center py-10 text-[#8e8e93] text-sm">
             暂无缓存
           </div>
 
           <div
             v-for="item in enrichedItems"
             :key="item.hash"
-            class="p-3 rounded-glass hover:bg-glass-bg-hover transition-colors space-y-2"
+            class="p-3 rounded-xl bg-black/20 hover:bg-black/30 transition-colors"
           >
-            <!-- 第一行：作品信息 -->
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex-1 min-w-0">
-                <p class="text-xs font-semibold truncate text-foreground">
-                  <span v-if="item.number" class="text-rose font-mono mr-1">#{{ item.number }}</span>
-                  {{ item.displayCode }}
-                </p>
-                <p class="text-[10px] text-foreground-muted/50 font-mono tabular-nums">{{ item.hash.slice(0, 16) }}...</p>
-              </div>
+            <!-- 第一行：code + tags -->
+            <div class="flex items-center gap-2 mb-2">
+              <span v-if="item.number" class="text-[10px] text-[#8e8e93] font-mono">#{{ item.number }}</span>
+              <p class="text-[13px] font-semibold text-white truncate flex-1 min-w-0">
+                {{ item.displayCode }}
+              </p>
               <span
-                class="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium"
-                :class="statusClass(item)"
+                class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                :class="qualityClass(item)"
               >
-                {{ statusLabel(item) }}
+                {{ item.quality === 'HD' ? '高清' : '标清' }}
+              </span>
+              <span
+                class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                :class="stateClass(item)"
+              >
+                {{ stateLabel(item) }}
+              </span>
+            </div>
+
+            <!-- 第二行：tier + peers + speed -->
+            <div class="flex items-center gap-2 mb-2 text-[10px] text-[#8e8e93]">
+              <span class="px-1.5 py-0.5 rounded bg-white/[0.05] text-white/50">{{ tierLabel(item) }}</span>
+              <span v-if="item.peers > 0">{{ item.peers }} peers</span>
+              <span v-if="item.download_rate > 0" class="text-emerald-400">↓ {{ formatSpeed(item.download_rate) }}</span>
+              <span v-if="item.upload_rate > 0" class="text-sky-400">↑ {{ formatSpeed(item.upload_rate) }}</span>
+              <span v-if="item.verified_pieces > 0 && item.state?.includes('checking')" class="text-amber">
+                已校验 {{ item.verified_pieces }} pcs
               </span>
             </div>
 
             <!-- 进度条 -->
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 mb-2">
               <div class="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
                 <div
                   class="h-full rounded-full transition-all duration-500"
-                  :class="item.progress >= 99.9 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : 'bg-gradient-to-r from-rose to-violet'"
+                  :class="progressBarClass(item)"
                   :style="{ width: `${Math.min(item.progress, 100)}%` }"
                 />
               </div>
-              <span class="text-[10px] text-foreground-muted font-mono tabular-nums w-10 text-right">{{ item.progress.toFixed(1) }}%</span>
+              <span class="text-[10px] text-[#8e8e93] font-mono tabular-nums w-12 text-right">{{ item.progress.toFixed(1) }}%</span>
             </div>
 
-            <!-- 详情行 -->
-            <div class="flex items-center justify-between text-[10px] text-foreground-muted/60">
+            <!-- 大小行 -->
+            <div class="flex items-center justify-between text-[10px] text-[#8e8e93]/60 mb-2">
               <span>{{ formatSize(item.local_size) }} / {{ formatSize(item.video_size) }}</span>
-              <span v-if="item.download_rate > 0">{{ formatSpeed(item.download_rate) }}</span>
-              <span v-if="item.peers > 0">{{ item.peers }} peers</span>
+              <span class="font-mono">{{ item.hash.slice(0, 12) }}...</span>
             </div>
 
             <!-- 操作按钮 -->
-            <div class="flex gap-2 pt-1">
+            <div class="flex gap-2">
               <button
                 v-if="!item.head_ready && item.progress < 99.9"
-                class="flex-1 text-[10px] bg-rose/10 hover:bg-rose/20 text-rose py-1.5 rounded-lg transition-colors font-medium"
+                class="flex-1 text-[11px] bg-white/[0.06] hover:bg-white/[0.1] text-white py-1.5 rounded-lg transition-colors"
                 @click="boostItem(item.hash)"
               >
                 加速
               </button>
               <button
-                class="text-[10px] text-rose hover:text-rose-light px-3 py-1.5 rounded-lg bg-rose/10 hover:bg-rose/20 transition-colors"
+                class="text-[11px] text-[#ff453a] hover:text-[#ff6961] px-3 py-1.5 rounded-lg bg-[#ff453a]/10 hover:bg-[#ff453a]/15 transition-colors"
                 @click="removeItem(item.hash)"
               >
                 删除
@@ -93,15 +115,21 @@
           </div>
         </div>
 
-        <div class="p-3 border-t border-glass-border flex gap-2">
+        <!-- Footer -->
+        <div class="p-3 border-t border-white/[0.06] flex gap-2 bg-black/20">
           <button
-            class="flex-1 text-xs glass hover:bg-glass-bg-hover text-foreground py-2.5 rounded-glass transition-colors font-medium"
+            class="flex-1 text-xs flex items-center justify-center gap-1.5 bg-white/[0.06] hover:bg-white/[0.1] text-white py-2.5 rounded-xl transition-colors font-medium"
             @click="refresh"
           >
-            刷新
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            同步列表
           </button>
           <button
-            class="flex-1 text-xs bg-rose/10 hover:bg-rose/20 text-rose py-2.5 rounded-glass transition-colors font-medium"
+            class="flex-1 text-xs bg-[#ff453a]/10 hover:bg-[#ff453a]/15 text-[#ff453a] py-2.5 rounded-xl transition-colors font-medium"
             @click="clearAll"
           >
             清空全部
@@ -125,7 +153,6 @@ const metrics = ref<CacheMetrics | null>(null)
 
 const { getCacheItems, getCacheMetrics, deleteCache, addTorrent } = useApi()
 
-// 从文件名/torrent 名中提取番号（fallback）
 const WORK_CODE_RE = /[A-Z]{2,6}-\d{3,5}/i
 function extractCode(name?: string): string | null {
   if (!name) return null
@@ -133,7 +160,6 @@ function extractCode(name?: string): string | null {
   return m ? m[0].toUpperCase() : null
 }
 
-// hash -> { code, number } 映射（来自 stars prop，用于显示编号）
 const hashToInfo = computed(() => {
   const map: Record<string, { code: string; number: number }> = {}
   for (const star of (props.stars || [])) {
@@ -142,7 +168,6 @@ const hashToInfo = computed(() => {
         const match = t.magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
         if (match) {
           const hash = match[1].toLowerCase()
-          // 合作作品可能出现在多个 star 中，保留第一个映射（避免覆盖导致编号乱跳）
           if (!map[hash]) {
             map[hash] = { code: t.code, number: t.number || 0 }
           }
@@ -156,7 +181,6 @@ const hashToInfo = computed(() => {
 const enrichedItems = computed(() => {
   return items.value.map(item => {
     const info = hashToInfo.value[item.hash]
-    // 优先使用后端提取的 work_code，其次 hashToInfo，最后从 video_file/name 正则提取
     const code = item.work_code
       || info?.code
       || extractCode(item.video_file)
@@ -175,6 +199,9 @@ const activeCount = computed(() => {
   return items.value.filter(i => i.progress > 0 && i.progress < 99.9).length
 })
 
+const hdCount = computed(() => items.value.filter(i => i.quality === 'HD').length)
+const sdCount = computed(() => items.value.filter(i => i.quality === 'SD').length)
+
 function formatSize(bytes: number): string {
   if (!bytes) return '0 B'
   if (bytes > 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
@@ -189,18 +216,46 @@ function formatSpeed(rate: number): string {
   return `${rate} B/s`
 }
 
-function statusClass(item: any): string {
-  if (item.progress >= 99.9) return 'bg-emerald-400/10 text-emerald-400 border border-emerald-400/20'
-  if (item.head_ready) return 'bg-rose/10 text-rose border border-rose/20'
-  if (item.progress > 0) return 'bg-amber/10 text-amber border border-amber/20'
-  return 'bg-white/5 text-foreground-muted/50 border border-white/5'
+function stateClass(item: any): string {
+  if (item.state === 'finished' || item.state === 'seeding') return 'bg-emerald-400/15 text-emerald-400'
+  if (item.state === 'checking_files' || item.state === 'checking_resume_data') return 'bg-amber/15 text-amber'
+  if (item.state === 'downloading') return 'bg-sky-400/15 text-sky-400'
+  return 'bg-white/[0.06] text-[#8e8e93]'
 }
 
-function statusLabel(item: any): string {
-  if (item.progress >= 99.9) return '完成'
-  if (item.head_ready) return '可播放'
-  if (item.progress > 0) return '下载中'
-  return '等待中'
+function stateLabel(item: any): string {
+  const map: Record<string, string> = {
+    checking_files: '校验中',
+    checking_resume_data: '校验中',
+    downloading_metadata: '获取元数据',
+    downloading: '下载中',
+    finished: '已完成',
+    seeding: '做种中',
+    allocating: '分配中',
+  }
+  return map[item.state] || item.state || '等待中'
+}
+
+function qualityClass(item: any): string {
+  return item.quality === 'HD'
+    ? 'bg-rose/15 text-rose'
+    : 'bg-white/[0.06] text-[#8e8e93]'
+}
+
+function tierLabel(item: any): string {
+  const map: Record<string, string> = {
+    hot: 'L1 热',
+    warm: 'L2 温',
+    seed: 'L3 冷',
+    fragment: 'L4 碎',
+  }
+  return map[item.tier] || item.tier || '-'
+}
+
+function progressBarClass(item: any): string {
+  if (item.progress >= 99.9) return 'bg-emerald-400'
+  if (item.state?.includes('checking')) return 'bg-amber'
+  return 'bg-rose'
 }
 
 async function refresh() {
@@ -223,7 +278,6 @@ async function removeItem(hash: string) {
 }
 
 async function boostItem(hash: string) {
-  // 重新 add 以触发 play priority
   const item = items.value.find(i => i.hash === hash)
   if (!item?.magnet) return
   try {
@@ -249,7 +303,6 @@ watch(isOpen, (open) => {
   if (open) refresh()
 })
 
-// Auto refresh every 5s when open
 let timer: ReturnType<typeof setInterval> | null = null
 watch(isOpen, (open) => {
   if (open) {
