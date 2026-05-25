@@ -127,7 +127,7 @@
         <div v-else class="space-y-14 md:space-y-20">
           <StarCard
             v-for="(star, index) in displayStars"
-            :id="`star-${star.code}`"
+            :id="`star-${star.code.toLowerCase()}`"
             :key="star.code"
             :star="star"
             :index="index"

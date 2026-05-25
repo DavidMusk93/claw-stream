@@ -40,7 +40,9 @@ onMounted(() => {
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          activeStar.value = entry.target.id.toUpperCase()
+          // Extract code from id like "star-abf-338" -> "ABF-338"
+          const idCode = entry.target.id.replace('star-', '').toUpperCase()
+          activeStar.value = idCode
         }
       })
     },
