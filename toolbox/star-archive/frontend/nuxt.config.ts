@@ -42,6 +42,22 @@ export default defineNuxtConfig({
       skipWaiting: true,
       runtimeCaching: [
         {
+          urlPattern: /^\/api\/stars/,
+          handler: 'StaleWhileRevalidate',
+          options: {
+            cacheName: 'stars-cache',
+            expiration: { maxEntries: 5, maxAgeSeconds: 3600 },
+          },
+        },
+        {
+          urlPattern: /^\/api\/(health|cover)/,
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'static-api-cache',
+            expiration: { maxEntries: 200, maxAgeSeconds: 2592000 },
+          },
+        },
+        {
           urlPattern: /^\/api\/.*/,
           handler: 'NetworkFirst',
           options: {
@@ -54,7 +70,7 @@ export default defineNuxtConfig({
           handler: 'CacheFirst',
           options: {
             cacheName: 'image-cache',
-            expiration: { maxEntries: 100, maxAgeSeconds: 86400 },
+            expiration: { maxEntries: 500, maxAgeSeconds: 2592000 },
           },
         },
       ],
