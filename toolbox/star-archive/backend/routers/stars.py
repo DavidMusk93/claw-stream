@@ -167,11 +167,14 @@ def _build_stars_response() -> list[dict[str, Any]]:
         number = 1
         for star in result:
             star["number"] = None
+            is_first = True
             for t in star.get("titles", []):
                 t["number"] = number
+                t["is_primary"] = is_first
                 if star["number"] is None:
                     star["number"] = number
                 number += 1
+                is_first = False
 
         return result
     finally:
@@ -312,8 +315,8 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
 # ── Delete Star ─────────────────────────────────────────────────────
 
 @router.delete("/{code}")
-async def delete_star(code: str) -> dict[str, Any]:
-    """删除女优：从 config.json 和数据库中移除，保留 cache 中的 torrent 文件。"""
+async def delete_star(code: str, request: Request) -> dict[str, Any]:
+    """删除女优：从 config.json 和数据库中移除，同时清空该女优所有作品的缓存。"""
     config = _load_config()
     stars = config.get("stars", [])
     original_len = len(stars)
@@ -328,6 +331,27 @@ async def delete_star(code: str) -> dict[str, Any]:
     deleted = db.delete_star_by_code(code)
     if not deleted:
         log.warning(f"star {code} removed from config but not found in db")
+
+    # 清空该女优所有作品的缓存和 tracing bits
+    engine = request.app.state.engine
+    try:
+        conn = duckdb.connect(DB_PATH, read_only=True)
+        try:
+            rows = conn.execute("""
+                SELECT m.hash
+                FROM magnets m
+                JOIN titles t ON m.title_id = t.id
+                JOIN stars s ON t.star_id = s.id
+                WHERE s.code = ? AND m.hash IS NOT NULL
+            """, [code]).fetchall()
+            for (hash_str,) in rows:
+                if hash_str:
+                    await asyncio.to_thread(engine.remove_torrent, hash_str)
+                    log.info(f"delete_star: removed torrent {hash_str[:12]}... for {code}")
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning(f"delete_star cache cleanup failed for {code}: {e}")
 
     invalidate_stars_cache()
     log.info(f"star deleted: {code}")

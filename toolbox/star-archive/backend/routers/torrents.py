@@ -16,6 +16,33 @@ router = APIRouter(prefix="/torrent", tags=["torrents"])
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
+
+def _is_primary_title(work_code: str) -> bool:
+    """查询数据库判断该作品是否是所属女优的第一个（最新）作品。"""
+    if not work_code:
+        return False
+    try:
+        conn = duckdb.connect(DB_PATH, read_only=True)
+        try:
+            row = conn.execute("""
+                SELECT 1 FROM stars s
+                JOIN (
+                    SELECT star_id, code,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY star_id
+                            ORDER BY release_date_sort DESC NULLS LAST
+                        ) AS rn
+                    FROM titles
+                ) t ON t.star_id = s.id AND t.rn = 1
+                WHERE t.code = ?
+            """, [work_code.upper()]).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def _resolve_magnet(magnet: str) -> str:
     """如果 magnet 只有 bare hash，从数据库查找包含 tracker 的完整 magnet。"""
     m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
@@ -69,6 +96,17 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
         raise HTTPException(status_code=400, detail="Invalid magnet")
 
     hash_str = info["hash"]
+
+    # 判断是否是该女优的第一个作品，决定是否保留缓存
+    work_code = info.get("work_code")
+    if work_code:
+        is_primary = await asyncio.to_thread(_is_primary_title, work_code)
+        if is_primary:
+            await asyncio.to_thread(engine.set_keep_cache, hash_str, True)
+            log.info(f"add_torrent: {hash_str[:12]}... primary title {work_code}, cache will be kept")
+        else:
+            await asyncio.to_thread(engine.set_keep_cache, hash_str, False)
+            log.info(f"add_torrent: {hash_str[:12]}... non-primary {work_code}, cache will be removed on pause")
 
     # Do NOT wait for has_metadata here — that blocks the event loop and
     # serializes playback startup. Frontend already polls /api/check.

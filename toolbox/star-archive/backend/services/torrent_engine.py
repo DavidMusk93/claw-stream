@@ -956,8 +956,16 @@ class TorrentEngine:
             info["last_access"] = time.time()
         return result
 
+    def set_keep_cache(self, hash_str: str, keep: bool = True) -> None:
+        """标记该 torrent 是否需要在暂停后保留缓存。"""
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if info:
+            info["keep_cache"] = keep
+
     def pause_download(self, hash_str: str) -> bool:
-        """暂停下载：将所有 piece 优先级设为 0，保留已完成的 piece。"""
+        """暂停下载：将所有 piece 优先级设为 0。
+        非第一个作品（keep_cache=false）直接删除 torrent 和缓存文件。"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -965,8 +973,14 @@ class TorrentEngine:
         tracker = info.get("tracker")
         if tracker:
             tracker.reset_priorities()
-            log.info(f"pause download: {hash_str[:12]}... all piece priorities reset to 0")
         info["_paused"] = True
+
+        keep_cache = info.get("keep_cache", False)
+        if not keep_cache:
+            log.info(f"pause download: {hash_str[:12]}... non-primary, removing torrent")
+            self.remove_torrent(hash_str)
+        else:
+            log.info(f"pause download: {hash_str[:12]}... primary, keeping cache")
         return True
 
     def resume_download(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
