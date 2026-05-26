@@ -1108,6 +1108,7 @@ class TorrentEngine:
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
             "quality": info.get("quality", "SD"),
+            "piece_segments": tracker.get_lane_segments(30) if tracker else [],
             "tier": self._get_tier(info),
         }
 

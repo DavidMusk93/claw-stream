@@ -36,6 +36,14 @@
           <span v-if="sdCount > 0" class="text-amber">标清 {{ sdCount }} 个</span>
         </div>
 
+        <!-- Lane legend -->
+        <div class="px-4 py-1.5 bg-black/20 border-b border-white/[0.04] flex items-center gap-3 text-[10px] text-[#8e8e93]/60">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#10b981]" />已缓存</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#f59e0b]" />下载中</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#ef4444]" />损坏</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#1f2937]" />未下载</span>
+        </div>
+
         <!-- List -->
         <div class="flex-1 overflow-y-auto p-2 space-y-1">
           <div v-if="enrichedItems.length === 0" class="text-center py-10 text-[#8e8e93] text-sm">
@@ -78,16 +86,22 @@
               </span>
             </div>
 
-            <!-- 进度条 -->
-            <div class="flex items-center gap-2 mb-2">
-              <div class="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+            <!-- 泳道：磁盘切面展示 piece 状态 -->
+            <div class="mb-2">
+              <div class="flex h-2.5 rounded overflow-hidden">
                 <div
-                  class="h-full rounded-full transition-all duration-500"
-                  :class="progressBarClass(item)"
-                  :style="{ width: `${Math.min(item.progress, 100)}%` }"
+                  v-for="(seg, idx) in item.piece_segments"
+                  :key="idx"
+                  class="h-full"
+                  :style="{ width: `${100 / item.piece_segments.length}%`, backgroundColor: laneColor(seg[2]) }"
+                  :title="`piece ${seg[0].toFixed(0)}%-${seg[1].toFixed(0)}%: ${laneLabel(seg[2])}`"
                 />
               </div>
-              <span class="text-[10px] text-[#8e8e93] font-mono tabular-nums w-12 text-right">{{ item.progress.toFixed(1) }}%</span>
+              <div class="mt-1 flex justify-between text-[10px] text-[#8e8e93]/50">
+                <span>0%</span>
+                <span>piece map ({{ item.piece_segments.length }} segments)</span>
+                <span>100%</span>
+              </div>
             </div>
 
             <!-- 大小行 -->
@@ -259,10 +273,24 @@ function tierLabel(item: any): string {
   return map[item.tier] || item.tier || '-'
 }
 
-function progressBarClass(item: any): string {
-  if (item.progress >= 99.9) return 'bg-emerald-400'
-  if (item.state?.includes('checking')) return 'bg-amber'
-  return 'bg-rose'
+function laneColor(state: number): string {
+  const colors: Record<number, string> = {
+    0: '#1f2937',   // NOT_DOWNLOADED
+    1: '#f59e0b',   // DOWNLOADING
+    2: '#10b981',   // VERIFIED
+    3: '#ef4444',   // CORRUPT
+  }
+  return colors[state] || '#1f2937'
+}
+
+function laneLabel(state: number): string {
+  const labels: Record<number, string> = {
+    0: '未下载',
+    1: '下载中',
+    2: '已缓存',
+    3: '损坏',
+  }
+  return labels[state] || '未知'
 }
 
 async function refresh() {

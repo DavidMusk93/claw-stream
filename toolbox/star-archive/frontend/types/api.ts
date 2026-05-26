@@ -25,6 +25,7 @@ export interface TorrentStatus {
   state: string
   verified_pieces: number
   quality: string
+  piece_segments: [number, number, number][]
 }
 
 export interface CacheMetrics {

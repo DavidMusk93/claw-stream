@@ -269,6 +269,51 @@ class PieceStateTracker:
         """O(1) via POPCNT (int.bit_count)."""
         return self._verified.bit_count()
 
+    def get_lane_segments(self, segments: int = 30) -> list[list[float, float, int]]:
+        """生成泳道数据：将 piece 范围分成 segments 段，每段返回 [start_pct, end_pct, state]。
+
+        state: 0=NOT_DOWNLOADED, 1=DOWNLOADING, 2=VERIFIED, 3=CORRUPT
+        每段取占比最高的状态。
+        """
+        total_pieces = self.end_piece - self.start_piece + 1
+        if total_pieces <= 0:
+            return []
+
+        result: list[list[float, float, int]] = []
+        seg_size = total_pieces / segments
+
+        for seg in range(segments):
+            seg_start_piece = self.start_piece + int(seg * seg_size)
+            seg_end_piece = self.start_piece + int((seg + 1) * seg_size) - 1
+            if seg == segments - 1:
+                seg_end_piece = self.end_piece
+
+            counts = [0, 0, 0, 0]  # NOT_DOWNLOADED, DOWNLOADING, VERIFIED, CORRUPT
+            for p in range(seg_start_piece, seg_end_piece + 1):
+                bit = 1 << p
+                if self._verified & bit:
+                    counts[2] += 1
+                elif self._corrupt & bit:
+                    counts[3] += 1
+                elif self._downloading & bit:
+                    counts[1] += 1
+                else:
+                    counts[0] += 1
+
+            # 取占比最高的状态（优先级：VERIFIED > DOWNLOADING > CORRUPT > NOT_DOWNLOADED）
+            best_state = 0
+            best_count = counts[0]
+            for state_idx in (3, 1, 2):
+                if counts[state_idx] > best_count:
+                    best_count = counts[state_idx]
+                    best_state = state_idx
+
+            start_pct = seg / segments * 100
+            end_pct = (seg + 1) / segments * 100
+            result.append([round(start_pct, 2), round(end_pct, 2), best_state])
+
+        return result
+
     def head_ready(self) -> bool:
         """O(1) via pre-computed moov mask + POPCNT.
 

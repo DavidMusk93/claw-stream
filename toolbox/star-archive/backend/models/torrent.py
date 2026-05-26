@@ -21,6 +21,7 @@ class TorrentStatus(BaseModel):
     state: str = ""
     verified_pieces: int = 0
     quality: str = "SD"
+    piece_segments: list[list[float | int]] = []
 
 
 class TorrentAddRequest(BaseModel):
