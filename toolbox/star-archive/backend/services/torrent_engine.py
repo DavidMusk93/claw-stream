@@ -840,7 +840,31 @@ class TorrentEngine:
         不再全量重置为 0 —— 那样会丢弃已下载的 piece，导致播放时反复重新下载，
         体验极差。改为保留已下载 piece（priority=1），只把未下载且不在窗口内的设 0。
         """
-        if not h.status().has_metadata:
+        # CRITICAL: libtorrent 2.0 mmap storage creates a sparse file of full
+        # torrent size on add_torrent, then reports finished even though no
+        # data was actually written. In finished state libtorrent ignores
+        # piece_priority / set_piece_deadline, causing playback deadlock.
+        # Truncate to 1 byte so libtorrent sees incomplete file.
+        status = h.status()
+        if status.state == lt.torrent_status.finished:
+            tracker = info.get("tracker")
+            if tracker and tracker.verified_count() == 0:
+                path = info.get("video_path")
+                if path:
+                    try:
+                        os.makedirs(os.path.dirname(path), exist_ok=True)
+                        with open(path, "wb") as f:
+                            f.write(b"\x01")
+                        h.force_recheck()
+                        log.warning(
+                            f"finished false-positive fixed: {info['hash'][:12]}... "
+                            f"created 1-byte file, forcing recheck"
+                        )
+                    except Exception as e:
+                        log.warning(f"fix finished failed: {info['hash'][:12]}... {e}")
+                return False
+
+        if not status.has_metadata:
             return False
         ti = h.torrent_file()
         fs = ti.files()
