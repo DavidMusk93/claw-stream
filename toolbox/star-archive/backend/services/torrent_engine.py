@@ -634,6 +634,8 @@ class TorrentEngine:
             # After file verification, re-bootstrap from disk (ground truth).
             # Do NOT trust libtorrent's have_piece() — recheck may have read
             # stale page-cache zeros and falsely marked pieces complete.
+            # Do NOT call _apply_play_priority here — preload or checked alert
+            # must not trigger downloads. Only /torrent/resume and /stream/ do.
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
@@ -641,8 +643,6 @@ class TorrentEngine:
                     info = self.torrents[hash_str]
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
-                    if not info.get("prefetch"):
-                        self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
