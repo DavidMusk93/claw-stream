@@ -44,25 +44,10 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
     end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
-    # Use tracker if available — avoids finished-state deadlock
-    tracker = info.get("tracker")
-    if tracker:
-        requested = tracker.request_pieces(start_piece, end_piece)
-        log.debug(
-            "seek_priority via tracker",
-            extra={
-                "hash": hash_str[:12],
-                "start_byte": start_byte,
-                "end_byte": end_byte,
-                "start_piece": start_piece,
-                "end_piece": end_piece,
-                "requested": requested,
-                "state": str(h.status().state),
-            },
-        )
-        return
-
-    # Fallback: direct libtorrent manipulation (old behaviour)
+    # Always directly nudge libtorrent for the requested pieces.
+    # Tracker's VERIFIED state can be stale in finished-state deadlock
+    # (libtorrent reports have_piece=true but filesystem shows holes).
+    # Relying solely on tracker.request_pieces() leaves holes unfilled.
     deadline_count = 0
     prio_count = 0
     for p in range(start_piece, end_piece + 1):
@@ -73,14 +58,14 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
             h.piece_priority(p, 7)
             prio_count += 1
 
+    # Also inform tracker so its bitmap stays in sync where correct.
+    tracker = info.get("tracker")
+    tracker_requested = 0
+    if tracker:
+        tracker_requested = tracker.request_pieces(start_piece, end_piece)
+
     status = h.status()
     state = status.state
-    forced_recheck = False
-    if state == lt.torrent_status.finished:
-        missing = any(not h.have_piece(p) for p in range(start_piece, end_piece + 1))
-        if missing:
-            h.force_recheck()
-            forced_recheck = True
 
     log.debug(
         "seek_priority",
@@ -92,49 +77,27 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
             "end_piece": end_piece,
             "deadline_count": deadline_count,
             "prio_changed": prio_count,
+            "tracker_requested": tracker_requested,
             "state": str(state),
-            "forced_recheck": forced_recheck,
         },
     )
 
 
 def _is_data_at_offset(path: str, offset: int) -> bool:
-    """使用 Linux SEEK_DATA 检查文件 offset 处是否有实际数据（非 sparse hole）。
+    """Check if file offset has actual data on disk (SEEK_DATA after fsync).
 
-    比 libtorrent have_piece() 更可靠，不受 checking_files / finished 状态影响。
-    如果文件系统不支持 SEEK_DATA，回退到 have_piece()（通过调用方处理）。
+    fsync() flushes page cache so SEEK_DATA/SEEK_HOLE see real disk extents.
     """
-    fd = os.open(path, os.O_RDONLY)
     try:
-        data_offset = os.lseek(fd, offset, os.SEEK_DATA)
-        # offset 本身有数据，或者 SEEK_DATA 跳到了后面的数据区域
-        return data_offset == offset
-    except OSError as e:
-        # ENXIO = 没有更多数据；EINVAL = 不支持 SEEK_DATA
-        if e.errno in (errno.ENXIO, errno.EINVAL):
-            return False
-        raise
-    finally:
-        os.close(fd)
-
-
-def _check_pieces_have(h: Any, ti: Any, fs: Any, idx: int, start_byte: int, data_len: int) -> bool:
-    """检查 [start_byte, start_byte+data_len) 范围涉及的所有 piece 是否已下载。
-
-    回退方案：当 SEEK_DATA 不可用时使用 libtorrent have_piece()。
-    注意：checking_files 状态下 have_piece() 不可靠（全返回 False）。
-    """
-    piece_length = ti.piece_length()
-    file_offset = fs.file_offset(idx)
-    abs_start = file_offset + start_byte
-    abs_end = abs_start + data_len - 1
-    start_piece = abs_start // piece_length
-    end_piece = abs_end // piece_length
-    num_pieces = ti.num_pieces()
-    for p in range(start_piece, min(end_piece + 1, num_pieces)):
-        if not h.have_piece(p):
-            return False
-    return True
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+            next_data = os.lseek(fd, offset, os.SEEK_DATA)
+            return next_data == offset
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
 
 
 def _read_once(path: str, start: int, chunk_size: int) -> bytearray:
@@ -167,12 +130,16 @@ def _detect_hole(path: str, start: int, data: bytearray, engine: Any, hash_str: 
         except OSError:
             with engine.lock:
                 info = engine.torrents.get(hash_str)
-            if info:
-                h = info["handle"]
-                if h.status().has_metadata and info["video_idx"] is not None:
-                    ti = h.torrent_file()
-                    fs = ti.files()
-                    return not _check_pieces_have(h, ti, fs, info["video_idx"], start, len(data))
+            if info and info.get("tracker"):
+                tracker = info["tracker"]
+                piece_length = tracker.piece_length
+                file_offset = tracker.file_offset
+                start_piece = (file_offset + start) // piece_length
+                end_piece = (file_offset + start + len(data) - 1) // piece_length
+                for p in range(start_piece, end_piece + 1):
+                    if not tracker._piece_has_data_on_disk(p):
+                        return True
+                return False
             return True
     return False
 
@@ -254,6 +221,24 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
             return bytes(data)
 
         if elapsed >= max_wait:
+            # Finished-state deadlock: libtorrent thinks done but disk has holes.
+            # Re-add torrent to force libtorrent to re-evaluate file state.
+            with engine.lock:
+                info = engine.torrents.get(hash_str)
+            if info:
+                h = info["handle"]
+                if h.status().state == lt.torrent_status.finished:
+                    log.warning(
+                        "read_video_range: finished-state deadlock, readding torrent",
+                        extra={"hash": hash_str[:12]},
+                    )
+                    await asyncio.to_thread(engine._readd_torrent, hash_str)
+                    # Reset timer and give re-added torrent time to download
+                    elapsed = 0.0
+                    attempt = 0
+                    await asyncio.sleep(0.5)
+                    continue
+
             log.warning(
                 "read_video_range hole timeout",
                 extra={

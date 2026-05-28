@@ -126,24 +126,20 @@ def _mime_type(path: str) -> str:
 
 
 def _range_has_data(path: str, start: int, end: int) -> bool:
-    """使用 Linux SEEK_HOLE 确认 [start, end] 范围内没有 sparse hole。
+    """Check if [start, end] range has data on disk (SEEK_HOLE after fsync).
 
-    原理：SEEK_HOLE(start) 返回 >= start 的第一个 hole 偏移。
-    如果该偏移 > end，说明 [start, end] 全是实际数据。
+    fsync() flushes page cache so SEEK_HOLE sees real disk extents.
     """
-    fd = os.open(path, os.O_RDONLY)
     try:
-        hole_offset = os.lseek(fd, start, os.SEEK_HOLE)
-        return hole_offset > end
-    except OSError as e:
-        # EINVAL = 不支持 SEEK_HOLE；ENXIO = start 之后没有 hole（全是数据）
-        if e.errno == 22:  # EINVAL
-            return False
-        if e.errno == 6:   # ENXIO — no more holes, all data
-            return True
-        raise
-    finally:
-        os.close(fd)
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+            hole = os.lseek(fd, start, os.SEEK_HOLE)
+            return hole >= end + 1
+        finally:
+            os.close(fd)
+    except Exception:
+        return False
 
 
 def _check_video_ready(path: str, hash_str: str = "") -> tuple[int, bool, str]:
@@ -561,13 +557,32 @@ class TorrentEngine:
         # trackers / DHT and downloads metadata.
         params.flags &= ~lt.torrent_flags.paused
 
-        # Load cached metadata if available (skips peer discovery + metadata download)
+        # Load cached metadata if available (skips peer discovery + metadata download).
+        # Skip cache if video file does not exist — using cached metadata when
+        # file is missing causes libtorrent to finish immediately because sparse
+        # file size matches, leading to finished-state deadlock.
         torrent_path = os.path.join(save_path, f"{hash_str}.torrent")
-        if os.path.exists(torrent_path):
+        video_exists = False
+        if os.path.exists(save_path):
+            for root, dirs, files in os.walk(save_path):
+                for f in files:
+                    if f.lower().endswith((".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv")):
+                        video_exists = True
+                        break
+                if video_exists:
+                    break
+        if os.path.exists(torrent_path) and video_exists:
             try:
                 ti = lt.torrent_info(torrent_path)
-                params.ti = ti
-                log.info(f"metadata cache hit: {hash_str[:12]}... ({ti.name()})")
+                if str(ti.info_hash()) != hash_str:
+                    log.warning(
+                        f"metadata cache mismatch: {hash_str[:12]}... "
+                        f"file hash={str(ti.info_hash())[:12]}... deleting stale cache"
+                    )
+                    os.remove(torrent_path)
+                else:
+                    params.ti = ti
+                    log.info(f"metadata cache hit: {hash_str[:12]}... ({ti.name()})")
             except Exception as e:
                 log.warning(f"metadata cache load failed: {hash_str[:12]}... {e}")
 
@@ -616,55 +631,39 @@ class TorrentEngine:
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
-            # After file verification, re-sync tracker and reapply play priority
+            # After file verification, re-bootstrap from disk (ground truth).
+            # Do NOT trust libtorrent's have_piece() — recheck may have read
+            # stale page-cache zeros and falsely marked pieces complete.
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
                 if hash_str in self.torrents:
                     info = self.torrents[hash_str]
-                    # Re-bootstrap tracker after checking — libtorrent zeros pieces
-                    # during checking, which SEEK_HOLE falsely sees as data. The
-                    # reset in _bootstrap_from_filesystem clears stale VERIFIED.
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
-                        info["tracker"]._overlay_have_piece(strict=True)
                     if not info.get("prefetch"):
-                        # Always reapply: recheck may have invalidated pieces that
-                        # were previously thought complete, and they need urgent
-                        # priority again.
                         self._apply_play_priority(h, info)
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
-                if hash_str in self.torrents:
-                    info = self.torrents[hash_str]
-                    tracker = info.get("tracker")
-                    # libtorrent may enter finished state before write cache
-                    # is flushed to disk (have_piece true but filesystem hole).
-                    # If moov isn't ready, force recheck so have_piece syncs
-                    # with actual disk state.
-                    if tracker and not tracker.head_ready():
-                        # Rate-limit recheck to prevent infinite loops when
-                        # filesystem holes persist (page-cache vs disk mismatch).
-                        now = time.time()
-                        recheck_count = info.get("_recheck_count", 0)
-                        last_recheck = info.get("_last_recheck_time", 0)
-                        if recheck_count >= 3 or now - last_recheck < 60:
-                            log.warning(
-                                f"finished but head not ready: {hash_str[:12]}... "
-                                f"skipping recheck (count={recheck_count}, "
-                                f"last={int(now - last_recheck)}s ago)"
-                            )
-                        else:
-                            info["_recheck_count"] = recheck_count + 1
-                            info["_last_recheck_time"] = now
-                            log.warning(
-                                f"finished but head not ready: {hash_str[:12]}... force recheck"
-                            )
-                            h.force_recheck()
-                    else:
-                        info["ready"] = True
+                info = self.torrents.get(hash_str)
+            if not info:
+                return
+            tracker = info.get("tracker")
+            # finished state does NOT mean data is actually on disk.
+            # Re-scan with SEEK_HOLE (ground truth) before trusting it.
+            if tracker:
+                tracker._bootstrap_from_filesystem()
+            if tracker and tracker.head_ready():
+                with self.lock:
+                    if hash_str in self.torrents:
+                        self.torrents[hash_str]["ready"] = True
+            else:
+                log.warning(
+                    f"finished but head not ready: {hash_str[:12]}... "
+                    f"disk scan shows holes, will readd on next stream request"
+                )
         elif isinstance(alert, lt.piece_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -727,29 +726,33 @@ class TorrentEngine:
 
         # Scan moov once and cache into info + tracker. Eliminates repeated
         # _scan_mp4_moov calls on every /api/check/ poll (was 32MB disk read/s).
-        if info.get("video_path") and os.path.exists(info["video_path"]):
-            if "moov_end" not in info:
-                moov_start, moov_end = _scan_mp4_moov(info["video_path"])
-                # Tail-moov fallback: if the file is too small for _scan_mp4_moov
-                # to find moov, assume moov is in the last 30 pieces (tail).
-                # This allows head_ready() to track progress before moov data
-                # is physically on disk (libtorrent write cache may delay flush).
-                if moov_end == 0 and info.get("tracker"):
-                    tracker = info["tracker"]
-                    tail_start = max(
-                        tracker.start_piece,
-                        tracker.end_piece - 30 + 1,
-                    )
-                    moov_start = max(0, tail_start * tracker.piece_length - tracker.file_offset)
-                    moov_end = info["video_size"]
+        #
+        # CRITICAL: if the file is empty/too small, _scan_mp4_moov returns (0,0).
+        # Do NOT guess tail-moov here — if the guess is wrong (moov is actually
+        # in head), _set_stream_window will only download tail and moov will
+        # never arrive. Leave moov unknown so _set_stream_window probes both
+        # head and tail. get_status() will retry scan as data arrives.
+        video_path = info.get("video_path")
+        if video_path and os.path.exists(video_path):
+            # Force re-scan if moov_end is missing or was previously zero.
+            # Stale zero from a prior add can linger in existing info dicts.
+            need_scan = "moov_end" not in info or info.get("moov_end", 0) == 0
+            if need_scan:
+                moov_start, moov_end = _scan_mp4_moov(video_path)
+                if moov_end > 0:
+                    info["moov_start"] = moov_start
+                    info["moov_end"] = moov_end
+                    if info.get("tracker"):
+                        info["tracker"].set_moov_range(moov_start, moov_end)
+                        log.info(
+                            f"moov scanned: {hash_str[:12]}... "
+                            f"range={moov_start}-{moov_end}"
+                        )
+                else:
                     log.info(
-                        f"tail-moov fallback: {hash_str[:12]}... "
-                        f"assumed moov in tail pieces {tail_start}-{tracker.end_piece}"
+                        f"moov not found yet: {hash_str[:12]}... "
+                        f"will probe tail until data arrives"
                     )
-                info["moov_start"] = moov_start
-                info["moov_end"] = moov_end
-                if info.get("tracker") and moov_end > 0:
-                    info["tracker"].set_moov_range(moov_start, moov_end)
 
         file_prios = [0] * fs.num_files()
         file_prios[idx] = 4
@@ -786,34 +789,27 @@ class TorrentEngine:
             handle.prioritize_pieces(piece_prios)
             log.info(f"prefetch: {name} ({format_size(size)}) pieces {start}-{end}")
         else:
-            # Default: all pieces priority 0 (strict on-demand).
-            # head+tail urgent applied later by _apply_play_priority.
-            # 只在首次 metadata 就绪时执行，避免重复 add_torrent 重置窗口
+            # Strict on-demand: never auto-start download. Only /torrent/resume
+            # or /stream/ (read_video_range -> seek_priority) triggers piece download.
             if not info.get("_play_priority_applied"):
                 piece_prios = [0] * num_pieces
                 handle.prioritize_pieces(piece_prios)
-                # 如果用户已暂停（如关闭播放器），不自动开始下载 head+tail
-                if not info.get("_paused"):
-                    self._apply_play_priority(handle, info)
-                    info["_play_priority_applied"] = True
-                else:
-                    log.info(f"metadata: {hash_str[:12]}... paused, skip head+tail priority")
-            log.info(f"added: {name} ({format_size(size)})")
+                info["_play_priority_applied"] = True
+                log.info(f"metadata: {hash_str[:12]}... all pieces paused, waiting for playback")
+            else:
+                log.info(f"added: {name} ({format_size(size)})")
 
         # ── Architecture: bootstrap-first verification ─────────────────
-        # For finished torrents, avoid unconditional force_recheck (minutes of
-        # blocking). Use SEEK_HOLE bootstrap (seconds) to verify disk state.
-        # Only fall back to hash recheck if bootstrap shows data is missing.
-        # This turns "completed torrent → minutes of recheck → ready" into
-        # "completed torrent → seconds of lseek → ready" for the common case
-        # where sparse file is actually intact.
+        # For finished torrents, use SEEK_HOLE bootstrap (seconds) to verify
+        # disk state. NEVER call force_recheck() — recheck reads page cache
+        # and produces false positives, leading to finished-state deadlock
+        # where libtorrent refuses to re-download holes.
         if not info.get("_recheck_done"):
             status = handle.status()
             if status.state == lt.torrent_status.finished:
                 tracker = info.get("tracker")
                 if tracker:
                     tracker._bootstrap_from_filesystem()
-                    tracker._overlay_have_piece(strict=True)
                     if tracker.head_ready():
                         info["_recheck_done"] = True
                         info["ready"] = True
@@ -821,14 +817,13 @@ class TorrentEngine:
                             f"bootstrap-first: {hash_str[:12]}... data intact, skip recheck"
                         )
                         return
-                # Slow path: bootstrap shows missing data or stale have_pieces
-                handle.force_recheck()
-                info["_recheck_done"] = True
-                info["_recheck_count"] = info.get("_recheck_count", 0) + 1
-                info["_last_recheck_time"] = time.time()
-                log.info(
-                    f"recheck triggered: {hash_str[:12]}... (finished state, bootstrap shows missing)"
-                )
+                    else:
+                        log.warning(
+                            f"finished with holes: {hash_str[:12]}... "
+                            f"disk scan shows missing data, will re-download"
+                        )
+                # Do NOT force_recheck — it causes finished-state deadlock.
+                # Let _set_stream_window set urgent priorities instead.
 
         info["ready"] = True
 
@@ -840,7 +835,11 @@ class TorrentEngine:
         duration_sec: float,
         window_pcs: int = 30,
     ) -> bool:
-        """严格按需：只下载 head + tail + 播放窗口，其余 piece 设为 0。"""
+        """滑动窗口策略：窗口内 urgent(7)，已下载保留(1)，其余停止(0)。
+
+        不再全量重置为 0 —— 那样会丢弃已下载的 piece，导致播放时反复重新下载，
+        体验极差。改为保留已下载 piece（priority=1），只把未下载且不在窗口内的设 0。
+        """
         if not h.status().has_metadata:
             return False
         ti = h.torrent_file()
@@ -856,64 +855,112 @@ class TorrentEngine:
         start_piece = file_offset // piece_length
         end_piece = (file_offset + file_size) // piece_length
 
-        # 窗口外设为 0（严格按需），窗口内 7
-        piece_prios = [0] * num_pieces
+        tracker = info.get("tracker")
+        head_ready = tracker.head_ready() if tracker else False
+        moov_end = info.get("moov_end", 0)
 
-        # Head urgent (moov-in-head + first frame)
-        head_count = min(30, end_piece - start_piece + 1)
-        for p in range(start_piece, min(start_piece + head_count, end_piece + 1)):
-            piece_prios[p] = 7
-            h.set_piece_deadline(p, 0)
+        # 读取当前优先级，做增量修改（避免全量重置丢弃已下载数据）
+        piece_prios = list(h.piece_priorities())
+        changed = False
 
-        # Tail urgent (moov-in-tail)
-        tail_count = min(30, end_piece - start_piece + 1)
-        for p in range(max(start_piece, end_piece - tail_count + 1), end_piece + 1):
-            piece_prios[p] = 7
+        # ---- moov / head_ready 处理 ----
+        moov_pieces: set[int] = set()
+        if not head_ready and moov_end > 0 and tracker:
+            moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
+            moov_end_piece = (tracker.file_offset + moov_end) // piece_length
+            for p in range(max(start_piece, moov_start_piece), min(end_piece, moov_end_piece) + 1):
+                if tracker and not tracker.is_verified(p):
+                    moov_pieces.add(p)
+        elif not head_ready:
+            # moov unknown: try scan now — file may have grown since _on_metadata
+            if tracker and info.get("video_path") and os.path.exists(info["video_path"]):
+                scanned_start, scanned_end = _scan_mp4_moov(info["video_path"])
+                if scanned_end > 0:
+                    info["moov_start"] = scanned_start
+                    info["moov_end"] = scanned_end
+                    tracker.set_moov_range(scanned_start, scanned_end)
+                    moov_end = scanned_end
+                    log.info(
+                        f"moov found on-the-fly: {info['hash'][:12]}... "
+                        f"range={scanned_start}-{scanned_end}"
+                    )
+            if moov_end > 0 and tracker:
+                moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
+                moov_end_piece = (tracker.file_offset + moov_end) // piece_length
+                for p in range(max(start_piece, moov_start_piece), min(end_piece, moov_end_piece) + 1):
+                    if not tracker.is_verified(p):
+                        moov_pieces.add(p)
+            else:
+                # Still unknown: probe tail only (tail-moov is far more common)
+                probe_count = min(20, end_piece - start_piece + 1)
+                for p in range(max(start_piece, end_piece - probe_count + 1), end_piece + 1):
+                    moov_pieces.add(p)
 
-        # 播放窗口
+        # ---- 播放窗口 ----
         ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
         target_byte = int(file_size * ratio)
         target_piece = start_piece + (target_byte // piece_length)
 
         win_start = max(start_piece, target_piece - window_pcs)
         win_end = min(end_piece, target_piece + window_pcs)
-        for p in range(win_start, win_end + 1):
-            if piece_prios[p] == 0:
-                piece_prios[p] = 7
-                h.set_piece_deadline(p, 0)
 
-        h.prioritize_pieces(piece_prios)
+        urgent_count = 0
+        retain_count = 0
+        zero_count = 0
+
+        for p in range(start_piece, end_piece + 1):
+            in_window = win_start <= p <= win_end
+            in_moov = p in moov_pieces
+            is_verified = tracker.is_verified(p) if tracker else False
+
+            if in_window or in_moov:
+                # 窗口内 / moov 内：urgent
+                if piece_prios[p] != 7:
+                    piece_prios[p] = 7
+                    h.set_piece_deadline(p, 0)
+                    changed = True
+                urgent_count += 1
+            elif is_verified:
+                # 已下载：保留（priority=1），不丢弃，libtorrent 空闲时还可做种
+                if piece_prios[p] != 1:
+                    piece_prios[p] = 1
+                    changed = True
+                retain_count += 1
+            else:
+                # 未下载且不在窗口：停止
+                if piece_prios[p] != 0:
+                    piece_prios[p] = 0
+                    changed = True
+                zero_count += 1
+
+        if changed:
+            h.prioritize_pieces(piece_prios)
         h.set_sequential_download(False)
         log.debug(
-            "_set_stream_window: pieces prioritized",
+            "_set_stream_window: sliding window",
             extra={
                 "hash": info['hash'][:12],
-                "num_pieces": num_pieces,
-                "start_piece": start_piece,
-                "end_piece": end_piece,
-                "head_count": head_count,
-                "tail_count": tail_count,
+                "head_ready": head_ready,
+                "moov_known": moov_end > 0,
                 "window_pcs": window_pcs,
-                "win_start": win_start if window_pcs > 0 else None,
-                "win_end": win_end if window_pcs > 0 else None,
+                "win_start": win_start,
+                "win_end": win_end,
+                "urgent": urgent_count,
+                "retain": retain_count,
+                "zero": zero_count,
             },
         )
         return True
 
     def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:
-        """开始播放：只下载 head + tail，等待前端报告进度后滑动窗口。"""
-        tracker = info.get("tracker")
-        if tracker:
-            count = tracker.request_head_tail(head_count=30, tail_count=30)
-            log.info(
-                f"play priority: {info['hash'][:12]}... head+tail via tracker ({count} pcs)",
-                extra={"requested_pieces": count},
-            )
-            return True
-        # Fallback to old _set_stream_window if tracker not yet created
+        """开始播放：全量重置后只下载必要片段（moov + 极小窗口），等待前端报告进度。
+
+        不再使用 tracker.request_head_tail() —— 那个方法不会重置其他 piece 的优先级，
+        导致 libtorrent 默认优先级下的 piece 继续下载，形成"遍地开花"。
+        """
         result = self._set_stream_window(h, info, 0.0, 0.0, window_pcs=0)
         if result:
-            log.info(f"play priority: {info['hash'][:12]}... head+tail only, waiting for progress")
+            log.info(f"play priority: {info['hash'][:12]}... strict head+moov only")
         return result
 
     def set_full_priority(self, hash_str: str) -> bool:
@@ -939,13 +986,13 @@ class TorrentEngine:
         if result:
             log.info(
                 f"seek priority: {hash_str[:12]}... t={time_sec:.1f}s "
-                f"window=±15pcs strict"
+                f"window=±15pcs"
             )
             info["last_access"] = time.time()
         return result
 
     def update_play_progress(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """正常播放中滑动窗口：±30 piece（约 2–4 分钟缓冲），其余不下载。"""
+        """正常播放中滑动窗口：±30 piece（约 2–4 分钟缓冲），已下载保留。"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -984,16 +1031,13 @@ class TorrentEngine:
         return True
 
     def resume_download(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """恢复下载：重新设置 head+tail+当前窗口。"""
+        """恢复下载：重新设置 moov + 当前窗口。"""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
             return False
         info["_paused"] = False
         h = info["handle"]
-        # 先恢复 head+tail
-        self._apply_play_priority(h, info)
-        # 再恢复播放窗口
         result = self._set_stream_window(h, info, time_sec, duration_sec, window_pcs=30)
         if result:
             log.info(f"resume download: {hash_str[:12]}... t={time_sec:.1f}s")
@@ -1026,54 +1070,25 @@ class TorrentEngine:
         # _on_metadata caches moov into info; if missing fall back to fs scan.
         tracker = info.get("tracker")
         if tracker and local_path:
-            # Periodic sync: libtorrent may drop piece_finished_alert under
-            # heavy load. Re-sync have_piece to tracker so head_ready stays
-            # accurate. Use incremental sync (strict=False) to avoid undoing
-            # strict recheck results.
-            tracker._overlay_have_piece(strict=False)
-
-            # Architecture: cache-warming retry. Peers may disconnect or
-            # libtorrent may drop urgency after initial setup. Re-apply play
-            # priority every 10 seconds while head_ready is false, so tail-moov
-            # pieces keep getting pushed to the front of the download queue.
-            if (
-                not tracker.head_ready()
-                and info.get("_play_priority_applied")
-                and info.get("moov_end", 0) > 0
-                and not info.get("_paused")
-            ):
-                now = time.time()
-                last_warm = info.get("_last_warm_attempt", 0)
-                if now - last_warm > 10:
-                    self._apply_play_priority(h, info)
-                    info["_last_warm_attempt"] = now
-                    log.debug(
-                        "cache warming retry",
-                        extra={
-                            "hash": hash_str[:12],
-                            "verified": tracker.verified_count(),
-                            "moov_vc": tracker._moov_vc,
-                            "moov_pc": tracker._moov_pc,
-                        },
-                    )
-
             if tracker._moov_pc > 0:
                 head_ready = tracker.head_ready()
             else:
-                # Fallback: moov not yet cached (new torrent or scan failed)
+                # Retry scan: data may have arrived since _on_metadata
                 moov_start, moov_end = _scan_mp4_moov(local_path)
-                if moov_end == 0:
-                    # Tail-moov fallback: assume moov is in the last 30 pieces
-                    tail_start = max(
-                        tracker.start_piece,
-                        tracker.end_piece - 30 + 1,
+                if moov_end > 0:
+                    info["moov_start"] = moov_start
+                    info["moov_end"] = moov_end
+                    tracker.set_moov_range(moov_start, moov_end)
+                    log.info(
+                        f"moov found on retry: {hash_str[:12]}... "
+                        f"range={moov_start}-{moov_end}"
                     )
-                    moov_start = max(0, tail_start * tracker.piece_length - tracker.file_offset)
-                    moov_end = info["video_size"]
-                info["moov_start"] = moov_start
-                info["moov_end"] = moov_end
-                tracker.set_moov_range(moov_start, moov_end)
-                head_ready = tracker.head_ready()
+                else:
+                    log.debug(
+                        f"moov retry still missing: {hash_str[:12]}... "
+                        f"will keep probing tail"
+                    )
+                head_ready = tracker.head_ready() if tracker._moov_pc > 0 else False
         else:
             head_ready = head_ready_fs
 
@@ -1130,6 +1145,82 @@ class TorrentEngine:
         with self.lock:
             hashes = list(self.torrents.keys())
         return [self.get_status(h) for h in hashes]
+
+    def _readd_torrent(self, hash_str: str) -> dict[str, Any] | None:
+        """Remove and re-add a torrent to clear libtorrent's stale finished state.
+
+        Preserves files on disk. Restores moov range and play state.
+        CRITICAL: fsync() before re-add so recheck reads actual disk state,
+        not stale page-cache zeros that produce false positives.
+        """
+        with self.lock:
+            info = self.torrents.get(hash_str)
+        if not info:
+            return None
+
+        magnet = info["magnet"]
+        prefetch = info.get("prefetch", False)
+        saved: dict[str, Any] = {
+            "last_access": info.get("last_access", time.time()),
+            "work_code": info.get("work_code"),
+            "_last_play_time": info.get("_last_play_time", 0),
+            "_play_count": info.get("_play_count", 0),
+            "_recheck_done": info.get("_recheck_done", False),
+        }
+        moov_start = info.get("moov_start")
+        moov_end = info.get("moov_end")
+        if moov_start:
+            saved["moov_start"] = moov_start
+        if moov_end:
+            saved["moov_end"] = moov_end
+        path = info.get("video_path")
+
+        with self.lock:
+            info = self.torrents.pop(hash_str, None)
+        if not info:
+            return None
+
+        try:
+            # option=0: do NOT delete files
+            self.session.remove_torrent(info["handle"], 0)
+        except Exception as e:
+            log.warning(f"_readd_torrent remove failed: {e}")
+
+        # CRITICAL: delete ALL files including .torrent so libtorrent re-downloads
+        # metadata from peers. Keeping .torrent causes libtorrent to finish
+        # immediately on add (sparse file size matches), creating deadlock loop.
+        save_path = os.path.join(self.cache_dir, hash_str)
+        if os.path.exists(save_path):
+            try:
+                shutil.rmtree(save_path)
+            except Exception as e:
+                log.warning(f"_readd_torrent rmtree failed: {e}")
+
+        # Give libtorrent time to release file descriptors
+        time.sleep(0.3)
+
+        # Rate-limit readd to prevent infinite loops when libtorrent
+        # repeatedly false-positives into finished state.
+        now = time.time()
+        last_readd = info.get("_last_readd_time", 0)
+        if now - last_readd < 60:
+            log.warning(
+                f"readd throttled: {hash_str[:12]}... "
+                f"last={int(now - last_readd)}s ago"
+            )
+            return None
+        saved["_last_readd_time"] = now
+
+        new_info = self.add_torrent(magnet, prefetch=prefetch)
+        if new_info:
+            new_info.update(saved)
+            tracker = new_info.get("tracker")
+            moov_start = saved.get("moov_start")
+            moov_end = saved.get("moov_end")
+            if moov_start and moov_end and tracker:
+                tracker.set_moov_range(moov_start, moov_end)
+            log.info(f"readded torrent: {hash_str[:12]}... to clear finished deadlock")
+        return new_info
 
     def remove_torrent(self, hash_str: str) -> bool:
         """移除指定 torrent 并删除其缓存文件。

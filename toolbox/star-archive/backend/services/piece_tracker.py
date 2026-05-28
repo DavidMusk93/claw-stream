@@ -1,4 +1,4 @@
-#!/usrusr/bin/env python3
+#!/usr/bin/env python3
 """PieceStateTracker — piece-level download state management.
 
 Phase 3.6 architecture:
@@ -83,16 +83,10 @@ class PieceStateTracker:
         self._head_mask = 0          # head pieces (for reset_priorities)
         self._tail_mask = 0          # tail pieces
 
-        # Scan filesystem once to bootstrap verified pieces
+        # Scan filesystem once to bootstrap verified pieces.
+        # This is the ONLY truth source for disk state — libtorrent's have_piece()
+        # is unreliable in finished/checking states due to page-cache false positives.
         self._bootstrap_from_filesystem()
-
-        # Sync with libtorrent have_piece.
-        # If torrent is NOT checking_files, have_piece is reliable after recheck.
-        # Use strict=True to override false VERIFIED from zero-filled blocks.
-        # If still checking, have_piece may be stale — use incremental sync only.
-        status = handle.status()
-        checking = getattr(status, "state", None) == lt.torrent_status.checking_files
-        self._overlay_have_piece(strict=not checking)
 
         log.debug(
             "PieceStateTracker init",
@@ -157,15 +151,24 @@ class PieceStateTracker:
     # ── Bootstrap ───────────────────────────────────────────
 
     def _bootstrap_from_filesystem(self) -> None:
-        """Use SEEK_HOLE to mark pieces that already have data on disk.
+        """Use SEEK_HOLE to mark pieces that have data on disk.
 
-        Scanning resets all states first — libtorrent recheck zeros pieces
-        on disk, which SEEK_HOLE sees as data. Without reset, previously
-        verified pieces that turned into holes stay falsely VERIFIED.
-        A piece is VERIFIED only if its *entire* range has no hole.
+        CRITICAL: fsync() before lseek so page-cache data is flushed.
+        Without fsync, SEEK_HOLE sees only disk extents and misses
+        unflushed data, producing false negatives.
         """
         if not os.path.exists(self.path):
             return
+
+        # Flush page cache so SEEK_HOLE sees actual disk state
+        try:
+            fd = os.open(self.path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except Exception:
+            pass
 
         self._verified = 0
         self._corrupt = 0
@@ -181,8 +184,6 @@ class PieceStateTracker:
             while offset < file_end:
                 piece = offset // piece_len
                 piece_end = min((piece + 1) * piece_len, file_end)
-                # fd is the video file; lseek offset must be relative to
-                # the video file, not the torrent's absolute offset.
                 offset_in_file = offset - self.file_offset
                 piece_end_in_file = piece_end - self.file_offset
 
@@ -192,43 +193,31 @@ class PieceStateTracker:
                     break
 
                 if hole >= piece_end_in_file:
-                    # Entire piece has data — safe to mark VERIFIED
                     self._verified |= (1 << piece)
-                # Partial data is NOT marked: libtorrent may have zeroed
-                # the rest during recheck, and reading that region returns
-                # zeros which causes Safari/Chrome demuxer stutter.
 
                 offset = piece_end
         finally:
             os.close(fd)
+        self._moov_vc = (self._verified & self._moov_mask).bit_count()
 
-    def _overlay_have_piece(self, strict: bool = False) -> None:
-        """将 libtorrent have_piece 同步到 tracker 状态。
-
-        默认模式下仅在 piece 当前为 NOT_DOWNLOADED 时覆盖（增量同步），
-        避免破坏 tracker 自身的 DOWNLOADING / VERIFIED / CORRUPT 状态。
-
-        strict=True 时做双向同步：have_piece 为 false 的 piece 强制重置为
-        NOT_DOWNLOADED；have_piece 为 true 但 _bootstrap 未标记的 piece
-        不强制标记（防止 recheck 时 page cache 误报）。
-        用于 torrent_checked_alert 之后。
-        """
-        for p in range(self.start_piece, self.end_piece + 1):
-            if self.handle.have_piece(p):
-                if not (self._verified & (1 << p)):
-                    # Strict mode: only trust have_piece if filesystem scan
-                    # already confirmed data. Prevents page-cache false positives
-                    # where libtorrent recheck reads stale cached zeros as valid.
-                    if strict:
-                        continue
-                    self._set_verified(p)
-            elif strict and (self._verified & (1 << p)):
-                # recheck 完成后 have_piece 为 false 说明该 piece 未通过校验
-                # 或仍是 zeros，不能信任 SEEK_HOLE 的扫描结果
-                bit = 1 << p
-                self._verified &= ~bit
-                if bit & self._moov_mask:
-                    self._moov_vc -= 1
+    def _piece_has_data_on_disk(self, piece: int) -> bool:
+        """Check if a single piece has data on disk (SEEK_HOLE after fsync)."""
+        if not os.path.exists(self.path):
+            return False
+        try:
+            fd = os.open(self.path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+                piece_start = piece * self.piece_length
+                piece_end = min((piece + 1) * self.piece_length,
+                                self.file_offset + self.video_size)
+                offset_in_file = piece_start - self.file_offset
+                hole = os.lseek(fd, offset_in_file, os.SEEK_HOLE)
+                return hole >= (piece_end - self.file_offset)
+            finally:
+                os.close(fd)
+        except OSError:
+            return False
 
     # ── Alert sync ──────────────────────────────────────────
 
@@ -364,12 +353,10 @@ class PieceStateTracker:
         p = start
         while need:
             if need & 1:
-                # If libtorrent already has this piece (e.g. recheck left it
-                # complete), mark VERIFIED immediately instead of DOWNLOADING.
-                if self.handle.have_piece(p):
-                    self._set_verified(p)
-                else:
-                    self._set_downloading(p)
+                # Do NOT trust have_piece() here — it can be false-positive
+                # in finished state. Let _bootstrap_from_filesystem() or
+                # piece_finished_alert set VERIFIED.
+                self._set_downloading(p)
                 count += 1
             need >>= 1
             p += 1
