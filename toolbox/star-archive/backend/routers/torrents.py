@@ -10,8 +10,10 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from typing import Any
 
 from backend.models import TorrentStatus, TorrentAddRequest, TorrentAddResponse, SeekRequest, ProgressRequest
+from core import get_logger
 
 router = APIRouter(prefix="/torrent", tags=["torrents"])
+log = get_logger("torrents-router")
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
@@ -22,7 +24,7 @@ def _is_primary_title(work_code: str) -> bool:
     if not work_code:
         return False
     try:
-        conn = duckdb.connect(DB_PATH, read_only=True)
+        conn = duckdb.connect(DB_PATH)
         try:
             row = conn.execute("""
                 SELECT 1 FROM stars s
@@ -53,7 +55,7 @@ def _resolve_magnet(magnet: str) -> str:
     if "tr=" in magnet:
         return magnet
     try:
-        conn = duckdb.connect(DB_PATH, read_only=True)
+        conn = duckdb.connect(DB_PATH)
         try:
             row = conn.execute(
                 "SELECT magnet FROM magnets WHERE hash = ? LIMIT 1", [hash_str]

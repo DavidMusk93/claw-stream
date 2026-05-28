@@ -59,7 +59,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
     config = _load_config()
     solo = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
-    conn = duckdb.connect(DB_PATH, read_only=True)
+    conn = duckdb.connect(DB_PATH)
     try:
         title_rows = conn.execute("""
         WITH ranked AS (
@@ -335,7 +335,7 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
     # 清空该女优所有作品的缓存和 tracing bits
     engine = request.app.state.engine
     try:
-        conn = duckdb.connect(DB_PATH, read_only=True)
+        conn = duckdb.connect(DB_PATH)
         try:
             rows = conn.execute("""
                 SELECT m.hash

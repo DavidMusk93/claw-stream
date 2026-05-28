@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import random
+import re
 import struct
 
 from scrapers.v2.fetchers import HttpxFetcher, USER_AGENTS
@@ -157,3 +159,78 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                 pass
 
     return ""
+
+
+async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) -> str:
+    """复用 fetcher client 下载单个封面，返回 base64 data URI 或空"""
+    tried: set[str] = set()
+
+    # 1. Jable.tv
+    if code:
+        try:
+            html = await fetcher.fetch(f"https://en.jable.tv/videos/{code.lower()}/")
+            m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
+            if m:
+                jable_url = m.group(1)
+                data = await fetcher.fetch_bytes(jable_url, headers={"User-Agent": random.choice(USER_AGENTS)})
+                if data and is_good_cover(data):
+                    b64 = base64.b64encode(data).decode()
+                    return f"data:{_guess_mime(data)};base64,{b64}"
+        except Exception:
+            pass
+
+    # 2. DMM CDN
+    if code:
+        c = code.lower().replace("-", "")
+        dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
+        if dmm_url not in tried:
+            tried.add(dmm_url)
+            try:
+                data = await fetcher.fetch_bytes(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
+                if data and is_good_cover(data):
+                    b64 = base64.b64encode(data).decode()
+                    return f"data:{_guess_mime(data)};base64,{b64}"
+            except Exception:
+                pass
+
+    # 3. 给定 URL
+    for url in [cover_url] if cover_url else []:
+        if url in tried:
+            continue
+        tried.add(url)
+        try:
+            data = await fetcher.fetch_bytes(
+                url,
+                headers={
+                    "User-Agent": random.choice(USER_AGENTS),
+                    "Referer": "https://ijavtorrent.com/",
+                },
+            )
+            if data and is_good_cover(data):
+                b64 = base64.b64encode(data).decode()
+                return f"data:{_guess_mime(data)};base64,{b64}"
+        except Exception:
+            pass
+
+    return ""
+
+
+async def download_covers_batch(items: list[tuple[str, str]], concurrency: int = 8) -> dict[str, str]:
+    """批量并发下载封面，返回 {code: base64_data_uri}。
+
+    items: list of (code, cover_url)
+    concurrency: 并发下载数
+    """
+    sem = asyncio.Semaphore(concurrency)
+    results: dict[str, str] = {}
+
+    async with HttpxFetcher() as fetcher:
+        async def _fetch_one(code: str, cover_url: str) -> None:
+            async with sem:
+                b64 = await _download_one_cover(fetcher, code, cover_url)
+                if b64:
+                    results[code] = b64
+
+        await asyncio.gather(*[_fetch_one(code, url) for code, url in items])
+
+    return results

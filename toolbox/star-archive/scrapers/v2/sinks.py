@@ -31,14 +31,20 @@ class TitleSyncSink:
         self.star_id = star_id
         self.name = name
 
-    async def write(self, item: VideoItem) -> None:
-        from scrapers.v2.cover_utils import download_cover_b64
+    async def write(self, item: VideoItem, cover_b64: str | None = None, is_new: bool | None = None) -> None:
+        """写入单个 title。
 
+        cover_b64: 新作品预下载的封面，None 表示更新场景（保留已有 cover）。
+        is_new: 若传入则跳过数据库存在性检查，直接按指定类型处理。
+        """
         code = item.code
         views = item.views
         likes = item.likes
 
-        exists = await db_write(db.title_exists, self.star_id, code)
+        if is_new is None:
+            exists = await db_write(db.title_exists, self.star_id, code)
+        else:
+            exists = not is_new
         if exists:
             # 更新元数据，保留已有 cover
             conn = db._conn()
@@ -67,8 +73,7 @@ class TitleSyncSink:
                 if m:
                     await db_write(db.upsert_magnet, title_id, m, is_primary=(idx == 0))
         else:
-            # 新 title：下载封面后插入
-            cover_b64 = await download_cover_b64(item.cover_url or "", code)
+            # 新 title：使用预下载的封面（若无则空）
             title_id = await db_write(
                 db.upsert_title,
                 star_id=self.star_id,
@@ -80,7 +85,7 @@ class TitleSyncSink:
                 resolution=self._best_resolution(item),
                 download_url="",
                 cover_url=item.cover_url,
-                cover_b64=cover_b64,
+                cover_b64=cover_b64 or "",
             )
             for idx, m in enumerate(item.all_magnet_urls):
                 if m:

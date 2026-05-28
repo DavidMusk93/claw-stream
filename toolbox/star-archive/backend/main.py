@@ -172,7 +172,7 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
     """同步函数：从 DuckDB 或文件系统读取封面，返回 (image_bytes, media_type)。"""
     # 1. 优先从 DuckDB 读取
     try:
-        conn = duckdb.connect(DB_PATH, read_only=True)
+        conn = duckdb.connect(DB_PATH)
         try:
             row = conn.execute(
                 "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",

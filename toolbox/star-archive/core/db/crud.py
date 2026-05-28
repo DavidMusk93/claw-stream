@@ -52,6 +52,15 @@ def title_exists(star_id, code):
 
 
 @trace_db
+def load_all_title_codes() -> set[tuple[int, str]]:
+    """一次性加载所有 (star_id, code) 到内存 set，用于批量存在性判断"""
+    conn = _conn()
+    rows = conn.execute("SELECT star_id, code FROM titles").fetchall()
+    conn.close()
+    return set(rows)
+
+
+@trace_db
 def upsert_title(star_id, code, title=None, release_date=None, views=None,
                 likes=None, resolution=None, download_url=None, cover_url=None,
                 cover_b64=None, cover_path=None):

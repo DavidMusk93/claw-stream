@@ -1,7 +1,7 @@
 """backend/routers/sync.py — 女优作品同步路由
 
-核心变更：取消 subprocess，改为进程内直接调用 scrapers.v2.tasks.sync_titles，
-配合全局 DuckDB 串行写队列，彻底消除跨进程锁冲突。
+在主事件循环中直接运行 scrapers.v2.tasks.sync_titles，
+配合全局 DuckDB 串行写队列，彻底消除跨进程/跨线程锁冲突。
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ _sync_state: dict[str, Any] = {
 }
 
 
-def _run_sync_bg() -> None:
-    """后台线程：进程内运行 sync-titles，消除跨进程 DuckDB 锁冲突。"""
+async def _run_sync_bg() -> None:
+    """在主事件循环中运行 sync-titles（完全 async，不会阻塞 loop）。"""
     global _sync_state
     _sync_state["log_lines"] = []
     _sync_state["last_error"] = None
@@ -37,10 +37,7 @@ def _run_sync_bg() -> None:
     try:
         from scrapers.v2.tasks.sync_titles import run as run_sync_titles
 
-        # 在线程中创建独立事件循环运行 async 爬虫
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        results = loop.run_until_complete(run_sync_titles("config.json"))
+        results = await run_sync_titles("config.json")
         log_lines = [f"{r['name']}: {r['count']} titles" for r in results]
         _sync_state["log_lines"] = log_lines[-30:]
         log.info("sync completed", extra={"lines": len(log_lines)})
@@ -64,7 +61,7 @@ async def start_sync() -> dict[str, Any]:
             }
         _sync_state["running"] = True
         _sync_state["started_at"] = time.time()
-        threading.Thread(target=_run_sync_bg, daemon=True).start()
+        asyncio.create_task(_run_sync_bg())
         return {"status": "started"}
 
 

@@ -1,21 +1,26 @@
 """scrapers/v2/tasks/sync_titles.py — 同步女优最新作品
 
-核心变更：不再固定只取前 3 个，而是同步所有数据库中不存在的作品 +
-更新已有作品的元数据，确保新作品永远不会被遗漏。
+优化后的并发流程：
+1. 批量 upsert stars + 预加载所有已有 title codes（内存 set）
+2. 并发抓取 star pages（无额外 delay，Playwright Semaphore 控制浏览器并发）
+3. 内存判断新/旧作品
+4. 批量并发下载封面（复用 httpx client）
+5. 批量写入数据库（通过串行队列，但减少了 title_exists 查询次数）
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import random
 
 from core import get_logger
 from core import db
+from core.db.write_queue import db_write
 from scrapers.v2.fetchers import PlaywrightFetcher
 from scrapers.v2.extractors import IJavTorrentExtractor
 from scrapers.v2.sinks import TitleSyncSink
 from scrapers.v2.schemas import VideoItem, StarConfig
+from scrapers.v2.cover_utils import download_covers_batch
 
 log = get_logger("sync-titles")
 
@@ -44,64 +49,27 @@ def _dedup(items: list[VideoItem]) -> list[VideoItem]:
     return unique
 
 
-async def sync_star(
+async def fetch_star_page(
     fetcher: PlaywrightFetcher,
     star: StarConfig,
     semaphore: asyncio.Semaphore,
-) -> dict:
-    """同步单个 star 的作品：增量抓取新作品 + 更新已有作品元数据。"""
-    name = star.name
-    code = star.code
-    handle = star.handle
-    star_page_url = star.star_page_url
-
-    star_id = db.upsert_star(name=name, handle=handle, code=code)
-
-    if not star_page_url:
-        log.warning(f"no star_page_url for {name}, skipping")
-        return {"name": name, "titles": [], "count": 0}
-
+) -> list[VideoItem]:
+    """抓取单个 star 的页面并解析出 VideoItem 列表。"""
     async with semaphore:
         try:
-            html = await fetcher.fetch(star_page_url, delay_ms=random.randint(500, 1500))
+            html = await fetcher.fetch(star.star_page_url)
         except Exception as e:
-            log.error(f"fetch failed: {name}: {type(e).__name__}: {e}")
-            return {"name": name, "titles": [], "count": 0}
+            log.error(f"fetch failed: {star.name}: {type(e).__name__}: {e}")
+            return []
 
     extractor = IJavTorrentExtractor()
     raw_items = extractor.extract(html)
-    log.info(f"{name}: {len(raw_items)} total items on page")
-
     items = _dedup(raw_items)
-    log.info(f"{name}: {len(items)} items after dedup")
-
-    # 分类：新作品 vs 已有作品
-    new_items: list[VideoItem] = []
-    existing_items: list[VideoItem] = []
-    for it in items:
-        if db.title_exists(star_id, it.code):
-            existing_items.append(it)
-        else:
-            new_items.append(it)
-
-    # 限制新作品数量，防止 star 作品过多时同步超时
-    if len(new_items) > MAX_NEW_TITLES:
-        log.info(f"{name}: {len(new_items)} new items, limiting to {MAX_NEW_TITLES}")
-        new_items = new_items[:MAX_NEW_TITLES]
-
-    # 要同步的总列表：新作品 + 已有作品（用于元数据更新）
-    # 已有作品只更新前 10 个，避免大量无意义的 UPDATE
-    to_sync = new_items + existing_items[:10]
-
-    sink = TitleSyncSink(star_id=star_id, name=name)
-    for it in to_sync:
-        await sink.write(it)
-
-    log.info(f"done: {name}: {len(new_items)} new + {len(existing_items[:5])} updated")
-    return {"name": name, "titles": to_sync, "count": len(new_items)}
+    log.info(f"{star.name}: {len(raw_items)} raw → {len(items)} dedup")
+    return items
 
 
-async def run(config_path: str = "config.json", concurrency: int = 4) -> list[dict]:
+async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> list[dict]:
     """主入口：读取配置，并发同步所有 stars"""
     db.init_schema()
 
@@ -109,16 +77,86 @@ async def run(config_path: str = "config.json", concurrency: int = 4) -> list[di
         raw = json.load(f)
 
     stars = [StarConfig(**s) for s in raw.get("stars", [])]
-    log.info(f"fetching titles from {len(stars)} star pages...")
+    log.info(f"syncing {len(stars)} stars, fetch_concurrency={fetch_concurrency}")
 
+    # 1. 批量 upsert stars 并建立 code → star_id 映射
+    star_id_map: dict[str, int] = {}
+    for star in stars:
+        star_id = await db_write(
+            db.upsert_star,
+            name=star.name,
+            handle=star.handle,
+            code=star.code,
+        )
+        star_id_map[star.code] = star_id
+
+    # 2. 预加载所有已有 title codes 到内存 set
+    existing_codes = await db_write(db.load_all_title_codes)
+    log.info(f"loaded {len(existing_codes)} existing titles into memory")
+
+    # 3. 并发抓取所有 star pages（无额外 delay）
     async with PlaywrightFetcher() as fetcher:
-        sem = asyncio.Semaphore(concurrency)
-        results = await asyncio.gather(
-            *[sync_star(fetcher, star, sem) for star in stars],
+        sem = asyncio.Semaphore(fetch_concurrency)
+        page_results = await asyncio.gather(
+            *[fetch_star_page(fetcher, star, sem) for star in stars],
             return_exceptions=True,
         )
 
-    # 统计（只读查询，无需排队）
+    # 4. 分类新/旧作品，组装写入批次
+    sync_batches: list[tuple[int, str, list[VideoItem], list[VideoItem]]] = []
+    all_new_items: list[VideoItem] = []
+
+    for star, page_result in zip(stars, page_results):
+        if isinstance(page_result, Exception):
+            log.error(f"page fetch exception for {star.name}: {page_result}")
+            continue
+
+        star_id = star_id_map[star.code]
+        items = page_result
+
+        new_items: list[VideoItem] = []
+        existing_items: list[VideoItem] = []
+        for it in items:
+            if (star_id, it.code) in existing_codes:
+                existing_items.append(it)
+            else:
+                new_items.append(it)
+
+        if len(new_items) > MAX_NEW_TITLES:
+            log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
+            new_items = new_items[:MAX_NEW_TITLES]
+
+        to_sync = new_items + existing_items[:10]
+        sync_batches.append((star_id, star.name, to_sync, new_items))
+        all_new_items.extend(new_items)
+
+    # 5. 批量并发下载封面（复用 httpx client）
+    cover_map: dict[str, str] = {}
+    if all_new_items:
+        cover_items = [(it.code, it.cover_url or "") for it in all_new_items]
+        log.info(f"downloading {len(cover_items)} covers in batch...")
+        cover_map = await download_covers_batch(cover_items, concurrency=8)
+        log.info(f"downloaded {len(cover_map)} covers")
+
+    # 6. 批量写入数据库（通过串行队列，但已省去逐条 title_exists 查询）
+    total_new = 0
+    total_updated = 0
+    clean: list[dict] = []
+
+    for star_id, name, to_sync, new_items in sync_batches:
+        sink = TitleSyncSink(star_id=star_id, name=name)
+        new_codes = {it.code for it in new_items}
+        for it in to_sync:
+            is_new = it.code in new_codes
+            b64 = cover_map.get(it.code) if is_new else None
+            await sink.write(it, cover_b64=b64, is_new=is_new)
+
+        total_new += len(new_items)
+        total_updated += len(to_sync) - len(new_items)
+        log.info(f"done: {name}: {len(new_items)} new + {len(to_sync) - len(new_items)} updated")
+        clean.append({"name": name, "titles": to_sync, "count": len(new_items)})
+
+    # 统计
     conn = db._conn()
     rows = conn.execute("""
         SELECT s.code, s.name, COUNT(t.id) as title_count
@@ -133,15 +171,8 @@ async def run(config_path: str = "config.json", concurrency: int = 4) -> list[di
     for _, name, count in rows:
         log.info(f"{name}: {count} titles")
         total += count
-    log.info(f"done, total {total} titles")
+    log.info(f"sync complete: {total_new} new, {total_updated} updated, {total} total titles")
 
-    # 过滤掉异常结果
-    clean: list[dict] = []
-    for r in results:
-        if isinstance(r, Exception):
-            log.error(f"sync star exception: {r}")
-        else:
-            clean.append(r)
     return clean
 
 
