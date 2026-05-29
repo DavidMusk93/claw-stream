@@ -67,7 +67,7 @@ class IJavTorrentExtractor:
             downloads = self._extract_downloads(node)
             cover_url = self._extract_cover(node)
             star_count = self._extract_star_count(node)
-            magnets, sizes, seeds, leeches, resolutions = self._extract_magnets(node)
+            magnets, sizes, seeds, leeches, resolutions, hhd800_flags = self._extract_magnets(node)
 
             candidates = []
             all_urls = []
@@ -82,6 +82,12 @@ class IJavTorrentExtractor:
                     )
                 )
                 all_urls.append(m)
+
+            # hhd800 高清源优先排最前，确保 is_primary 指向最优版本
+            combined = list(zip(candidates, all_urls, hhd800_flags))
+            combined.sort(key=lambda x: not x[2])
+            candidates = [c for c, _, _ in combined]
+            all_urls = [u for _, u, _ in combined]
 
             items.append(
                 VideoItem(
@@ -171,12 +177,13 @@ class IJavTorrentExtractor:
         return 0
 
     @staticmethod
-    def _extract_magnets(node) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
+    def _extract_magnets(node) -> tuple[list[str], list[str], list[str], list[str], list[str], list[bool]]:
         magnets: list[str] = []
         sizes: list[str] = []
         seeds: list[str] = []
         leeches: list[str] = []
         resolutions: list[str] = []
+        hhd800_flags: list[bool] = []
 
         html_snippet = node.html
         for row_match in re.finditer(r'<tr style="vertical-align: middle">(.*?)</tr>', html_snippet, re.DOTALL):
@@ -187,6 +194,7 @@ class IJavTorrentExtractor:
             magnet_url = htmlmod.unescape(m.group(1))
             magnets.append(magnet_url)
             resolutions.append(_extract_resolution(magnet_url))
+            hhd800_flags.append("hhd800" in row.lower())
 
             size_m = re.search(r'fa-weight-hanging"></i>\s*([0-9.]+\s*GB)', row, re.I)
             sizes.append(size_m.group(1) if size_m else "")
@@ -197,7 +205,7 @@ class IJavTorrentExtractor:
             leech_m = re.search(r'<strong>L:</strong>\s*(\d+)', row)
             leeches.append(leech_m.group(1) if leech_m else "0")
 
-        return magnets, sizes, seeds, leeches, resolutions
+        return magnets, sizes, seeds, leeches, resolutions, hhd800_flags
 
 
 class JableExtractor:
