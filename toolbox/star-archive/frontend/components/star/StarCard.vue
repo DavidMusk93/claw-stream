@@ -62,14 +62,20 @@
 
           <button
             :disabled="!activeTitle?.magnet"
-            class="flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#1c1c1e] text-white text-[14px] font-medium transition-colors hover:bg-[#2c2c2e] disabled:opacity-30 disabled:cursor-not-allowed"
+            class="flex items-center gap-2 px-5 py-2.5 rounded-full text-[14px] font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            :class="copied
+              ? 'bg-[#30d158] text-black'
+              : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
             @click="copyMagnet"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg v-if="!copied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2"/>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
             </svg>
-            <span>复制磁力</span>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>{{ copied ? '已复制 ✓' : '复制磁力 🔗' }}</span>
           </button>
         </div>
 
