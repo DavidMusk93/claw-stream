@@ -68,10 +68,11 @@ class TitleSyncSink:
                 cover_url=item.cover_url,
                 cover_b64=existing_cover,
             )
-            # 存储所有 magnet
-            for idx, m in enumerate(item.all_magnet_urls):
-                if m:
-                    await db_write(db.upsert_magnet, title_id, m, is_primary=(idx == 0))
+            # 存储所有 magnet：按评分排序，最佳高清源设为 primary
+            scored = sorted(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True)
+            for idx, m in enumerate(scored):
+                if m.magnet:
+                    await db_write(db.upsert_magnet, title_id, m.magnet, is_primary=(idx == 0))
         else:
             # 新 title：使用预下载的封面（若无则空）
             title_id = await db_write(
@@ -87,9 +88,11 @@ class TitleSyncSink:
                 cover_url=item.cover_url,
                 cover_b64=cover_b64 or "",
             )
-            for idx, m in enumerate(item.all_magnet_urls):
-                if m:
-                    await db_write(db.upsert_magnet, title_id, m, is_primary=(idx == 0))
+            # 存储所有 magnet：按评分排序，最佳高清源设为 primary
+            scored = sorted(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True)
+            for idx, m in enumerate(scored):
+                if m.magnet:
+                    await db_write(db.upsert_magnet, title_id, m.magnet, is_primary=(idx == 0))
 
     @staticmethod
     def _best_resolution(item: VideoItem) -> str:
@@ -122,7 +125,9 @@ class TitleSyncSink:
                 size_mb = float(m.size.lower().replace("gb", "").strip()) * 1024
             except ValueError:
                 pass
-        return res_score + m.seed + size_mb / 100
+        # hhd800 高清源额外加分，确保在相同分辨率下优先
+        hhd800_bonus = 200 if "hhd800" in m.magnet.lower() else 0
+        return res_score + hhd800_bonus + m.seed + size_mb / 100
 
 
 class SocialSyncSink:
