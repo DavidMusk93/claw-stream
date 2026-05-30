@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import random
-import re
 import struct
 
 from scrapers.v2.fetchers import HttpxFetcher, USER_AGENTS
@@ -94,36 +93,11 @@ def is_good_cover(data: bytes) -> bool:
     return w >= 200 and h >= 200
 
 
-async def _fetch_jable_cover(code: str) -> bytes:
-    """从 jable.tv 抓取封面二进制数据"""
-    try:
-        async with HttpxFetcher() as fetcher:
-            html = await fetcher.fetch(f"https://en.jable.tv/videos/{code.lower()}/")
-            import re
-            m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
-            if not m:
-                return b""
-            jable_url = m.group(1)
-            data = await fetcher.fetch_bytes(jable_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-            return data
-    except Exception:
-        return b""
-
-
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
-    """下载封面，优先高清源：Jable.tv → DMM CDN → 给定 URL → 返回 base64 data URI 或空"""
+    """下载封面，优先高清源：DMM CDN → 给定 URL → 返回 base64 data URI 或空"""
     tried: set[str] = set()
 
-    # 1. Jable.tv 高清封面
-    if code:
-        data = await _fetch_jable_cover(code)
-        if data and is_good_cover(data):
-            b64 = base64.b64encode(data).decode()
-            return f"data:{_guess_mime(data)};base64,{b64}"
-        elif data:
-            pass  # too small, continue fallback
-
-    # 2. DMM CDN
+    # 1. DMM CDN
     if code:
         c = code.lower().replace("-", "")
         dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
@@ -138,7 +112,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
             except Exception:
                 pass
 
-    # 3. 给定 URL
+    # 2. 给定 URL
     for url in [cover_url] if cover_url else []:
         if url in tried:
             continue
@@ -165,21 +139,7 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
     """复用 fetcher client 下载单个封面，返回 base64 data URI 或空"""
     tried: set[str] = set()
 
-    # 1. Jable.tv
-    if code:
-        try:
-            html = await fetcher.fetch(f"https://en.jable.tv/videos/{code.lower()}/")
-            m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
-            if m:
-                jable_url = m.group(1)
-                data = await fetcher.fetch_bytes(jable_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                if data and is_good_cover(data):
-                    b64 = base64.b64encode(data).decode()
-                    return f"data:{_guess_mime(data)};base64,{b64}"
-        except Exception:
-            pass
-
-    # 2. DMM CDN
+    # 1. DMM CDN
     if code:
         c = code.lower().replace("-", "")
         dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
@@ -193,7 +153,7 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
             except Exception:
                 pass
 
-    # 3. 给定 URL
+    # 2. 给定 URL
     for url in [cover_url] if cover_url else []:
         if url in tried:
             continue

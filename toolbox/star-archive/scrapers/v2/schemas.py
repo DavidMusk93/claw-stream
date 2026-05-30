@@ -46,23 +46,6 @@ class BestMagnet(BaseModel):
     all_magnet_urls: list[str] = []
 
 
-class JableMeta(BaseModel):
-    """jable.tv 视频元数据"""
-
-    code: str
-    m3u8_url: str = ""
-    cover_url: str = ""
-
-
-class SocialPost(BaseModel):
-    """社交平台帖子"""
-
-    platform: str
-    content: str
-    post_url: str = ""
-    posted_at: str | None = None
-
-
 class StarConfig(BaseModel):
     """config.json 中的单个 star 配置"""
 

@@ -81,8 +81,6 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 resolution := IFNULL(r.resolution, ''),
                 download_url := IFNULL(r.download_url, ''),
                 cover_url := IFNULL(r.cover_url, ''),
-                m3u8_url := IFNULL(r.jable_m3u8, ''),
-                jable_cover := IFNULL(r.jable_cover, ''),
                 charming_intro := IFNULL(r.charming_intro, ''),
                 magnet := IFNULL(m.magnet, '')
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
@@ -93,54 +91,18 @@ def _build_stars_response() -> list[dict[str, Any]]:
         ORDER BY s.name
         """).fetchall()
 
-        post_rows = conn.execute("""
-            WITH ranked AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY star_id
-                        ORDER BY COALESCE(posted_at, created_at) DESC
-                    ) AS rn
-                FROM social_posts
-            )
-            SELECT
-                s.code,
-                COALESCE(array_agg(struct_pack(
-                    platform := r.platform,
-                    content := r.content,
-                    url := IFNULL(r.post_url, ''),
-                    posted_at := IFNULL(CAST(r.posted_at AS VARCHAR), '')
-                ) ORDER BY r.rn) FILTER (WHERE r.content IS NOT NULL), []) AS posts
-            FROM stars s
-            LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
-            GROUP BY s.id, s.code, s.name
-        """).fetchall()
-
         db_data: dict[str, dict[str, Any]] = {}
         for row in title_rows:
-            db_data[row[0]] = {"titles": row[1], "posts": []}
-        for row in post_rows:
-            code = row[0]
-            if code not in db_data:
-                db_data[code] = {"titles": [], "posts": []}
-            db_data[code]["posts"] = row[1]
+            db_data[row[0]] = {"titles": row[1]}
 
         result = []
         for a in solo:
             code = a["code"]
-            data = db_data.get(code, {"titles": [], "posts": []})
+            data = db_data.get(code, {"titles": []})
 
             titles = data.get("titles", [])
             for t in titles:
                 t["cover_url"] = f"/api/cover/{t['code']}"
-
-            seen = set()
-            posts = []
-            for p in data.get("posts", []):
-                if p["content"] not in seen:
-                    seen.add(p["content"])
-                    posts.append(p)
-                    if len(posts) >= 3:
-                        break
 
             result.append({
                 "name": a["name"],
@@ -150,7 +112,6 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 "type": a.get("type", "solo"),
                 "note": a.get("note", ""),
                 "titles": titles,
-                "posts": posts,
             })
 
         def _latest_date(star):

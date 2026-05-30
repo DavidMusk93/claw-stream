@@ -136,47 +136,6 @@ def upsert_magnet(title_id, magnet, is_primary=True):
 
 
 @trace_db
-def update_jable(title_id, m3u8_url=None, cover_url=None):
-    """更新 jable 数据"""
-    conn = _conn()
-    conn.execute("""
-        UPDATE titles SET jable_m3u8 = ?, jable_cover = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (m3u8_url, cover_url, title_id))
-    conn.commit()
-    conn.close()
-
-
-@trace_db
-def upsert_social_post(star_id, platform, content, post_url=None, posted_at=None):
-    """插入或更新社交动态"""
-    conn = _conn()
-    row = conn.execute(
-        "SELECT id FROM social_posts WHERE star_id = ? AND platform = ? AND content = ?",
-        (star_id, platform, content)
-    ).fetchone()
-    if row:
-        conn.execute("""
-            UPDATE social_posts SET post_url = ?, posted_at = ?
-            WHERE id = ?
-        """, (post_url, posted_at, row[0]))
-        conn.commit()
-        conn.close()
-        return row[0]
-    conn.execute("""
-        INSERT INTO social_posts (star_id, platform, content, post_url, posted_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (star_id, platform, content, post_url, posted_at))
-    row = conn.execute(
-        "SELECT id FROM social_posts WHERE star_id = ? AND platform = ? AND content = ?",
-        (star_id, platform, content)
-    ).fetchone()
-    conn.commit()
-    conn.close()
-    return row[0]
-
-
-@trace_db
 def delete_star_by_code(code: str) -> bool:
     """删除女优及其所有关联数据（titles, magnets, social_posts）。
 
@@ -196,13 +155,12 @@ def delete_star_by_code(code: str) -> bool:
         ).fetchall()
         title_ids = [r[0] for r in title_rows]
 
-        # 按外键依赖顺序删除：magnets → titles → social_posts → stars
+        # 按外键依赖顺序删除：magnets → titles → stars
         if title_ids:
             placeholders = ", ".join(["?"] * len(title_ids))
             conn.execute(f"DELETE FROM magnets WHERE title_id IN ({placeholders})", title_ids)
             conn.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
 
-        conn.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
         conn.execute("DELETE FROM stars WHERE id = ?", (star_id,))
         conn.commit()
         return True

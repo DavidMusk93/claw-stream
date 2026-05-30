@@ -6,45 +6,6 @@ from .ops_log import trace_db
 
 
 @trace_db
-def get_social_posts(star_id, limit=3):
-    """获取 star 最近动态"""
-    conn = _conn()
-    rows = conn.execute("""
-        SELECT platform, content, post_url, posted_at
-        FROM social_posts
-        WHERE star_id = ?
-        ORDER BY COALESCE(posted_at, created_at) DESC
-        LIMIT ?
-    """, (star_id, limit)).fetchall()
-    conn.close()
-    return rows
-
-
-@trace_db
-def get_titles_without_jable(star_name=None):
-    """获取缺少 jable 数据的 title 列表"""
-    conn = _conn()
-    if star_name:
-        rows = conn.execute("""
-            SELECT w.id, w.code, w.title, a.name
-            FROM titles w
-            JOIN stars a ON w.star_id = a.id
-            WHERE a.name = ? AND w.jable_m3u8 IS NULL
-            ORDER BY w.release_date_sort DESC NULLS LAST
-        """, (star_name,)).fetchall()
-    else:
-        rows = conn.execute("""
-            SELECT w.id, w.code, w.title, a.name
-            FROM titles w
-            JOIN stars a ON w.star_id = a.id
-            WHERE w.jable_m3u8 IS NULL
-            ORDER BY w.release_date_sort DESC NULLS LAST
-        """).fetchall()
-    conn.close()
-    return rows
-
-
-@trace_db
 def get_all_titles_json():
     """导出所有数据为 JSON 格式（SQL 层聚合）
 
@@ -70,8 +31,6 @@ def get_all_titles_json():
                 cover_url := IFNULL(w.cover_url, ''),
                 cover_b64 := IFNULL(w.cover_b64, ''),
                 cover_path := IFNULL(w.cover_path, ''),
-                m3u8_url := IFNULL(w.jable_m3u8, ''),
-                jable_cover := IFNULL(w.jable_cover, ''),
                 magnet := IFNULL(m.magnet, '')
             ) ORDER BY w.release_date_sort DESC NULLS LAST)
             FILTER (WHERE w.code IS NOT NULL), []) AS titles
@@ -118,8 +77,6 @@ def export_report_json():
                 download_url := IFNULL(w.download_url, ''),
                 cover_url := IFNULL(w.cover_url, ''),
                 cover_b64 := IFNULL(w.cover_b64, ''),
-                m3u8_url := IFNULL(w.jable_m3u8, ''),
-                jable_cover := IFNULL(w.jable_cover, ''),
                 magnet := IFNULL(m.magnet, '')
             ) ORDER BY w.release_date_sort DESC NULLS LAST)
             FILTER (WHERE w.code IS NOT NULL), []) AS titles
@@ -137,15 +94,12 @@ def export_report_json():
 
 @trace_db
 def get_stats() -> dict:
-    """聚合统计：作品总数、jable 覆盖率、动态条数、各 star 作品数"""
+    """聚合统计：作品总数、各 star 作品数"""
     conn = _conn()
     total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
-    jable = conn.execute("SELECT COUNT(*) FROM titles WHERE jable_m3u8 IS NOT NULL").fetchone()[0]
-    social = conn.execute("SELECT COUNT(*) FROM social_posts").fetchone()[0]
     stars_count = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]
     per_star = conn.execute("""
         SELECT s.code, s.name, COUNT(t.id) as title_count,
-               COUNT(t.jable_m3u8) as jable_count,
                MIN(t.release_date_sort) as earliest,
                MAX(t.release_date_sort) as latest
         FROM stars s
@@ -157,17 +111,17 @@ def get_stats() -> dict:
     return {
         "stars_count": stars_count,
         "titles_total": total,
-        "titles_with_jable": jable,
-        "jable_coverage": round(jable / total, 3) if total else 0.0,
-        "social_posts": social,
+        "titles_with_jable": 0,
+        "jable_coverage": 0.0,
+        "social_posts": 0,
         "per_star": [
             {
                 "code": r[0],
                 "name": r[1],
                 "titles": r[2],
-                "jable": r[3],
-                "earliest": r[4],
-                "latest": r[5],
+                "jable": 0,
+                "earliest": r[3],
+                "latest": r[4],
             }
             for r in per_star
         ],

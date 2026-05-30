@@ -7,8 +7,6 @@
 
 用法:
     python -m scrapers.v2.cli sync-titles  [config.json]
-    python -m scrapers.v2.cli sync-social  [config.json]
-    python -m scrapers.v2.cli sync-jable   [config.json]
 """
 
 from __future__ import annotations
@@ -17,14 +15,10 @@ import asyncio
 import sys
 
 from scrapers.v2.tasks.sync_titles import run as run_titles
-from scrapers.v2.tasks.sync_social import run as run_social
-from scrapers.v2.tasks.sync_jable import run as run_jable
 
 
 COMMANDS = {
     "sync-titles": run_titles,
-    "sync-social": run_social,
-    "sync-jable": run_jable,
 }
 
 

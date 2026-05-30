@@ -11,14 +11,10 @@ from .crud import (
     load_all_title_codes,
     upsert_title,
     upsert_magnet,
-    update_jable,
-    upsert_social_post,
     delete_star_by_code,
 )
 from .write_queue import DuckDBWriteQueue, db_write, get_queue
 from .queries import (
-    get_social_posts,
-    get_titles_without_jable,
     get_all_titles_json,
     export_report_json,
     get_stats,
@@ -35,11 +31,7 @@ __all__ = [
     "load_all_title_codes",
     "upsert_title",
     "upsert_magnet",
-    "update_jable",
-    "upsert_social_post",
     "delete_star_by_code",
-    "get_social_posts",
-    "get_titles_without_jable",
     "get_all_titles_json",
     "export_report_json",
     "get_stats",

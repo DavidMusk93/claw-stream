@@ -17,8 +17,6 @@ class Work(BaseModel):
     cover_url: str | None = None
     cover_b64: str | None = None
     cover_path: str | None = None
-    jable_m3u8: str | None = None
-    jable_cover: str | None = None
 
 
 class WorkWithMagnets(Work):

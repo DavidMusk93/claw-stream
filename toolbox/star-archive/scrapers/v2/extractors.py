@@ -12,7 +12,7 @@ from typing import Protocol
 
 from selectolax.parser import HTMLParser
 
-from scrapers.v2.schemas import VideoItem, MagnetCandidate, JableMeta, SocialPost
+from scrapers.v2.schemas import VideoItem, MagnetCandidate
 
 
 class Extractor(Protocol):
@@ -171,7 +171,7 @@ class IJavTorrentExtractor:
         # 在 mb-1 区域内统计 /actress/ 链接数量
         html_snippet = node.html
         # 找到 mb-1 区域（截止到 table）
-        m = re.search(r'<div class="mb-1">(.*?)<table', html_snippet, re.DOTALL)
+        m = re.search(r'<div class="mb-1">(.*?)</table', html_snippet, re.DOTALL)
         if m:
             return len(re.findall(r'href="/actress/[^"]+"', m.group(1)))
         return 0
@@ -206,65 +206,3 @@ class IJavTorrentExtractor:
             leeches.append(leech_m.group(1) if leech_m else "0")
 
         return magnets, sizes, seeds, leeches, resolutions, hhd800_flags
-
-
-class JableExtractor:
-    """从 jable.tv 视频页抽取 m3u8 和封面"""
-
-    def extract(self, html: str, code: str = "") -> JableMeta:
-        m3u8_list = re.findall(r'https://[^"\'\s]+\.m3u8', html)
-        m3u8_url = m3u8_list[0] if m3u8_list else ""
-
-        cover_url = ""
-        m = re.search(r'<meta[^>]*property="og:image"[^>]*content="([^"]+)"', html)
-        if m:
-            cover_url = m.group(1)
-        else:
-            m = re.search(r'poster="(https://assets-cdn\.jable\.tv/[^"]+)"', html)
-            if m:
-                cover_url = m.group(1)
-
-        return JableMeta(code=code, m3u8_url=m3u8_url, cover_url=cover_url)
-
-
-class NitterExtractor:
-    """从 nitter / xcancel 页面抽取推文"""
-
-    def extract(self, html: str) -> list[SocialPost]:
-        tree = HTMLParser(html)
-        posts: list[SocialPost] = []
-
-        # nitter 镜像的选择器集合
-        selectors = [
-            ".timeline .timeline-item",
-            ".main-tweet",
-            ".tweet-body",
-        ]
-
-        nodes = []
-        for sel in selectors:
-            nodes = tree.css(sel)
-            if nodes:
-                break
-
-        for node in nodes[:3]:
-            text_el = node.css_first(".tweet-content, .tweet-text, [data-testid='tweetText']")
-            time_el = node.css_first(".tweet-date a, time, .time a")
-
-            text = text_el.text(deep=True).strip() if text_el else ""
-            href = time_el.attributes.get("href", "") if time_el else ""
-            time_str = ""
-            if time_el:
-                time_str = time_el.attributes.get("datetime", "") or time_el.text(deep=True).strip()
-
-            if text and len(text) > 5:
-                posts.append(
-                    SocialPost(
-                        platform="x",
-                        content=text,
-                        post_url=href,
-                        posted_at=time_str if time_str else None,
-                    )
-                )
-
-        return posts
