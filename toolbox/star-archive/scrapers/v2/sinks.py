@@ -10,7 +10,7 @@ from typing import Protocol
 
 from core import db
 from core.db.write_queue import db_write
-from scrapers.v2.schemas import VideoItem, JableMeta, SocialPost, MagnetCandidate
+from scrapers.v2.schemas import VideoItem, MagnetCandidate
 
 
 class Sink(Protocol):
@@ -66,7 +66,7 @@ class TitleSyncSink:
                 resolution=self._best_resolution(item),
                 download_url="",
                 cover_url=item.cover_url,
-                cover_b64=existing_cover,
+                cover_b64=cover_b64 if cover_b64 is not None else existing_cover,
             )
             # 存储所有 magnet：按评分排序，最佳高清源设为 primary
             scored = sorted(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True)
@@ -128,37 +128,6 @@ class TitleSyncSink:
         # hhd800 高清源额外加分，确保在相同分辨率下优先
         hhd800_bonus = 200 if "hhd800" in m.magnet.lower() else 0
         return res_score + hhd800_bonus + m.seed + size_mb / 100
-
-
-class SocialSyncSink:
-    """同步社交帖子到 DuckDB"""
-
-    def __init__(self, star_id: int):
-        self.star_id = star_id
-
-    async def write(self, item: SocialPost) -> None:
-        url = item.post_url
-        if url and not url.startswith("http"):
-            url = f"https://x.com{url}"
-        await db_write(
-            db.upsert_social_post,
-            star_id=self.star_id,
-            platform=item.platform,
-            content=item.content,
-            post_url=url,
-            posted_at=item.posted_at,
-        )
-
-
-class JableSyncSink:
-    """同步 jable 元数据到 DuckDB"""
-
-    def __init__(self, title_id: int, code: str):
-        self.title_id = title_id
-        self.code = code
-
-    async def write(self, item: JableMeta) -> None:
-        await db_write(db.update_jable, self.title_id, item.m3u8_url, item.cover_url)
 
 
 class StdoutSink:

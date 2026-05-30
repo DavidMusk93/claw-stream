@@ -31,35 +31,15 @@ echo ""
 
 # Step 1: 抓取 ijavtorrent 数据 → DuckDB
 echo "[1/3] 抓取 ijavtorrent 数据..."
-if command -v uv >/dev/null 2>&1; then
-    uv run scrapers/search_news.py "$CONFIG"
-else
-    python3 scrapers/search_news.py "$CONFIG"
-fi
+.venv/bin/python scrapers/search_news.py "$CONFIG"
 echo "      ✓ DuckDB titles 已更新"
-echo ""
-
-# Step 2: 抓取 jable 封面+m3u8 → DuckDB
-echo "[2/3] 抓取 jable.tv 数据..."
-python3 scrapers/fetch_jable.py "$CONFIG"
-echo "      ✓ DuckDB jable 已更新"
-echo ""
-
-# Step 3: 抓取社交动态 → DuckDB
-echo "[3/3] 抓取 X/Twitter 动态..."
-if command -v uv >/dev/null 2>&1; then
-    uv run scrapers/fetch_social.py "$CONFIG"
-else
-    python3 scrapers/fetch_social.py "$CONFIG"
-fi
-echo "      ✓ DuckDB social 已更新"
 echo ""
 
 # 统计
 echo "========================================"
 echo "✅ 刷新完成"
 echo "========================================"
-python3 -c "
+.venv/bin/python -c "
 from core import db
 s = db.get_stats()
 print(f\"Stars    : {s['stars_count']}\")

@@ -29,12 +29,16 @@ def _sanitize_args(func_name: str, args, kwargs) -> str:
     parts = []
     for i, v in enumerate(args):
         key = f"arg{i}"
-        if key in _SENSITIVE_KEYS or (isinstance(v, str) and len(v) > _MAX_ARG_LEN):
+        if v is None:
+            parts.append(f"{key}=None")
+        elif key in _SENSITIVE_KEYS or (isinstance(v, str) and len(v) > _MAX_ARG_LEN):
             parts.append(f"{key}=<len {len(v)}>")
         else:
             parts.append(f"{key}={_truncate(v)}")
     for k, v in kwargs.items():
-        if k in _SENSITIVE_KEYS or (isinstance(v, str) and len(v) > _MAX_ARG_LEN):
+        if v is None:
+            parts.append(f"{k}=None")
+        elif k in _SENSITIVE_KEYS or (isinstance(v, str) and len(v) > _MAX_ARG_LEN):
             parts.append(f"{k}=<len {len(v)}>")
         else:
             parts.append(f"{k}={_truncate(v)}")

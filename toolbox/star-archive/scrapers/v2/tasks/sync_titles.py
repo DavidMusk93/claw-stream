@@ -131,9 +131,14 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
         all_new_items.extend(new_items)
 
     # 5. 批量并发下载封面（复用 httpx client）
+    # 收集所有需要同步的作品封面（包括 existing 和 new）
+    all_sync_items: list[VideoItem] = []
+    for _, _, to_sync, _ in sync_batches:
+        all_sync_items.extend(to_sync)
+
     cover_map: dict[str, str] = {}
-    if all_new_items:
-        cover_items = [(it.code, it.cover_url or "") for it in all_new_items]
+    if all_sync_items:
+        cover_items = [(it.code, it.cover_url or "") for it in all_sync_items]
         log.info(f"downloading {len(cover_items)} covers in batch...")
         cover_map = await download_covers_batch(cover_items, concurrency=8)
         log.info(f"downloaded {len(cover_map)} covers")
@@ -148,7 +153,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
         new_codes = {it.code for it in new_items}
         for it in to_sync:
             is_new = it.code in new_codes
-            b64 = cover_map.get(it.code) if is_new else None
+            b64 = cover_map.get(it.code)
             await sink.write(it, cover_b64=b64, is_new=is_new)
 
         total_new += len(new_items)
