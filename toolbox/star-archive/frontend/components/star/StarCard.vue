@@ -113,7 +113,7 @@
             v-if="title.cover_url && !thumbErrors[title.code]"
             :src="title.cover_url"
             :alt="title.code"
-            :class="isMobile ? 'w-full h-auto' : 'h-full w-auto'"
+            :class="isMobile ? 'w-full h-auto' : 'h-full w-auto min-w-[1px]'"
             class="block"
             loading="lazy"
             @error="thumbErrors[title.code] = true"
@@ -270,6 +270,8 @@ const thumbStyle = computed(() => {
   const h = heroSize.value.height > 0
     ? (heroSize.value.height - gap * (thumbCount - 1)) / thumbCount
     : 160
-  return { width: 'auto', height: `${h}px` }
+  // SSR 阶段 hero 尺寸未知时给默认宽度，避免 w-auto 塌陷为 0 导致 lazy load 不触发
+  const w = heroSize.value.height > 0 ? 'auto' : `${Math.round(h * 2 / 3)}px`
+  return { width: w, height: `${h}px`, minWidth: `${Math.round(h * 2 / 3)}px` }
 })
 </script>
