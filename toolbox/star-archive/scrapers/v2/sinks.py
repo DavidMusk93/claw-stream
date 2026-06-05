@@ -10,7 +10,10 @@ from typing import Protocol
 
 from core import db
 from core.db.write_queue import db_write
+from core.logger import get_logger
 from scrapers.v2.schemas import VideoItem, MagnetCandidate
+
+log = get_logger("title-sync-sink")
 
 
 class Sink(Protocol):
