@@ -131,6 +131,14 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
             else:
                 new_items.append(it)
 
+        # 调试：检测 star_id=1 的 DASS-943 归类情况
+        if star_id == 1:
+            for it in items:
+                if it.code == 'DASS-943':
+                    in_existing = (star_id, it.code) in existing_codes
+                    log.info(f"DEBUG star_id=1 DASS-943 in_existing={in_existing} new_items={len(new_items)} existing_items={len(existing_items)}")
+                    break
+
         if len(new_items) > MAX_NEW_TITLES:
             log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
             new_items = new_items[:MAX_NEW_TITLES]
