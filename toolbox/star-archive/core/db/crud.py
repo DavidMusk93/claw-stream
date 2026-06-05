@@ -1,9 +1,12 @@
 """core/db/crud.py — 基础增删改查操作
 
-所有公开函数接受可选的 conn 参数，以便 DuckDBWriteQueue worker
-复用单一持久连接，避免每次操作都新建/关闭连接。
+大宽表简化后：
+- titles 表直接内联 magnet 信息，不再维护单独的 magnets 表
+- upsert_title 增加 star_code / star_name / magnet 字段
+- 删除所有 magnets 相关 CRUD
 """
 
+import json
 import re
 from .connection import _conn, _date_to_sort
 from .ops_log import trace_db
@@ -86,10 +89,30 @@ def load_all_title_codes(conn=None) -> set[tuple[int, str]]:
 
 
 @trace_db
-def upsert_title(star_id, code, title=None, release_date=None, views=None,
-                likes=None, resolution=None, download_url=None, cover_url=None,
-                cover_b64=None, cover_path=None, conn=None):
-    """插入或更新 title 信息"""
+def upsert_title(
+    star_id,
+    code,
+    title=None,
+    release_date=None,
+    views=None,
+    likes=None,
+    resolution=None,
+    download_url=None,
+    cover_url=None,
+    cover_b64=None,
+    cover_path=None,
+    star_code=None,
+    star_name=None,
+    magnet=None,
+    magnet_hash=None,
+    all_magnets=None,
+    conn=None,
+):
+    """插入或更新 title 信息。
+
+    大宽表模式下，magnet 信息直接随 title 一起写入，
+    通过 all_magnets JSON 列存储所有候选，magnet/magnet_hash 存储 primary。
+    """
     release_date_sort = _date_to_sort(release_date)
     managed, should_close = _managed_conn(conn)
     try:
@@ -114,18 +137,32 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
                     cover_url = ?,
                     cover_b64 = ?,
                     cover_path = ?,
+                    star_code = ?,
+                    star_name = ?,
+                    magnet = COALESCE(?, magnet),
+                    magnet_hash = COALESCE(?, magnet_hash),
+                    all_magnets = COALESCE(?, all_magnets),
                     updated_at = now()
                 WHERE id = ?
-            """, (title, release_date, release_date_sort, views, likes, resolution,
-                  download_url, cover_url, cover_b64, cover_path, title_id))
+            """, (
+                title, release_date, release_date_sort, views, likes, resolution,
+                download_url, cover_url, cover_b64, cover_path,
+                star_code, star_name, magnet, magnet_hash, all_magnets, title_id
+            ))
             result = title_id
         else:
             managed.execute("""
-                INSERT INTO titles (star_id, code, title, release_date, release_date_sort, views, likes,
-                                   resolution, download_url, cover_url, cover_b64, cover_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (star_id, code, title, release_date, release_date_sort, views, likes,
-                  resolution, download_url, cover_url, cover_b64, cover_path))
+                INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
+                                   views, likes, resolution, download_url, cover_url,
+                                   cover_b64, cover_path, star_code, star_name,
+                                   magnet, magnet_hash, all_magnets)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                star_id, code, title, release_date, release_date_sort, views, likes,
+                resolution, download_url, cover_url, cover_b64, cover_path,
+                star_code, star_name, magnet, magnet_hash,
+                json.dumps(all_magnets) if all_magnets else None,
+            ))
             row = managed.execute(
                 "SELECT id FROM titles WHERE star_id = ? AND code = ?",
                 (star_id, code)
@@ -140,48 +177,8 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
 
 
 @trace_db
-def upsert_magnet(title_id, magnet, is_primary=True, conn=None):
-    """插入或更新磁力链接。
-
-    当 is_primary=True 时，会先将该 title 下所有现有 magnet 的 is_primary
-    重置为 false，确保一个 title 在任何时候最多只有一个 primary magnet，
-    从根本上消除前端作品重复的问题。
-    """
-    h = _extract_hash(magnet)
-    if not h:
-        return
-    managed, should_close = _managed_conn(conn)
-    try:
-        # 若设为 primary，先重置该 title 下所有旧 primary，避免多 primary 重复
-        if is_primary:
-            managed.execute(
-                "UPDATE magnets SET is_primary = false WHERE title_id = ?",
-                (title_id,),
-            )
-        row = managed.execute(
-            "SELECT 1 FROM magnets WHERE title_id = ? AND hash = ?",
-            (title_id, h)
-        ).fetchone()
-        if row:
-            managed.execute("""
-                UPDATE magnets SET magnet = ?, is_primary = ?
-                WHERE title_id = ? AND hash = ?
-            """, (magnet, is_primary, title_id, h))
-        else:
-            managed.execute("""
-                INSERT INTO magnets (title_id, magnet, hash, is_primary)
-                VALUES (?, ?, ?, ?)
-            """, (title_id, magnet, h, is_primary))
-        if should_close:
-            managed.commit()
-    finally:
-        if should_close:
-            managed.close()
-
-
-@trace_db
 def delete_star_by_code(code: str, conn=None) -> bool:
-    """删除女优及其所有关联数据（titles, magnets, social_posts）。
+    """删除女优及其所有关联数据（titles, social_posts）。
 
     返回是否成功找到并删除。
     """
@@ -192,19 +189,9 @@ def delete_star_by_code(code: str, conn=None) -> bool:
             return False
         star_id = row[0]
 
-        # 获取该 star 的所有 title ids
-        title_rows = managed.execute(
-            "SELECT id FROM titles WHERE star_id = ?", (star_id,)
-        ).fetchall()
-        title_ids = [r[0] for r in title_rows]
-
-        # 按外键依赖顺序删除：social_posts → magnets → titles → stars
+        # 按外键依赖顺序删除：social_posts → titles → stars
         managed.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
-        if title_ids:
-            placeholders = ", ".join(["?"] * len(title_ids))
-            managed.execute(f"DELETE FROM magnets WHERE title_id IN ({placeholders})", title_ids)
-            managed.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
-
+        managed.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
         managed.execute("DELETE FROM stars WHERE id = ?", (star_id,))
         if should_close:
             managed.commit()

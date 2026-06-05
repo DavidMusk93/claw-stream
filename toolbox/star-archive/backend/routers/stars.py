@@ -1,8 +1,6 @@
 """backend/routers/stars.py — 女优聚合数据路由
 
-包含：
-- GET /api/stars          获取所有女优及作品（缓存 5s）
-- POST /api/stars/add     新增女优（解析 URL、去重、写 config、写 DB、后台同步）
+大宽表简化后，查询不再 JOIN magnets，直接从 titles.magnet 读取。
 """
 
 from __future__ import annotations
@@ -69,14 +67,6 @@ def _build_stars_response() -> list[dict[str, Any]]:
                     ORDER BY release_date_sort DESC NULLS LAST
                 ) AS rn
             FROM titles
-        ),
-        primary_magnets AS (
-            -- 防御性去重：一个 title 理论上只有一个 primary magnet，
-            -- 若因历史 bug 出现多个，仅取 id 最小的一条，避免 JOIN 导致作品重复。
-            SELECT title_id, magnet,
-                ROW_NUMBER() OVER (PARTITION BY title_id ORDER BY id) AS rn
-            FROM magnets
-            WHERE is_primary = true
         )
         SELECT
             s.code,
@@ -90,11 +80,10 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 download_url := IFNULL(r.download_url, ''),
                 cover_url := IFNULL(r.cover_url, ''),
                 charming_intro := IFNULL(r.charming_intro, ''),
-                magnet := IFNULL(m.magnet, '')
+                magnet := IFNULL(r.magnet, '')
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
-        LEFT JOIN primary_magnets m ON m.title_id = r.id AND m.rn = 1
         GROUP BY s.id, s.code, s.name
         ORDER BY s.name
         """).fetchall()
@@ -307,11 +296,9 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
         conn = duckdb.connect(DB_PATH)
         try:
             rows = conn.execute("""
-                SELECT m.hash
-                FROM magnets m
-                JOIN titles t ON m.title_id = t.id
-                JOIN stars s ON t.star_id = s.id
-                WHERE s.code = ? AND m.hash IS NOT NULL
+                SELECT magnet_hash
+                FROM titles
+                WHERE star_code = ? AND magnet_hash IS NOT NULL
             """, [code]).fetchall()
             for (hash_str,) in rows:
                 if hash_str:

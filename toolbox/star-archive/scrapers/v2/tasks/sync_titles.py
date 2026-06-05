@@ -160,7 +160,8 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
     clean: list[dict] = []
 
     for star_id, name, to_sync, new_items in sync_batches:
-        sink = TitleSyncSink(star_id=star_id, name=name)
+        star_cfg = next(s for s in stars if star_id_map[s.code] == star_id)
+        sink = TitleSyncSink(star_id=star_id, star_code=star_cfg.code, star_name=name)
         new_codes = {it.code for it in new_items}
         batch_result = await sink.write_batch(to_sync, new_codes, cover_map)
 
@@ -235,7 +236,7 @@ async def sync_star(
     cover_items = [(it.code, it.cover_url or "") for it in to_sync]
     cover_map = await download_covers_batch(cover_items, concurrency=8)
 
-    sink = TitleSyncSink(star_id=star_id, name=star.name)
+    sink = TitleSyncSink(star_id=star_id, star_code=star.code, star_name=star.name)
     new_codes_set = {it.code for it in new_items}
     batch_result = await sink.write_batch(to_sync, new_codes_set, cover_map)
 

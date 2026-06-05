@@ -1,4 +1,8 @@
-"""core/db/schema.py — Schema 初始化与迁移"""
+"""core/db/schema.py — Schema 初始化与迁移
+
+大宽表设计：titles 表直接内联 star_code、star_name 和 magnet 信息，
+彻底消除 stars-titles-magnets 三表 JOIN 和跨表事务。
+"""
 
 from .connection import _conn
 
@@ -30,6 +34,8 @@ def init_schema(conn=None):
             CREATE TABLE IF NOT EXISTS titles (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_title_id'),
                 star_id INTEGER NOT NULL,
+                star_code TEXT,
+                star_name TEXT,
                 code TEXT NOT NULL,
                 title TEXT,
                 release_date TEXT,
@@ -44,32 +50,28 @@ def init_schema(conn=None):
                 jable_m3u8 TEXT,
                 jable_cover TEXT,
                 release_date_sort TEXT,
+                magnet TEXT,
+                magnet_hash TEXT,
+                all_magnets JSON,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(star_id, code)
             )
         """)
-        # 为已存在表追加 release_date_sort 列
-        try:
-            conn.execute("ALTER TABLE titles ADD COLUMN release_date_sort TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE titles ADD COLUMN charming_intro TEXT")
-        except Exception:
-            pass
-        conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_magnet_id START 1")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS magnets (
-                id INTEGER PRIMARY KEY DEFAULT nextval('seq_magnet_id'),
-                title_id INTEGER NOT NULL,
-                magnet TEXT NOT NULL,
-                hash TEXT,
-                is_primary BOOLEAN DEFAULT true,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(title_id, hash)
-            )
-        """)
+        # 为已存在表追加列（向后兼容）
+        for col in [
+            ("release_date_sort", "TEXT"),
+            ("charming_intro", "TEXT"),
+            ("star_code", "TEXT"),
+            ("star_name", "TEXT"),
+            ("magnet", "TEXT"),
+            ("magnet_hash", "TEXT"),
+            ("all_magnets", "JSON"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE titles ADD COLUMN {col[0]} {col[1]}")
+            except Exception:
+                pass
         conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_social_id START 1")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS social_posts (
@@ -88,7 +90,6 @@ def init_schema(conn=None):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_date ON titles(release_date_sort)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_jable ON titles(jable_m3u8)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_magnets_title ON magnets(title_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_star ON social_posts(star_id)")
         if should_close:
             conn.commit()

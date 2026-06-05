@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -57,11 +58,20 @@ def _resolve_magnet(magnet: str) -> str:
     try:
         conn = duckdb.connect(DB_PATH)
         try:
-            row = conn.execute(
-                "SELECT magnet FROM magnets WHERE hash = ? LIMIT 1", [hash_str]
-            ).fetchone()
+            # 大宽表：从 titles.all_magnets JSON 中查找匹配的 hash
+            row = conn.execute("""
+                SELECT json_extract_string(
+                    list_filter(
+                        cast(all_magnets as JSON[]),
+                        x -> json_extract_string(x, '$.hash') = ?
+                    )[1],
+                    '$.magnet'
+                ) as magnet
+                FROM titles
+                WHERE magnet_hash = ? OR json_contains(all_magnets, json_object('hash', ?))
+                LIMIT 1
+            """, [hash_str, hash_str, hash_str]).fetchone()
             if row and row[0] and "tr=" in row[0]:
-                # 数据库里的 magnet 被 HTML 编码了，需要解码
                 full = row[0].replace("&amp;", "&")
                 return full
         finally:

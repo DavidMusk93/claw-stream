@@ -11,7 +11,6 @@ from .crud import (
     title_exists,
     load_all_title_codes,
     upsert_title,
-    upsert_magnet,
     delete_star_by_code,
 )
 from .write_queue import DuckDBWriteQueue, db_write, get_queue
@@ -32,7 +31,6 @@ __all__ = [
     "title_exists",
     "load_all_title_codes",
     "upsert_title",
-    "upsert_magnet",
     "delete_star_by_code",
     "get_all_titles_json",
     "export_report_json",

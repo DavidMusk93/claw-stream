@@ -1,4 +1,7 @@
-"""core/db/queries.py — 聚合查询与导出"""
+"""core/db/queries.py — 聚合查询与导出
+
+大宽表简化后，不再 JOIN magnets 表，直接从 titles.magnet 读取 primary magnet。
+"""
 
 import json
 from .connection import _conn
@@ -31,12 +34,11 @@ def get_all_titles_json():
                 cover_url := IFNULL(w.cover_url, ''),
                 cover_b64 := IFNULL(w.cover_b64, ''),
                 cover_path := IFNULL(w.cover_path, ''),
-                magnet := IFNULL(m.magnet, '')
+                magnet := IFNULL(w.magnet, '')
             ) ORDER BY w.release_date_sort DESC NULLS LAST)
             FILTER (WHERE w.code IS NOT NULL), []) AS titles
         FROM stars a
         LEFT JOIN titles w ON w.star_id = a.id
-        LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
         GROUP BY a.id, a.name, a.jp_name, a.handle, a.code, a.type, a.note
         ORDER BY a.name
     """).fetchall()
@@ -77,12 +79,11 @@ def export_report_json():
                 download_url := IFNULL(w.download_url, ''),
                 cover_url := IFNULL(w.cover_url, ''),
                 cover_b64 := IFNULL(w.cover_b64, ''),
-                magnet := IFNULL(m.magnet, '')
+                magnet := IFNULL(w.magnet, '')
             ) ORDER BY w.release_date_sort DESC NULLS LAST)
             FILTER (WHERE w.code IS NOT NULL), []) AS titles
         FROM stars a
         LEFT JOIN titles w ON w.star_id = a.id
-        LEFT JOIN magnets m ON m.title_id = w.id AND m.is_primary = true
         GROUP BY a.id, a.code, a.name
         ORDER BY a.name
     """).fetchall()

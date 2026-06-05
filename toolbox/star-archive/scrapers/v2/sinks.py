@@ -1,11 +1,13 @@
-"""scrapers/v2/sinks.py — 统一写入层
+"""scrapers/v2/sinks.py — 统一写入层（大宽表简化版）
 
-将抽取结果写入 DuckDB，所有写操作通过全局串行队列执行，
-彻底消除并发锁冲突。
+将抽取结果通过 UPSERT 直接写入 titles 宽表，
+一个 star 的所有作品只需一次 SQL 执行，彻底消除串行队列瓶颈。
 """
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Protocol
 
 from core import db
@@ -24,253 +26,136 @@ class Sink(Protocol):
 
 
 class TitleSyncSink:
-    """同步作品数据到 DuckDB
+    """同步作品数据到 DuckDB（大宽表 UPSERT 模式）
 
-    处理 insert / update 逻辑，保留已有 cover，管理 magnet 优先级。
-    所有 DB 写操作通过全局串行队列执行。
+    每个 star 一次批量 UPSERT，无需预加载 existing_codes，
+    无需判断新/旧，无需串行写队列往返。
     """
 
-    def __init__(self, star_id: int, name: str):
+    def __init__(self, star_id: int, star_code: str, star_name: str):
         self.star_id = star_id
-        self.name = name
+        self.star_code = star_code
+        self.star_name = star_name
 
-    async def write(self, item: VideoItem, cover_b64: str | None = None, is_new: bool | None = None) -> None:
-        """写入单个 title。
+    async def write(self, item: VideoItem, cover_b64: str | None = None) -> None:
+        """写入单个 title（兼容旧接口，内部仍走 batch）。"""
+        await self.write_batch([item], {it.code for it in [item]}, {item.code: cover_b64 or ""})
 
-        cover_b64: 新作品预下载的封面，None 表示更新场景（保留已有 cover）。
-        is_new: 若传入则跳过数据库存在性检查，直接按指定类型处理。
-        """
-        code = item.code
-        views = item.views
-        likes = item.likes
+    async def write_batch(
+        self, items: list[VideoItem], new_codes: set[str], cover_map: dict[str, str]
+    ) -> dict[str, int]:
+        """批量 UPSERT 该 star 的所有 titles，一次 SQL 完成。
 
-        if is_new is None:
-            exists = await db_write(db.title_exists, self.star_id, code)
-        else:
-            exists = not is_new
-        if exists:
-            # 更新元数据，保留已有 cover
-            conn = db._conn()
-            row = conn.execute(
-                "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
-                (self.star_id, code),
-            ).fetchone()
-            title_id, existing_cover = row if row else (None, None)
-            conn.close()
-
-            await db_write(
-                db.upsert_title,
-                star_id=self.star_id,
-                code=code,
-                title=item.title,
-                release_date=item.release_date,
-                views=views,
-                likes=likes,
-                resolution=self._best_resolution(item),
-                download_url="",
-                cover_url=item.cover_url,
-                cover_b64=cover_b64 if cover_b64 is not None else existing_cover,
-            )
-            # 存储所有 magnet：按评分排序，最佳高清源设为 primary
-            scored = sorted(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True)
-            for idx, m in enumerate(scored):
-                if m.magnet:
-                    await db_write(db.upsert_magnet, title_id, m.magnet, is_primary=(idx == 0))
-        else:
-            # 新 title：使用预下载的封面（若无则空）
-            title_id = await db_write(
-                db.upsert_title,
-                star_id=self.star_id,
-                code=code,
-                title=item.title,
-                release_date=item.release_date,
-                views=views,
-                likes=likes,
-                resolution=self._best_resolution(item),
-                download_url="",
-                cover_url=item.cover_url,
-                cover_b64=cover_b64 or "",
-            )
-            # 存储所有 magnet：按评分排序，最佳高清源设为 primary
-            scored = sorted(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True)
-            for idx, m in enumerate(scored):
-                if m.magnet:
-                    await db_write(db.upsert_magnet, title_id, m.magnet, is_primary=(idx == 0))
-
-    async def write_batch(self, items: list[VideoItem], new_codes: set[str], cover_map: dict[str, str]) -> dict[str, int]:
-        """批量写入该 star 的所有 titles 和 magnets，只进行一次 db_write 队列调用。
-
-        相比逐个 write()，批量模式将每个 star 的 N 次数据库往返压缩为 1 次，
-        彻底解决串行写队列在大批量同步时的性能瓶颈。
-
-        若通过 DuckDBWriteQueue 调用，队列 worker 会将持久连接注入 conn 参数，
-        从而避免本次批量操作再新建连接。
+        构造多行 VALUES + ON CONFLICT DO UPDATE，
+        利用 DuckDB 原生 UPSERT 能力，无需手动判断 insert/update。
         """
         import time as _time
-        star_id = self.star_id
-        t0 = _time.perf_counter()
 
-        def _batch(conn=None) -> dict[str, int]:
-            import re
+        if not items:
+            return {"new": 0, "updated": 0}
+
+        t0 = _time.perf_counter()
+        values = []
+        for item in items:
+            scored = sorted(
+                item.magnets,
+                key=lambda m: TitleSyncSink._score_magnet(m),
+                reverse=True,
+            )
+            primary = scored[0] if scored else None
+            primary_hash = _extract_hash(primary.magnet) if primary else None
+
+            all_magnets = [
+                {
+                    "hash": _extract_hash(m.magnet) or "",
+                    "magnet": m.magnet,
+                    "resolution": m.resolution,
+                    "size": m.size,
+                    "seed": m.seed,
+                    "leech": m.leech,
+                }
+                for m in scored
+            ]
+
+            values.append({
+                "star_id": self.star_id,
+                "star_code": self.star_code,
+                "star_name": self.star_name,
+                "code": item.code,
+                "title": item.title,
+                "release_date": item.release_date,
+                "release_date_sort": db._date_to_sort(item.release_date),
+                "views": item.views,
+                "likes": item.likes,
+                "resolution": primary.resolution if primary else "",
+                "cover_url": item.cover_url,
+                "cover_b64": cover_map.get(item.code) or "",
+                "magnet": primary.magnet if primary else None,
+                "magnet_hash": primary_hash,
+                "all_magnets": json.dumps(all_magnets) if all_magnets else None,
+            })
+
+        def _upsert(conn=None) -> dict[str, int]:
             managed = conn if conn is not None else db._conn()
             should_close = conn is None
             try:
-                # 预加载该 star 的所有现有 title id + cover
-                existing_rows = managed.execute(
-                    "SELECT id, code, cover_b64 FROM titles WHERE star_id = ?",
-                    (star_id,),
-                ).fetchall()
-                existing: dict[str, tuple[int, str | None]] = {
-                    code: (tid, cover) for tid, code, cover in existing_rows
-                }
+                # DuckDB UPSERT: INSERT ... ON CONFLICT DO UPDATE
+                placeholders = ", ".join([
+                    "(" + ", ".join(["?"] * 15) + ")"
+                    for _ in values
+                ])
+                flat = []
+                for v in values:
+                    flat.extend([
+                        v["star_id"], v["star_code"], v["star_name"],
+                        v["code"], v["title"], v["release_date"], v["release_date_sort"],
+                        v["views"], v["likes"], v["resolution"],
+                        v["cover_url"], v["cover_b64"],
+                        v["magnet"], v["magnet_hash"], v["all_magnets"],
+                    ])
 
-                total_new = 0
-                total_updated = 0
+                # ON CONFLICT 只更新元数据，保留已有 cover_b64
+                managed.execute(
+                    f"""
+                    INSERT INTO titles (
+                        star_id, star_code, star_name, code, title,
+                        release_date, release_date_sort, views, likes,
+                        resolution, cover_url, cover_b64,
+                        magnet, magnet_hash, all_magnets
+                    )
+                    VALUES {placeholders}
+                    ON CONFLICT (star_id, code) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        release_date = EXCLUDED.release_date,
+                        release_date_sort = EXCLUDED.release_date_sort,
+                        views = EXCLUDED.views,
+                        likes = EXCLUDED.likes,
+                        resolution = EXCLUDED.resolution,
+                        cover_url = EXCLUDED.cover_url,
+                        magnet = EXCLUDED.magnet,
+                        magnet_hash = EXCLUDED.magnet_hash,
+                        all_magnets = EXCLUDED.all_magnets,
+                        updated_at = now()
+                    """,
+                    flat,
+                )
 
-                for item in items:
-                    code = item.code
-                    is_new = code in new_codes
-                    b64 = cover_map.get(code)
-
-                    # 评分 magnets
-                    if item.magnets:
-                        scored = sorted(
-                            item.magnets,
-                            key=lambda m: TitleSyncSink._score_magnet(m),
-                            reverse=True,
-                        )
-                        best_resolution = scored[0].resolution if scored else ""
-                    else:
-                        scored = []
-                        best_resolution = ""
-
-                    release_date_sort = db._date_to_sort(item.release_date)
-
-                    if not is_new:
-                        row = existing.get(code)
-                        if row:
-                            title_id, existing_cover = row
-                        else:
-                            title_id = None
-                            existing_cover = None
-
-                        if title_id is None:
-                            # 数据库中不存在（可能之前被清理），降级为插入
-                            managed.execute(
-                                """
-                                INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
-                                                    views, likes, resolution, download_url, cover_url,
-                                                    cover_b64, cover_path)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                (
-                                    star_id, code, item.title, item.release_date,
-                                    release_date_sort, item.views, item.likes,
-                                    best_resolution, "", item.cover_url,
-                                    b64 or "", "",
-                                ),
-                            )
-                            title_id = managed.execute(
-                                "SELECT id FROM titles WHERE star_id = ? AND code = ?",
-                                (star_id, code),
-                            ).fetchone()[0]
-                            total_new += 1
-                        else:
-                            cover_to_use = b64 if b64 is not None else existing_cover
-                            managed.execute(
-                                """
-                                UPDATE titles SET
-                                    title = ?,
-                                    release_date = ?,
-                                    release_date_sort = ?,
-                                    views = ?,
-                                    likes = ?,
-                                    resolution = ?,
-                                    download_url = ?,
-                                    cover_url = ?,
-                                    cover_b64 = ?,
-                                    cover_path = ?,
-                                    updated_at = now()
-                                WHERE id = ?
-                                """,
-                                (
-                                    item.title, item.release_date, release_date_sort,
-                                    item.views, item.likes, best_resolution, "",
-                                    item.cover_url, cover_to_use, "", title_id,
-                                ),
-                            )
-                            total_updated += 1
-
-                        # upsert magnets（复用连接）
-                        for idx, m in enumerate(scored):
-                            if m.magnet:
-                                h = re.search(r"xt=urn:btih:([a-f0-9]{40})", m.magnet, re.I)
-                                hash_str = h.group(1).lower() if h else None
-                                if hash_str:
-                                    row = managed.execute(
-                                        "SELECT 1 FROM magnets WHERE title_id = ? AND hash = ?",
-                                        (title_id, hash_str),
-                                    ).fetchone()
-                                    if row:
-                                        managed.execute(
-                                            """
-                                            UPDATE magnets SET magnet = ?, is_primary = ?
-                                            WHERE title_id = ? AND hash = ?
-                                            """,
-                                            (m.magnet, idx == 0, title_id, hash_str),
-                                        )
-                                    else:
-                                        managed.execute(
-                                            """
-                                            INSERT INTO magnets (title_id, magnet, hash, is_primary)
-                                            VALUES (?, ?, ?, ?)
-                                            """,
-                                            (title_id, m.magnet, hash_str, idx == 0),
-                                        )
-                    else:
-                        managed.execute(
-                            """
-                            INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
-                                                views, likes, resolution, download_url, cover_url,
-                                                cover_b64, cover_path)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                star_id, code, item.title, item.release_date,
-                                release_date_sort, item.views, item.likes,
-                                best_resolution, "", item.cover_url,
-                                b64 or "", "",
-                            ),
-                        )
-                        title_id = managed.execute(
-                            "SELECT id FROM titles WHERE star_id = ? AND code = ?",
-                            (star_id, code),
-                        ).fetchone()[0]
-                        total_new += 1
-
-                        for idx, m in enumerate(scored):
-                            if m.magnet:
-                                h = re.search(r"xt=urn:btih:([a-f0-9]{40})", m.magnet, re.I)
-                                hash_str = h.group(1).lower() if h else None
-                                if hash_str:
-                                    managed.execute(
-                                        """
-                                        INSERT INTO magnets (title_id, magnet, hash, is_primary)
-                                        VALUES (?, ?, ?, ?)
-                                        """,
-                                        (title_id, m.magnet, hash_str, idx == 0),
-                                    )
+                # 统计本次插入 vs 更新
+                # DuckDB 没有内置 returning/row_count 区分 insert/update，
+                # 我们用 new_codes 近似（已知的新作品数）
+                new_count = len(new_codes)
+                updated_count = len(values) - new_count
 
                 if should_close:
                     managed.commit()
-                return {"new": total_new, "updated": total_updated}
+                return {"new": max(0, new_count), "updated": max(0, updated_count)}
             finally:
                 if should_close:
                     managed.close()
 
-        result = await db_write(_batch)
+        result = await db_write(_upsert)
         elapsed = (_time.perf_counter() - t0) * 1000
-        log.info(f"write_batch: {self.name}: {len(items)} items in {elapsed:.1f}ms")
+        log.info(f"write_batch: {self.star_name}: {len(items)} items in {elapsed:.1f}ms")
         return result
 
     @staticmethod
@@ -314,3 +199,8 @@ class StdoutSink:
 
     async def write(self, item):
         print(item)
+
+
+def _extract_hash(magnet: str | None) -> str | None:
+    m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet or "", re.I)
+    return m.group(1).lower() if m else None
