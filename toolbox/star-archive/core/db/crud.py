@@ -141,12 +141,23 @@ def upsert_title(star_id, code, title=None, release_date=None, views=None,
 
 @trace_db
 def upsert_magnet(title_id, magnet, is_primary=True, conn=None):
-    """插入或更新磁力链接"""
+    """插入或更新磁力链接。
+
+    当 is_primary=True 时，会先将该 title 下所有现有 magnet 的 is_primary
+    重置为 false，确保一个 title 在任何时候最多只有一个 primary magnet，
+    从根本上消除前端作品重复的问题。
+    """
     h = _extract_hash(magnet)
     if not h:
         return
     managed, should_close = _managed_conn(conn)
     try:
+        # 若设为 primary，先重置该 title 下所有旧 primary，避免多 primary 重复
+        if is_primary:
+            managed.execute(
+                "UPDATE magnets SET is_primary = false WHERE title_id = ?",
+                (title_id,),
+            )
         row = managed.execute(
             "SELECT 1 FROM magnets WHERE title_id = ? AND hash = ?",
             (title_id, h)

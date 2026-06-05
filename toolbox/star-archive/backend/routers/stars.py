@@ -69,6 +69,14 @@ def _build_stars_response() -> list[dict[str, Any]]:
                     ORDER BY release_date_sort DESC NULLS LAST
                 ) AS rn
             FROM titles
+        ),
+        primary_magnets AS (
+            -- 防御性去重：一个 title 理论上只有一个 primary magnet，
+            -- 若因历史 bug 出现多个，仅取 id 最小的一条，避免 JOIN 导致作品重复。
+            SELECT title_id, magnet,
+                ROW_NUMBER() OVER (PARTITION BY title_id ORDER BY id) AS rn
+            FROM magnets
+            WHERE is_primary = true
         )
         SELECT
             s.code,
@@ -86,7 +94,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
-        LEFT JOIN magnets m ON m.title_id = r.id AND m.is_primary = true
+        LEFT JOIN primary_magnets m ON m.title_id = r.id AND m.rn = 1
         GROUP BY s.id, s.code, s.name
         ORDER BY s.name
         """).fetchall()
