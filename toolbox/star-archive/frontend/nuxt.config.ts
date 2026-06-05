@@ -90,6 +90,9 @@ export default defineNuxtConfig({
     build: {
       cssCodeSplit: true,
     },
+    server: {
+      allowedHosts: ['cc.guohuasun.com', 'localhost', '127.0.0.1'],
+    },
   },
   experimental: {
     inlineSSRStyles: () => true,
