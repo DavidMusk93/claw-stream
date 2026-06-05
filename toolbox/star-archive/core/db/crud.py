@@ -155,7 +155,8 @@ def delete_star_by_code(code: str) -> bool:
         ).fetchall()
         title_ids = [r[0] for r in title_rows]
 
-        # 按外键依赖顺序删除：magnets → titles → stars
+        # 按外键依赖顺序删除：social_posts → magnets → titles → stars
+        conn.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
         if title_ids:
             placeholders = ", ".join(["?"] * len(title_ids))
             conn.execute(f"DELETE FROM magnets WHERE title_id IN ({placeholders})", title_ids)

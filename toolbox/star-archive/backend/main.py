@@ -95,6 +95,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = engine
     log.info(f"TorrentEngine initialized, cache dir: {CACHE_DIR}")
 
+    # 确保 DuckDB schema 已初始化（幂等）
+    from core import db as _db
+    _db.init_schema()
+    log.info("DuckDB schema initialized")
+
     yield
 
     # Shutdown

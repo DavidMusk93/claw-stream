@@ -71,8 +71,6 @@ async def fetch_star_page(
 
 async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> list[dict]:
     """主入口：读取配置，并发同步所有 stars"""
-    db.init_schema()
-
     with open(config_path, encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -143,7 +141,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
         cover_map = await download_covers_batch(cover_items, concurrency=8)
         log.info(f"downloaded {len(cover_map)} covers")
 
-    # 6. 批量写入数据库（通过串行队列，但已省去逐条 title_exists 查询）
+    # 6. 批量写入数据库（每个 star 一次 db_write，内部复用单一连接）
     total_new = 0
     total_updated = 0
     clean: list[dict] = []
@@ -151,26 +149,25 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
     for star_id, name, to_sync, new_items in sync_batches:
         sink = TitleSyncSink(star_id=star_id, name=name)
         new_codes = {it.code for it in new_items}
-        for it in to_sync:
-            is_new = it.code in new_codes
-            b64 = cover_map.get(it.code)
-            await sink.write(it, cover_b64=b64, is_new=is_new)
+        batch_result = await sink.write_batch(to_sync, new_codes, cover_map)
 
-        total_new += len(new_items)
-        total_updated += len(to_sync) - len(new_items)
-        log.info(f"done: {name}: {len(new_items)} new + {len(to_sync) - len(new_items)} updated")
-        clean.append({"name": name, "titles": to_sync, "count": len(new_items)})
+        total_new += batch_result["new"]
+        total_updated += batch_result["updated"]
+        log.info(f"done: {name}: {batch_result['new']} new + {batch_result['updated']} updated")
+        clean.append({"name": name, "titles": to_sync, "count": batch_result["new"]})
 
     # 统计
     conn = db._conn()
-    rows = conn.execute("""
-        SELECT s.code, s.name, COUNT(t.id) as title_count
-        FROM stars s
-        LEFT JOIN titles t ON t.star_id = s.id
-        GROUP BY s.id, s.code, s.name
-        ORDER BY s.name
-    """).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("""
+            SELECT s.code, s.name, COUNT(t.id) as title_count
+            FROM stars s
+            LEFT JOIN titles t ON t.star_id = s.id
+            GROUP BY s.id, s.code, s.name
+            ORDER BY s.name
+        """).fetchall()
+    finally:
+        conn.close()
 
     total = 0
     for _, name, count in rows:
@@ -179,6 +176,46 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
     log.info(f"sync complete: {total_new} new, {total_updated} updated, {total} total titles")
 
     return clean
+
+
+async def sync_star(
+    fetcher: PlaywrightFetcher,
+    star: StarConfig,
+    semaphore: asyncio.Semaphore,
+) -> dict:
+    """同步单个 star 的作品（用于新增女优后的后台同步）。"""
+    star_id = await db_write(
+        db.upsert_star,
+        name=star.name,
+        handle=star.handle,
+        code=star.code,
+    )
+
+    items = await fetch_star_page(fetcher, star, semaphore)
+    if not items:
+        return {"name": star.name, "count": 0, "titles": []}
+
+    existing_codes = await db_write(db.load_all_title_codes)
+    new_items = [it for it in items if (star_id, it.code) not in existing_codes]
+    existing_items = [it for it in items if (star_id, it.code) in existing_codes]
+
+    if len(new_items) > MAX_NEW_TITLES:
+        new_items = new_items[:MAX_NEW_TITLES]
+
+    to_sync = new_items + existing_items[:10]
+
+    cover_items = [(it.code, it.cover_url or "") for it in to_sync]
+    cover_map = await download_covers_batch(cover_items, concurrency=8)
+
+    sink = TitleSyncSink(star_id=star_id, name=star.name)
+    new_codes_set = {it.code for it in new_items}
+    batch_result = await sink.write_batch(to_sync, new_codes_set, cover_map)
+
+    return {
+        "name": star.name,
+        "titles": to_sync,
+        "count": batch_result["new"],
+    }
 
 
 if __name__ == "__main__":

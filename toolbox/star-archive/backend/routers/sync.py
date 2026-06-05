@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from backend.routers.stars import invalidate_stars_cache
+from backend.routers.stars import invalidate_stars_cache, CONFIG_PATH
 from core import get_logger
 
 router = APIRouter(prefix="/api/stars", tags=["sync"])
@@ -37,7 +37,7 @@ async def _run_sync_bg() -> None:
     try:
         from scrapers.v2.tasks.sync_titles import run as run_sync_titles
 
-        results = await run_sync_titles("config.json")
+        results = await run_sync_titles(CONFIG_PATH)
         log_lines = [f"{r['name']}: {r['count']} titles" for r in results]
         _sync_state["log_lines"] = log_lines[-30:]
         log.info("sync completed", extra={"lines": len(log_lines)})
