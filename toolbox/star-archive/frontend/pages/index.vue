@@ -281,6 +281,18 @@ async function startSync() {
   }
 }
 
+async function clearStarsServiceWorkerCache() {
+  // 同步完成后必须清除 Service Worker 中 /api/stars 的旧缓存，
+  // 否则刷新网页会拿到 StaleWhileRevalidate/NetworkFirst 缓存的旧数据。
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      await caches.delete('stars-cache')
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function beginPolling() {
   if (syncTimer) clearInterval(syncTimer)
   syncTimer = setInterval(async () => {
@@ -300,6 +312,7 @@ function beginPolling() {
         if (status.last_error) {
           syncError.value = status.last_error.slice(0, 200)
         }
+        await clearStarsServiceWorkerCache()
         await refreshNuxtData('stars')
       }
     } catch {

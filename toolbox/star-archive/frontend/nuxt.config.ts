@@ -42,11 +42,13 @@ export default defineNuxtConfig({
       skipWaiting: true,
       runtimeCaching: [
         {
+          // 同步完成后必须立即看到最新数据，使用 NetworkFirst 避免 StaleWhileRevalidate
+          // 仅在离线或网络失败时回退到缓存，且缓存只保留 10 秒
           urlPattern: /^\/api\/stars/,
-          handler: 'StaleWhileRevalidate',
+          handler: 'NetworkFirst',
           options: {
             cacheName: 'stars-cache',
-            expiration: { maxEntries: 5, maxAgeSeconds: 3600 },
+            expiration: { maxEntries: 5, maxAgeSeconds: 10 },
           },
         },
         {
