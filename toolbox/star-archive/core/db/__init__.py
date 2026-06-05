@@ -6,6 +6,7 @@
 from .connection import DB_PATH, _conn, _date_to_sort
 from .schema import init_schema, backfill_release_date_sort
 from .crud import (
+    _managed_conn,
     upsert_star,
     title_exists,
     load_all_title_codes,
@@ -24,6 +25,7 @@ __all__ = [
     "DB_PATH",
     "_conn",
     "_date_to_sort",
+    "_managed_conn",
     "init_schema",
     "backfill_release_date_sort",
     "upsert_star",

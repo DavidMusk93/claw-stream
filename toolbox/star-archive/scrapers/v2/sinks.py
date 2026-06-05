@@ -99,15 +99,21 @@ class TitleSyncSink:
 
         相比逐个 write()，批量模式将每个 star 的 N 次数据库往返压缩为 1 次，
         彻底解决串行写队列在大批量同步时的性能瓶颈。
-        """
-        star_id = self.star_id
 
-        def _batch() -> dict[str, int]:
+        若通过 DuckDBWriteQueue 调用，队列 worker 会将持久连接注入 conn 参数，
+        从而避免本次批量操作再新建连接。
+        """
+        import time as _time
+        star_id = self.star_id
+        t0 = _time.perf_counter()
+
+        def _batch(conn=None) -> dict[str, int]:
             import re
-            conn = db._conn()
+            managed = conn if conn is not None else db._conn()
+            should_close = conn is None
             try:
                 # 预加载该 star 的所有现有 title id + cover
-                existing_rows = conn.execute(
+                existing_rows = managed.execute(
                     "SELECT id, code, cover_b64 FROM titles WHERE star_id = ?",
                     (star_id,),
                 ).fetchall()
@@ -147,7 +153,7 @@ class TitleSyncSink:
 
                         if title_id is None:
                             # 数据库中不存在（可能之前被清理），降级为插入
-                            conn.execute(
+                            managed.execute(
                                 """
                                 INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
                                                     views, likes, resolution, download_url, cover_url,
@@ -161,14 +167,14 @@ class TitleSyncSink:
                                     b64 or "", "",
                                 ),
                             )
-                            title_id = conn.execute(
+                            title_id = managed.execute(
                                 "SELECT id FROM titles WHERE star_id = ? AND code = ?",
                                 (star_id, code),
                             ).fetchone()[0]
                             total_new += 1
                         else:
                             cover_to_use = b64 if b64 is not None else existing_cover
-                            conn.execute(
+                            managed.execute(
                                 """
                                 UPDATE titles SET
                                     title = ?,
@@ -198,12 +204,12 @@ class TitleSyncSink:
                                 h = re.search(r"xt=urn:btih:([a-f0-9]{40})", m.magnet, re.I)
                                 hash_str = h.group(1).lower() if h else None
                                 if hash_str:
-                                    row = conn.execute(
+                                    row = managed.execute(
                                         "SELECT 1 FROM magnets WHERE title_id = ? AND hash = ?",
                                         (title_id, hash_str),
                                     ).fetchone()
                                     if row:
-                                        conn.execute(
+                                        managed.execute(
                                             """
                                             UPDATE magnets SET magnet = ?, is_primary = ?
                                             WHERE title_id = ? AND hash = ?
@@ -211,7 +217,7 @@ class TitleSyncSink:
                                             (m.magnet, idx == 0, title_id, hash_str),
                                         )
                                     else:
-                                        conn.execute(
+                                        managed.execute(
                                             """
                                             INSERT INTO magnets (title_id, magnet, hash, is_primary)
                                             VALUES (?, ?, ?, ?)
@@ -219,7 +225,7 @@ class TitleSyncSink:
                                             (title_id, m.magnet, hash_str, idx == 0),
                                         )
                     else:
-                        conn.execute(
+                        managed.execute(
                             """
                             INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
                                                 views, likes, resolution, download_url, cover_url,
@@ -233,7 +239,7 @@ class TitleSyncSink:
                                 b64 or "", "",
                             ),
                         )
-                        title_id = conn.execute(
+                        title_id = managed.execute(
                             "SELECT id FROM titles WHERE star_id = ? AND code = ?",
                             (star_id, code),
                         ).fetchone()[0]
@@ -244,7 +250,7 @@ class TitleSyncSink:
                                 h = re.search(r"xt=urn:btih:([a-f0-9]{40})", m.magnet, re.I)
                                 hash_str = h.group(1).lower() if h else None
                                 if hash_str:
-                                    conn.execute(
+                                    managed.execute(
                                         """
                                         INSERT INTO magnets (title_id, magnet, hash, is_primary)
                                         VALUES (?, ?, ?, ?)
@@ -252,12 +258,17 @@ class TitleSyncSink:
                                         (title_id, m.magnet, hash_str, idx == 0),
                                     )
 
-                conn.commit()
+                if should_close:
+                    managed.commit()
                 return {"new": total_new, "updated": total_updated}
             finally:
-                conn.close()
+                if should_close:
+                    managed.close()
 
-        return await db_write(_batch)
+        result = await db_write(_batch)
+        elapsed = (_time.perf_counter() - t0) * 1000
+        log.info(f"write_batch: {self.name}: {len(items)} items in {elapsed:.1f}ms")
+        return result
 
     @staticmethod
     def _best_resolution(item: VideoItem) -> str:
