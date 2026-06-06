@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any
 
+import duckdb
 import libtorrent as lt
 
 from core import get_logger
@@ -738,15 +739,44 @@ class TorrentEngine:
             info["ready"] = False
             return
 
-        if not is_hd:
-            log.info(f"metadata: {hash_str[:12]}... no hhd800, using fallback {name}")
-        info["quality"] = "HD" if is_hd else "SD"
-        info["video_idx"] = idx
-        info["video_path"] = os.path.join(info["handle"].status().save_path, name)
-        info["video_size"] = size
         code_from_file = _extract_work_code(name)
         if code_from_file:
             info["work_code"] = code_from_file
+
+        # 优先以数据库 resolution 判断 quality，而非仅看文件名 hhd800
+        quality = "HD" if is_hd else "SD"
+        work_code = info.get("work_code") or code_from_file
+        if work_code:
+            try:
+                conn = duckdb.connect(
+                    os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "data", "claw.duckdb"
+                    )
+                )
+                try:
+                    row = conn.execute(
+                        "SELECT resolution FROM titles WHERE code = ?",
+                        [work_code.upper()],
+                    ).fetchone()
+                    if row and row[0]:
+                        res = row[0].upper()
+                        # FHD/FHDC/4K/HD/HD720p 都算 HD；空值或 SD/360p/480p 算 SD
+                        if any(t in res for t in ["FHD", "FHDC", "4K", "HD"]):
+                            quality = "HD"
+                        elif any(t in res for t in ["SD", "360", "480"]):
+                            quality = "SD"
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+
+        if quality == "SD" and not is_hd:
+            log.info(f"metadata: {hash_str[:12]}... no hhd800, using fallback {name}")
+        info["quality"] = quality
+        info["video_idx"] = idx
+        info["video_path"] = os.path.join(info["handle"].status().save_path, name)
+        info["video_size"] = size
 
         # Create PieceStateTracker once — repeated calls from add_torrent polling
         # must NOT recreate it, or all verified-piece state is lost.
