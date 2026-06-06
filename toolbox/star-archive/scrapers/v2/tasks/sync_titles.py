@@ -135,7 +135,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 4) -> l
             log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
             new_items = new_items[:MAX_NEW_TITLES]
 
-        to_sync = new_items + existing_items[:10]
+        to_sync = new_items + existing_items
         sync_batches.append((star_id, star.name, to_sync, new_items))
         all_new_items.extend(new_items)
 
@@ -231,7 +231,7 @@ async def sync_star(
     if len(new_items) > MAX_NEW_TITLES:
         new_items = new_items[:MAX_NEW_TITLES]
 
-    to_sync = new_items + existing_items[:10]
+    to_sync = new_items + existing_items
 
     cover_items = [(it.code, it.cover_url or "") for it in to_sync]
     cover_map = await download_covers_batch(cover_items, concurrency=8)
