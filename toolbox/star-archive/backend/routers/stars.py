@@ -287,13 +287,9 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
 
     _save_config(config)
 
-    from core import db
-    deleted = db.delete_star_by_code(code)
-    if not deleted:
-        log.warning(f"star {code} removed from config but not found in db")
-
-    # 清空该女优所有作品的缓存和 tracing bits
+    # 先查询该女优所有作品的 magnet_hash（数据库删除后就查不到了）
     engine = request.app.state.engine
+    magnet_hashes: list[str] = []
     try:
         conn = duckdb.connect(DB_PATH)
         try:
@@ -302,14 +298,24 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
                 FROM titles
                 WHERE star_code = ? AND magnet_hash IS NOT NULL
             """, [code]).fetchall()
-            for (hash_str,) in rows:
-                if hash_str:
-                    await asyncio.to_thread(engine.remove_torrent, hash_str)
-                    log.info(f"delete_star: removed torrent {hash_str[:12]}... for {code}")
+            magnet_hashes = [h for (h,) in rows if h]
         finally:
             conn.close()
     except Exception as e:
-        log.warning(f"delete_star cache cleanup failed for {code}: {e}")
+        log.warning(f"delete_star: failed to query magnet hashes for {code}: {e}")
+
+    from core import db
+    deleted = db.delete_star_by_code(code)
+    if not deleted:
+        log.warning(f"star {code} removed from config but not found in db")
+
+    # 清空该女优所有作品的缓存和 tracing bits
+    for hash_str in magnet_hashes:
+        try:
+            await asyncio.to_thread(engine.remove_torrent, hash_str)
+            log.info(f"delete_star: removed torrent {hash_str[:12]}... for {code}")
+        except Exception as e:
+            log.warning(f"delete_star: failed to remove torrent {hash_str[:12]}... for {code}: {e}")
 
     invalidate_stars_cache()
     log.info(f"star deleted: {code}")
