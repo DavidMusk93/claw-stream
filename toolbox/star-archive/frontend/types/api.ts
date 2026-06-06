@@ -16,6 +16,7 @@ export interface TorrentStatus {
   head_ready: boolean
   peers: number
   progress: number
+  true_progress: number
   download_rate: number
   upload_rate: number
   video_file?: string

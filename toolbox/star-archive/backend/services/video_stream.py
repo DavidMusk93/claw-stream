@@ -120,28 +120,70 @@ def _read_once(path: str, start: int, chunk_size: int) -> bytearray:
         return data
 
 
-def _detect_hole(path: str, start: int, data: bytearray, engine: Any, hash_str: str) -> bool:
-    """Check if data is actually a hole. Returns True if hole detected."""
+def _detect_hole_offset(path: str, start: int, data: bytearray, engine: Any, hash_str: str) -> int:
+    """Return byte offset of first hole in data, or -1 if no hole.
+
+    A 'hole' is any piece portion that reads as all zeros. We do NOT trust
+    filesystem allocation state — if mmap reads zeros, the player will stall.
+
+    If tracker thinks the piece is VERIFIED but we read zeros, mark it corrupt
+    and trigger re-download so the hole gets filled.
+    """
     if len(data) == 0:
-        return True
-    if not any(data):
-        try:
-            return not _is_data_at_offset(path, start)
-        except OSError:
-            with engine.lock:
-                info = engine.torrents.get(hash_str)
-            if info and info.get("tracker"):
-                tracker = info["tracker"]
-                piece_length = tracker.piece_length
-                file_offset = tracker.file_offset
-                start_piece = (file_offset + start) // piece_length
-                end_piece = (file_offset + start + len(data) - 1) // piece_length
-                for p in range(start_piece, end_piece + 1):
-                    if not tracker._piece_has_data_on_disk(p):
-                        return True
-                return False
-            return True
-    return False
+        return 0
+
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if not info or not info.get("tracker"):
+        # No tracker: fallback to chunk-level check
+        if not any(data):
+            try:
+                if not _is_data_at_offset(path, start):
+                    return 0
+            except OSError:
+                return 0
+        return -1
+
+    tracker = info["tracker"]
+    piece_length = tracker.piece_length
+    file_offset = tracker.file_offset
+    video_size = tracker.video_size
+    h = info.get("handle")
+
+    chunk_start = start
+    chunk_end = start + len(data)
+
+    current = chunk_start
+    while current < chunk_end:
+        piece = (file_offset + current) // piece_length
+        piece_start_in_file = piece * piece_length - file_offset
+        piece_end_in_file = min((piece + 1) * piece_length - file_offset, video_size)
+
+        overlap_start = max(chunk_start, piece_start_in_file)
+        overlap_end = min(chunk_end, piece_end_in_file)
+
+        data_start = overlap_start - chunk_start
+        data_end = overlap_end - chunk_start
+        overlap_data = data[data_start:data_end]
+
+        if not any(overlap_data):
+            # Zero data in this piece portion — treat as hole.
+            # If tracker mistakenly thinks this piece is verified, correct it.
+            if tracker.is_verified(piece):
+                tracker._set_corrupt(piece)
+                log.warning(
+                    "verified piece returned zeros — marked corrupt",
+                    extra={"hash": hash_str[:12], "piece": piece},
+                )
+                # Trigger re-download via libtorrent
+                if h and h.status().has_metadata:
+                    h.set_piece_deadline(piece, 0)
+                    h.piece_priority(piece, 7)
+            return data_start
+
+        current = piece_end_in_file
+
+    return -1
 
 
 async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> bytes:
@@ -195,7 +237,7 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
     while True:
         attempt += 1
         data = await asyncio.to_thread(_read_once, path, start, chunk_size)
-        hole = await asyncio.to_thread(_detect_hole, path, start, data, engine, hash_str)
+        hole_offset = await asyncio.to_thread(_detect_hole_offset, path, start, data, engine, hash_str)
 
         log.debug(
             "read_video_range attempt",
@@ -206,20 +248,39 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
                 "end": start + len(data) - 1 if data else end,
                 "requested": chunk_size,
                 "read": len(data),
-                "hole": hole,
+                "hole_offset": hole_offset,
                 "elapsed": round(elapsed, 1),
                 "head_ready": head_ready,
                 "real_size": real_size,
             },
         )
 
-        if not hole and len(data) > 0:
+        if hole_offset == -1 and len(data) > 0:
+            # No hole — all data is valid
             log.debug(
                 "read_video_range success",
                 extra={"hash": hash_str[:12], "attempt": attempt, "read": len(data), "elapsed": round(elapsed, 1)},
             )
             return bytes(data)
 
+        if hole_offset > 0:
+            # Hole starts mid-chunk — return valid prefix so player can keep decoding.
+            # The next Range request from the player will start after the hole.
+            valid_data = data[:hole_offset]
+            log.warning(
+                "read_video_range partial hole: returning valid prefix",
+                extra={
+                    "hash": hash_str[:12],
+                    "attempt": attempt,
+                    "requested": chunk_size,
+                    "returned": len(valid_data),
+                    "hole_offset": hole_offset,
+                    "elapsed": round(elapsed, 1),
+                },
+            )
+            return bytes(valid_data)
+
+        # hole_offset == 0: hole at the very start of the chunk
         if elapsed >= max_wait:
             # Finished-state deadlock: libtorrent thinks done but disk has holes.
             # Re-add torrent to force libtorrent to re-evaluate file state.
