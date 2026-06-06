@@ -190,7 +190,7 @@ class TitleSyncSink:
             except ValueError:
                 pass
         # hhd800 高清源额外加分，确保在相同分辨率下优先
-        hhd800_bonus = 200 if "hhd800" in m.magnet.lower() else 0
+        hhd800_bonus = 1000 if m.is_hhd800 else 0
         return res_score + hhd800_bonus + m.seed + size_mb / 100
 
 

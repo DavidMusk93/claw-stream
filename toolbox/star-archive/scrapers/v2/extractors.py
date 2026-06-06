@@ -79,6 +79,7 @@ class IJavTorrentExtractor:
                         size=sizes[i] if i < len(sizes) else "",
                         seed=int(seeds[i]) if i < len(seeds) and seeds[i].isdigit() else 0,
                         leech=int(leeches[i]) if i < len(leeches) and leeches[i].isdigit() else 0,
+                        is_hhd800=hhd800_flags[i] if i < len(hhd800_flags) else False,
                     )
                 )
                 all_urls.append(m)

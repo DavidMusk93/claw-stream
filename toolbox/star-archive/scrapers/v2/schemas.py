@@ -16,6 +16,7 @@ class MagnetCandidate(BaseModel):
     size: str = ""           # 原始大小字符串，如 "5.2GB"
     seed: int = 0
     leech: int = 0
+    is_hhd800: bool = False  # 是否为 hhd800.com@ 高清源
 
 
 class VideoItem(BaseModel):
