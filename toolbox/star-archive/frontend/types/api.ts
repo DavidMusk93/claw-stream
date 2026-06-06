@@ -49,6 +49,7 @@ export interface Title {
   cover_url?: string
   magnet?: string
   number?: number
+  user_liked?: boolean
 }
 
 export interface Post {

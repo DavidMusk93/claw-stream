@@ -74,6 +74,17 @@ export function useApi() {
     return res._data
   }
 
+  async function likeTitle(code: string, liked: boolean) {
+    const res = await $fetch.raw('/api/stars/like', {
+      baseURL: config.public.apiBase,
+      method: 'POST',
+      headers: _headers(),
+      body: { code, liked },
+    })
+    syncTraceIdFromResponse(res.response)
+    return res._data
+  }
+
   return {
     checkStream,
     getTorrentStatus,
@@ -82,5 +93,6 @@ export function useApi() {
     getCacheItems,
     deleteCache,
     deleteStar,
+    likeTitle,
   }
 }

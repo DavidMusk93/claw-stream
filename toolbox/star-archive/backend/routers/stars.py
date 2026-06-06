@@ -80,7 +80,8 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 download_url := IFNULL(r.download_url, ''),
                 cover_url := IFNULL(r.cover_url, ''),
                 charming_intro := IFNULL(r.charming_intro, ''),
-                magnet := IFNULL(r.magnet, '')
+                magnet := IFNULL(r.magnet, ''),
+                user_liked := COALESCE(r.user_liked, 0)
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
         LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 5
@@ -100,6 +101,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
             titles = data.get("titles", [])
             for t in titles:
                 t["cover_url"] = f"/api/cover/{t['code']}"
+                t["user_liked"] = bool(t.get("user_liked", 0))
 
             result.append({
                 "name": a["name"],
@@ -312,3 +314,62 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
     invalidate_stars_cache()
     log.info(f"star deleted: {code}")
     return {"code": code, "deleted": True}
+
+
+# ── Like Title ──────────────────────────────────────────────────────
+
+class LikeRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+    liked: bool = True
+
+
+class LikeResponse(BaseModel):
+    code: str
+    liked: bool
+    downloaded: bool
+
+
+@router.post("/like")
+async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
+    """Like / unlike 作品；like 后若存在 magnet 则立即触发下载。"""
+    code = request.code.strip().upper()
+    liked = request.liked
+
+    conn = duckdb.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT magnet, magnet_hash FROM titles WHERE code = ?",
+            [code],
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="作品不存在")
+        magnet, magnet_hash = row
+    finally:
+        conn.close()
+
+    # 更新数据库
+    conn = duckdb.connect(DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE titles SET user_liked = ? WHERE code = ?",
+            [1 if liked else 0, code],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    invalidate_stars_cache()
+
+    downloaded = False
+    if liked and magnet:
+        engine = req.app.state.engine
+        from backend.routers.torrents import _resolve_magnet
+        resolved = _resolve_magnet(magnet)
+        info = await asyncio.to_thread(engine.add_torrent, resolved, prefetch=False)
+        if info:
+            downloaded = True
+            log.info(f"like_title: auto-download {code} -> {info['hash'][:12]}...")
+        else:
+            log.warning(f"like_title: auto-download failed for {code}")
+
+    return LikeResponse(code=code, liked=liked, downloaded=downloaded)

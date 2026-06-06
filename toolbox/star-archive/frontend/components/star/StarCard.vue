@@ -77,6 +77,20 @@
             </svg>
             <span>{{ copied ? '已复制 ✓' : '复制磁力 🔗' }}</span>
           </button>
+
+          <button
+            class="flex items-center gap-2 px-4 py-2.5 rounded-full text-[14px] font-medium transition-all"
+            :class="localLiked
+              ? 'bg-[#ff375f]/20 text-[#ff375f]'
+              : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
+            :disabled="liking"
+            @click="toggleLike"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" :fill="localLiked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+            <span>{{ localLiked ? '已喜欢' : '喜欢' }}</span>
+          </button>
         </div>
 
         <!-- Title info -->
@@ -151,11 +165,29 @@ const activeIndex = ref(0)
 const copied = ref(false)
 const heroError = ref(false)
 const thumbErrors = ref<Record<string, boolean>>({})
+const liking = ref(false)
 
 const activeTitle = computed(() => {
   const titles = props.star.titles || []
   return titles[activeIndex.value] || titles[0] || null
 })
+
+const localLiked = computed(() => activeTitle.value?.user_liked ?? false)
+
+async function toggleLike() {
+  if (liking.value || !activeTitle.value) return
+  liking.value = true
+  try {
+    const { likeTitle } = useApi()
+    const newVal = !localLiked.value
+    await likeTitle(activeTitle.value.code, newVal)
+    activeTitle.value.user_liked = newVal
+  } catch (e: any) {
+    alert(e?.data?.detail || '操作失败')
+  } finally {
+    liking.value = false
+  }
+}
 
 function fmtDate(dateStr?: string): string {
   if (!dateStr) return ''

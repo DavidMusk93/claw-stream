@@ -67,6 +67,7 @@ def init_schema(conn=None):
             ("magnet", "TEXT"),
             ("magnet_hash", "TEXT"),
             ("all_magnets", "JSON"),
+            ("user_liked", "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE titles ADD COLUMN {col[0]} {col[1]}")

@@ -21,6 +21,17 @@
         {{ title.code }}
       </div>
 
+      <!-- Like button (top-right) -->
+      <button
+        class="absolute top-2 right-2 z-10 w-8 h-8 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center transition-all hover:bg-black/60 active:scale-90"
+        :class="localLiked ? 'text-[#ff375f]' : 'text-white/70'"
+        @click.stop="toggleLike"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" :fill="localLiked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+        </svg>
+      </button>
+
       <!-- Play overlay -->
       <div
         v-if="title.magnet"
@@ -50,10 +61,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { Title } from '~/types/api'
 
-defineProps<{
+const props = defineProps<{
   title: Title
   starCode: string
   index?: number
@@ -65,4 +76,21 @@ defineEmits<{
 }>()
 
 const imgError = ref(false)
+const localLiked = computed(() => props.title.user_liked ?? false)
+const liking = ref(false)
+
+async function toggleLike() {
+  if (liking.value) return
+  liking.value = true
+  try {
+    const { likeTitle } = useApi()
+    await likeTitle(props.title.code, !localLiked.value)
+    // 乐观更新：直接修改本地数据避免等待刷新
+    props.title.user_liked = !localLiked.value
+  } catch (e: any) {
+    alert(e?.data?.detail || '操作失败')
+  } finally {
+    liking.value = false
+  }
+}
 </script>
