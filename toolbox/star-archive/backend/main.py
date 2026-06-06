@@ -48,7 +48,7 @@ def _guess_image_mime(data: bytes) -> str:
 
 def _get_engine() -> TorrentEngine:
     """Create TorrentEngine singleton."""
-    return TorrentEngine(CACHE_DIR, max_size_gb=30)
+    return TorrentEngine(CACHE_DIR, max_size_gb=0)
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):

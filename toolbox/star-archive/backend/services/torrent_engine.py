@@ -19,7 +19,7 @@ log = get_logger("torrent-engine")
 _SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(_SCRIPT_DIR, "cache", "torrent")
 
-MAX_CACHE_SIZE_GB = 15
+MAX_CACHE_SIZE_GB = 0   # 0 表示自动按磁盘容量的 60% 计算
 PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
 CACHE_CLEAN_INTERVAL_SEC = 60  # 后台清理间隔
@@ -256,12 +256,26 @@ def format_size(b: int) -> str:
 
 
 # ── BitTorrent engine ───────────────────────────────────
+def _get_disk_total_bytes(path: str) -> int:
+    """获取 path 所在分区的总容量（字节）。"""
+    try:
+        st = os.statvfs(path)
+        return st.f_blocks * st.f_frsize
+    except Exception:
+        return 0
+
+
 class TorrentEngine:
     """BitTorrent 下载引擎，管理缓存、优先级和播放状态。"""
 
     def __init__(self, cache_dir: str, max_size_gb: int) -> None:
         self.cache_dir = cache_dir
-        self.max_size_bytes = max_size_gb * 1024 * 1024 * 1024
+        if max_size_gb <= 0:
+            disk_total = _get_disk_total_bytes(cache_dir)
+            self.max_size_bytes = int(disk_total * 0.6)
+            log.info(f"cache limit auto: {format_size(self.max_size_bytes)} (60% of {format_size(disk_total)})")
+        else:
+            self.max_size_bytes = max_size_gb * 1024 * 1024 * 1024
         self.session = lt.session()
 
         settings = self.session.get_settings()
