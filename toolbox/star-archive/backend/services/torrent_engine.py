@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any
 
+import duckdb
 import libtorrent as lt
 
 from core import get_logger
