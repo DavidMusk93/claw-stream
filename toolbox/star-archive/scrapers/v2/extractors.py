@@ -195,7 +195,9 @@ class IJavTorrentExtractor:
             magnet_url = htmlmod.unescape(m.group(1))
             magnets.append(magnet_url)
             resolutions.append(_extract_resolution(magnet_url))
-            hhd800_flags.append("hhd800" in row.lower())
+            dn = _extract_dn(magnet_url)
+            is_hhd800 = "hhd800" in row.lower() or (dn.startswith("+++ [FHD]") if dn else False)
+            hhd800_flags.append(is_hhd800)
 
             size_m = re.search(r'fa-weight-hanging"></i>\s*([0-9.]+\s*GB)', row, re.I)
             sizes.append(size_m.group(1) if size_m else "")
