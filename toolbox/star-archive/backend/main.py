@@ -100,6 +100,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _db.init_schema()
     log.info("DuckDB schema initialized")
 
+    # 加载用户已 like 的作品到引擎保护集合
+    try:
+        conn = duckdb.connect(os.path.join(SCRIPT_DIR, "data", "claw.duckdb"))
+        try:
+            rows = conn.execute(
+                "SELECT magnet_hash FROM titles WHERE user_liked = 1 AND magnet_hash IS NOT NULL"
+            ).fetchall()
+            for (h,) in rows:
+                if h:
+                    engine.set_liked(h, True)
+            log.info(f"Loaded {len(rows)} liked torrents into cache protection set")
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning(f"Failed to load liked torrents: {e}")
+
     yield
 
     # Shutdown

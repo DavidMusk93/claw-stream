@@ -360,9 +360,12 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
 
     invalidate_stars_cache()
 
+    engine = req.app.state.engine
+    if magnet_hash:
+        await asyncio.to_thread(engine.set_liked, magnet_hash, liked)
+
     downloaded = False
     if liked and magnet:
-        engine = req.app.state.engine
         from backend.routers.torrents import _resolve_magnet
         resolved = _resolve_magnet(magnet)
         info = await asyncio.to_thread(engine.add_torrent, resolved, prefetch=False)
@@ -372,4 +375,15 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
         else:
             log.warning(f"like_title: auto-download failed for {code}")
 
-    return LikeResponse(code=code, liked=liked, downloaded=downloaded)
+    # Unlike 时立即清理已下载的缓存
+    removed = False
+    if not liked and magnet_hash:
+        removed = await asyncio.to_thread(engine.remove_torrent, magnet_hash)
+        if removed:
+            log.info(f"like_title: auto-remove {code} -> {magnet_hash[:12]}...")
+
+    return LikeResponse(
+        code=code,
+        liked=liked,
+        downloaded=downloaded,
+    )

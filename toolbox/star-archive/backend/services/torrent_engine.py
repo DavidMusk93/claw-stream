@@ -293,6 +293,9 @@ class TorrentEngine:
         self.torrents: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
+        # user-liked hashes: protected from eviction
+        self.liked_hashes: set[str] = set()
+
         self._stop = False
         self._alert_thread = threading.Thread(target=self._process_alerts, daemon=True)
         self._alert_thread.start()
@@ -394,10 +397,18 @@ class TorrentEngine:
             return "seed"
         return "fragment"
 
+    def set_liked(self, hash_str: str, liked: bool) -> None:
+        """更新作品的 user_liked 状态，liked 作品受缓存保护。"""
+        with self.lock:
+            if liked:
+                self.liked_hashes.add(hash_str)
+            else:
+                self.liked_hashes.discard(hash_str)
+
     def _cache_score(self, info: dict[str, Any]) -> float:
         """Higher score = more valuable, less evictable.
 
-        Combines: play history, completion, recency, value-per-GB.
+        Combines: play history, completion, recency, value-per-GB, like status.
         """
         now = time.time()
         last_play = info.get("_last_play_time", 0)
@@ -405,6 +416,7 @@ class TorrentEngine:
         progress = info.get("progress", 0)
         size = info.get("video_size", 1024)
         play_count = info.get("_play_count", 0)
+        hash_str = info.get("hash", "")
 
         hours_since_play = (now - last_play) / 3600 if last_play else 9999
         heat = math.exp(-hours_since_play / 168)  # 7-day half-life
@@ -419,7 +431,15 @@ class TorrentEngine:
         size_gb = size / (1024 ** 3)
         value_per_gb = (play_bonus + completion_score) / max(size_gb, 0.1)
 
-        return value_per_gb * heat + play_bonus
+        score = value_per_gb * heat + play_bonus
+
+        # Like bonus: liked works get strong protection; unliked get penalty
+        if hash_str in self.liked_hashes:
+            score += 5000.0
+        else:
+            score -= 2000.0
+
+        return score
 
     def _punch_hole_middle_pieces(self, hash_str: str) -> int:
         """L4降级: punch holes in non-head-tail pieces to free disk space.
@@ -498,7 +518,7 @@ class TorrentEngine:
         with self.lock:
             candidates = [
                 (h, i) for h, i in self.torrents.items()
-                if force_evict_hot or self._get_tier(i) != "hot"
+                if force_evict_hot or self._get_tier(i) != "hot" or h not in self.liked_hashes
             ]
 
         if not candidates:
