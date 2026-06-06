@@ -1315,6 +1315,57 @@ class TorrentEngine:
                     shutil.rmtree(save_path, ignore_errors=True)
         return True
 
+    def gc_orphaned_torrents(self, db_path: str) -> int:
+        """清理磁盘上存在但数据库中没有对应 title 的孤儿 torrent。
+
+        返回实际清理的目录数量。
+        """
+        if not os.path.isdir(self.cache_dir):
+            return 0
+
+        disk_hashes = set()
+        for entry in os.scandir(self.cache_dir):
+            if entry.is_dir() and len(entry.name) == 40:
+                disk_hashes.add(entry.name)
+
+        if not disk_hashes:
+            return 0
+
+        db_hashes: set[str] = set()
+        try:
+            conn = duckdb.connect(db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT magnet_hash FROM titles WHERE magnet_hash IS NOT NULL"
+                ).fetchall()
+                db_hashes = {h for (h,) in rows if h}
+            finally:
+                conn.close()
+        except Exception as e:
+            log.error(f"gc_orphaned_torrents: failed to query db: {e}")
+            return 0
+
+        orphaned = sorted(disk_hashes - db_hashes)
+        removed = 0
+        for hash_str in orphaned:
+            try:
+                # 若已加载到引擎，走标准移除流程以释放 libtorrent 句柄
+                with self.lock:
+                    info = self.torrents.get(hash_str)
+                if info:
+                    self.remove_torrent(hash_str)
+                else:
+                    save_path = os.path.join(self.cache_dir, hash_str)
+                    shutil.rmtree(save_path, ignore_errors=True)
+                removed += 1
+                log.info(f"gc_orphaned_torrents: removed orphan {hash_str[:12]}...")
+            except Exception as e:
+                log.warning(f"gc_orphaned_torrents: failed to remove {hash_str[:12]}...: {e}")
+
+        if removed:
+            log.info(f"gc_orphaned_torrents: removed {removed} orphan torrent(s)")
+        return removed
+
     def _get_cache_size(self) -> int:
         """计算当前缓存目录占用的实际磁盘大小（字节）。"""
         total = 0

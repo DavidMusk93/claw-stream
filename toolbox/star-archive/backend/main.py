@@ -116,6 +116,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         log.warning(f"Failed to load liked torrents: {e}")
 
+    # 启动时清理孤儿 torrent（历史 bug 遗留或删除流程中断导致）
+    try:
+        db_path = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
+        removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
+        log.info(f"Startup GC removed {removed} orphan torrent(s)")
+    except Exception as e:
+        log.warning(f"Startup GC failed: {e}")
+
     yield
 
     # Shutdown

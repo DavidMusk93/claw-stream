@@ -4,6 +4,8 @@ import asyncio
 from fastapi import APIRouter, Request, Depends, HTTPException
 from typing import Any
 
+import os
+
 from backend.models import CacheMetrics
 from backend.services.torrent_engine import format_size
 
@@ -33,6 +35,15 @@ async def delete_cache(hash_str: str, engine: Any = Depends(get_engine)):
     """Remove a torrent from cache."""
     success = await asyncio.to_thread(engine.remove_torrent, hash_str)
     return {"deleted": success}
+
+
+@router.post("/gc-orphans")
+async def gc_orphans(engine: Any = Depends(get_engine)):
+    """手动触发孤儿 torrent GC：清理磁盘上存在但数据库无对应记录的 torrent。"""
+    script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    db_path = os.path.join(script_dir, "data", "claw.duckdb")
+    removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
+    return {"removed": removed}
 
 
 @router.get("/metrics", response_model=CacheMetrics)
