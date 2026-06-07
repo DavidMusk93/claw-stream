@@ -501,8 +501,9 @@ class TorrentEngine:
     def _enforce_cache_limit(self) -> None:
         """Tiered cache eviction: progressive, score-based, with L1 protection.
 
-        Soft limit: 95% of max. When exceeded, evict ONE lowest-score torrent
-        per cycle. L1 (hot) torrents are protected at soft limit.
+        Soft limit: 95% of max. When exceeded, evict lowest-score torrents
+        iteratively until below threshold. L1 (hot) torrents are protected at
+        soft limit.
 
         Hard limit: 120% of max. When exceeded, force-evict even L1 (hot)
         torrents to prevent disk exhaustion. Hard limit overrides tier protection.
@@ -526,44 +527,51 @@ class TorrentEngine:
                 f"Force-evicting including hot torrents."
             )
 
-        with self.lock:
-            candidates = [
-                (h, i) for h, i in self.torrents.items()
-                if force_evict_hot or self._get_tier(i) != "hot" or h not in self.liked_hashes
-            ]
+        evicted = 0
+        while True:
+            total = self._get_cache_size()
+            if total <= soft_threshold:
+                break
 
-        if not candidates:
-            log.error("cache eviction: no candidates available even under hard limit")
-            return
+            with self.lock:
+                candidates = [
+                    (h, i) for h, i in self.torrents.items()
+                    if force_evict_hot or self._get_tier(i) != "hot"
+                ]
 
-        # Sort by score ascending (least valuable first)
-        candidates.sort(key=lambda x: self._cache_score(x[1]))
-        hash_str, info = candidates[0]
+            if not candidates:
+                log.error("cache eviction: no candidates available even under hard limit")
+                break
 
-        tier = self._get_tier(info)
+            # Sort by score ascending (least valuable first)
+            candidates.sort(key=lambda x: self._cache_score(x[1]))
+            hash_str, info = candidates[0]
 
-        # L3 (completed, cold) → punch hole before full eviction
-        if tier == "seed" and info.get("progress", 0) >= 99.9:
-            freed = self._punch_hole_middle_pieces(hash_str)
-            if freed > 0:
-                new_size = self._get_cache_size()
-                log.info(
-                    f"eviction: downgraded {hash_str[:12]}... L3→L4, "
-                    f"freed {format_size(freed)}, current {format_size(new_size)}"
-                )
-                if new_size <= soft_threshold:
-                    return
+            tier = self._get_tier(info)
 
-        # L2/L4 or punch-hole-insufficient L3 → full eviction
-        log.info(
-            f"evicting torrent {hash_str[:12]}... "
-            f"(tier={tier}, score={self._cache_score(info):.0f}, "
-            f"size={format_size(info.get('video_size', 0))})"
-        )
-        self.remove_torrent(hash_str)
+            # L3 (completed, cold) → punch hole before full eviction
+            if tier == "seed" and info.get("progress", 0) >= 99.9:
+                freed = self._punch_hole_middle_pieces(hash_str)
+                if freed > 0:
+                    new_size = self._get_cache_size()
+                    log.info(
+                        f"eviction: downgraded {hash_str[:12]}... L3→L4, "
+                        f"freed {format_size(freed)}, current {format_size(new_size)}"
+                    )
+                    continue
+
+            # L2/L4 or punch-hole-insufficient L3 → full eviction
+            log.info(
+                f"evicting torrent {hash_str[:12]}... "
+                f"(tier={tier}, score={self._cache_score(info):.0f}, "
+                f"size={format_size(info.get('video_size', 0))})"
+            )
+            self.remove_torrent(hash_str)
+            evicted += 1
+
         new_size = self._get_cache_size()
         log.info(
-            f"cache eviction done: current {format_size(new_size)}"
+            f"cache eviction done: evicted={evicted}, current {format_size(new_size)}"
         )
 
     def add_torrent(self, magnet: str, prefetch: bool = False) -> dict[str, Any] | None:
@@ -1313,17 +1321,17 @@ class TorrentEngine:
             log.warning(f"remove_torrent session.remove failed: {e}")
 
         # 给 libtorrent 后台线程释放文件描述符的时间窗口
-        time.sleep(0.5)
+        time.sleep(0.1)
 
         save_path = os.path.join(self.cache_dir, hash_str)
-        for attempt in range(3):
+        for attempt in range(10):
             try:
                 shutil.rmtree(save_path, ignore_errors=False)
                 break
             except Exception as e:
-                if attempt < 2:
+                if attempt < 9:
                     log.warning(f"remove retry {attempt + 1} for {hash_str[:12]}: {e}")
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                 else:
                     log.error(f"remove final error for {hash_str[:12]}: {e}")
                     # 最后一次尝试忽略错误，至少清理掉能删的文件
@@ -1406,6 +1414,11 @@ class TorrentEngine:
                 self._enforce_cache_limit()
             except Exception as e:
                 log.error(f"periodic clean error: {e}")
+
+            try:
+                self._cleanup_orphaned()
+            except Exception as e:
+                log.error(f"periodic orphaned cleanup error: {e}")
 
     def _cleanup_orphaned(self) -> None:
         """清理不在引擎管理列表中的孤儿缓存目录。
