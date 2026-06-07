@@ -46,7 +46,12 @@ class DuckDBWriteQueue:
         log.info("DuckDB write queue started")
 
     async def _worker(self) -> None:
-        """单 worker：从队列取出并执行写操作"""
+        """单 worker：从队列取出并在线程池中执行写操作。
+
+        使用 loop.run_in_executor 将同步 DuckDB I/O 放到独立线程，
+        避免阻塞主事件循环（尤其是 libtorrent 密集 I/O 时）。
+        """
+        loop = asyncio.get_running_loop()
         while True:
             item = await self._queue.get()
             if item is None:  # poison pill
@@ -55,7 +60,7 @@ class DuckDBWriteQueue:
             func, args, kwargs, future = item
             start = time.perf_counter()
             try:
-                result = func(*args, **kwargs)
+                result = await loop.run_in_executor(None, func, *args, **kwargs)
                 elapsed = (time.perf_counter() - start) * 1000
                 log.debug(f"{func.__name__} -> ok ({elapsed:.1f}ms)")
                 future.set_result(result)

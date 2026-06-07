@@ -62,7 +62,13 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     """
     import time as _time
     t0 = _time.perf_counter()
-    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str)
+    # 优先使用 _pick_video_file 已选定的目标文件，避免下载过程中误选广告文件
+    preferred_path = None
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if info:
+        preferred_path = info.get("video_path")
+    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str, preferred_path)
     t1 = _time.perf_counter()
     if not path:
         raise HTTPException(status_code=404, detail="Video not found")

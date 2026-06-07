@@ -216,11 +216,21 @@ def _check_video_ready(path: str, hash_str: str = "") -> tuple[int, bool, str]:
     return real_size, real_size >= 10 * 1024 * 1024, mime
 
 
-def find_video_state(hash_str: str) -> tuple[str | None, int, bool, str]:
+def find_video_state(hash_str: str, preferred_path: str | None = None) -> tuple[str | None, int, bool, str]:
     """查找视频文件并检查是否已下载足够的头部数据以供播放。
+
+    如果提供了 preferred_path（来自 _pick_video_file 的目标文件），
+    优先使用它，避免在下载过程中误选已下载更多的广告文件。
 
     返回: (文件路径, 实际磁盘大小, 头部是否就绪, MIME 类型)
     """
+    # 优先使用 _pick_video_file 已选定的目标文件
+    if preferred_path and os.path.exists(preferred_path):
+        ext = os.path.splitext(preferred_path)[1].lower()
+        if ext in VIDEO_EXTS:
+            real_size, head_ready, mime = _check_video_ready(preferred_path, hash_str)
+            return preferred_path, real_size, head_ready, mime
+
     dir_path = os.path.join(CACHE_DIR, hash_str)
     if not os.path.exists(dir_path):
         return None, 0, False, "video/mp4"

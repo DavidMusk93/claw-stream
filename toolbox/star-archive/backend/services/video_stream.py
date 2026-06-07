@@ -190,7 +190,13 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
     """Read video data for a given byte range, stopping at holes.
     Returns the actual data read (may be less than requested if hole encountered).
     """
-    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str)
+    # 优先使用 _pick_video_file 已选定的目标文件，避免下载过程中误选广告文件
+    preferred_path = None
+    with engine.lock:
+        info = engine.torrents.get(hash_str)
+    if info:
+        preferred_path = info.get("video_path")
+    path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str, preferred_path)
     if not path:
         log.debug("read_video_range: video not found", extra={"hash": hash_str[:12], "start": start, "end": end})
         return b""
