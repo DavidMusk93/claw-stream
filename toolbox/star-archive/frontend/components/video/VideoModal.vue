@@ -131,13 +131,13 @@
             <div class="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
                 class="h-full bg-rose rounded-full transition-all duration-500"
-                :style="{ width: Math.min(status?.true_progress ?? status?.progress ?? 0, 100) + '%' }"
+                :style="{ width: Math.min(status?.progress || 0, 100) + '%' }"
               />
             </div>
             <div class="mt-1.5 flex justify-between text-xs text-white/50">
               <span>
                 {{ status?.state?.includes('checking') ? '校验进度' : '下载进度' }}
-                {{ (status?.true_progress ?? status?.progress ?? 0).toFixed(1) }}%
+                {{ (status?.progress || 0).toFixed(1) }}%
               </span>
               <span v-if="status?.video_size">{{ (status.video_size / 1024 / 1024 / 1024).toFixed(1) }} GB</span>
             </div>
@@ -446,11 +446,10 @@ const statusText = computed(() => {
     return parts.join(' | ')
   }
 
-  // finished/seeding but true progress < 100% — disk has holes
-  const tp = s.true_progress ?? s.progress
-  if (tp < 99.9 && (s.state === 'finished' || s.state === 'seeding')) {
+  // finished/seeding but progress < 100% — disk has holes
+  if (s.progress < 99.9 && (s.state === 'finished' || s.state === 'seeding')) {
     const vp = s.verified_pieces
-    const parts = [`真实进度 ${tp.toFixed(1)}%`]
+    const parts = [`进度 ${s.progress.toFixed(1)}%`]
     if (vp) parts.push(`${vp} pcs 已验证`)
     return parts.join(' | ')
   }

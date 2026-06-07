@@ -1151,20 +1151,15 @@ class TorrentEngine:
         else:
             head_ready = head_ready_fs
 
-        # libtorrent finished/seeding 状态下 progress 恒为 100%，用实际磁盘大小修正
+        # Progress = real verified data ratio.  In finished/seeding libtorrent
+        # reports 100% and local_size counts allocated blocks, both lying.
+        # Use piece-level verified count (SEEK_HOLE ground truth) as the
+        # single source of truth.
         progress = s.progress * 100
-        if s.state in (lt.torrent_status.finished, lt.torrent_status.seeding):
-            if info.get("video_size", 0) > 0:
-                progress = (local_size / info["video_size"]) * 100
-
-        # True progress: piece-level verified count (ground truth via SEEK_HOLE).
-        # This exposes fake-100% finished states where libtorrent claims done
-        # but disk actually contains holes.
-        true_progress = progress
         if tracker:
             total_video_pieces = tracker.end_piece - tracker.start_piece + 1
             if total_video_pieces > 0:
-                true_progress = (tracker.verified_count() / total_video_pieces) * 100
+                progress = (tracker.verified_count() / total_video_pieces) * 100
 
         # Persist progress for tiered cache scoring
         info["progress"] = progress
@@ -1182,7 +1177,6 @@ class TorrentEngine:
             "head_ready": head_ready,
             "peers": s.num_peers,
             "progress": progress,
-            "true_progress": true_progress,
             "download_rate": s.download_rate,
             "upload_rate": s.upload_rate,
             "video_file": os.path.basename(info["video_path"]) if info["video_path"] else None,
