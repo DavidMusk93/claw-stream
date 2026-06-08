@@ -1,6 +1,6 @@
 # Star Archive — 系统架构
 
-> 适用项目：`toolbox/star-archive/`
+> 适用项目：``
 > 后端版本：FastAPI + libtorrent 2.0.11
 > 核心目标：按需下载、分级缓存、无缝播放
 

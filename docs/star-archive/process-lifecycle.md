@@ -30,7 +30,7 @@ Star Archive 前后端均为 **systemd 托管的长期运行服务**，通过 Ca
 **任何 `frontend/` 目录下的源码修改（Vue/TS/CSS）都必须重新构建并重启服务。**
 
 ```bash
-cd toolbox/star-archive/frontend
+cd frontend
 npm run build
 systemctl restart star-archive-frontend
 ```
@@ -70,9 +70,9 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/.openclaw/workspace/toolbox/star-archive
-Environment=PYTHONPATH=/root/.openclaw/workspace/toolbox/star-archive
-ExecStart=/root/.openclaw/workspace/toolbox/star-archive/.venv/bin/python \
+WorkingDirectory=/root/claw-stream/
+Environment=PYTHONPATH=/root/claw-stream/
+ExecStart=/root/claw-stream/.venv/bin/python \
           -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --log-level info
 Restart=always
 RestartSec=5s
@@ -92,7 +92,7 @@ Wants=star-archive-backend.service
 
 [Service]
 Type=simple
-WorkingDirectory=/root/.openclaw/workspace/toolbox/star-archive/frontend
+WorkingDirectory=/root/claw-stream/frontend
 Environment=NITRO_HOST=0.0.0.0
 Environment=NITRO_PORT=3000
 ExecStart=/usr/bin/node .output/server/index.mjs

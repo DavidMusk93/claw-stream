@@ -10,7 +10,6 @@ MEMORY.md
 SOUL.md
 TOOLS.md
 USER.md
-!toolbox/star-archive/AGENTS.md
 
 # Other projects
 Project_Soul_Anchor/
@@ -18,17 +17,23 @@ Project_Soul_Anchor/
 # Node.js
 node_modules/
 package-lock.json
+.nuxt/
+.output/
+dist/
 
 # Python
-.venv*/
+.venv/
 __pycache__/
 *.pyc
 
-# Cache
+# Data & Cache
+data/
+*.duckdb
 /cache/
-*.ts
-!cache-server.py
-!toolbox/star-archive/frontend/**/*.ts
+
+# Logs
+logs/
+*.log
 
 # Test files
 test-*.mjs
@@ -36,6 +41,3 @@ test-*.js
 
 # OS
 .DS_Store
-__pycache__/
-toolbox/star-archive/logs/
-!docs/AGENTS.md

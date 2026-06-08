@@ -36,7 +36,7 @@ s-ui (:8444) ──→ 独立运行，与 Web 服务无交集
 
 - **版本**: v2.11.2（静态编译二进制）
 - **安装路径**: `/usr/local/bin/caddy`
-- **配置路径**: `toolbox/star-archive/Caddyfile`
+- **配置路径**: `Caddyfile`
 - **systemd 服务**: `caddy-claw`
 - **数据目录**: `/root/.local/share/caddy/`（证书、ACME 账户）
 
@@ -104,7 +104,7 @@ systemctl status caddy-claw
 systemctl restart caddy-claw
 
 # 验证配置后热重载
-caddy reload --config toolbox/star-archive/Caddyfile
+caddy reload --config Caddyfile
 
 # 查看访问日志
 tail -f logs/caddy-access.log
@@ -127,7 +127,7 @@ curl -s https://rn.guohuasun.com/ | head
 
 1. 检查 backend：`curl http://localhost:8765/api/health`
 2. 检查 frontend：`curl http://localhost:3000/`
-3. 检查 Caddy 反向代理配置：`grep reverse_proxy toolbox/star-archive/Caddyfile`
+3. 检查 Caddy 反向代理配置：`grep reverse_proxy Caddyfile`
 
 ### 6.3 s-ui 与 Caddy 端口冲突
 

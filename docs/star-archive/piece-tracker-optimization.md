@@ -264,11 +264,11 @@ moov scan vs cache (1000 iterations)
 ## 6. 如何运行 Benchmark
 
 ```bash
-cd toolbox/star-archive
-PYTHONPATH=/root/.openclaw/workspace/toolbox/star-archive \
+cd 
+PYTHONPATH=/root/claw-stream/ \
   ./.venv/bin/python backend/bench/bench_piece_tracker.py
 
-PYTHONPATH=/root/.openclaw/workspace/toolbox/star-archive \
+PYTHONPATH=/root/claw-stream/ \
   ./.venv/bin/python backend/bench/bench_moov_scan.py
 ```
 
