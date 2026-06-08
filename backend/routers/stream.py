@@ -71,7 +71,21 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     path, real_size, head_ready, mime = await asyncio.to_thread(find_video_state, hash_str, preferred_path)
     t1 = _time.perf_counter()
     if not path:
-        raise HTTPException(status_code=404, detail="Video not found")
+        # File doesn't exist yet, but torrent is in engine.
+        # Trigger _set_stream_window to fix finished-state deadlock
+        # (truncate + force_recheck), then return 503 for frontend to retry.
+        with engine.lock:
+            info = engine.torrents.get(hash_str)
+        if info:
+            handle = info.get("handle")
+            if handle:
+                await asyncio.to_thread(
+                    engine._set_stream_window, handle, info, 0.0, 0.0, 30
+                )
+        raise HTTPException(
+            status_code=503,
+            detail="Video not ready, download triggered — retry shortly",
+        )
 
     # GC protection: any stream request counts as active use
     await asyncio.to_thread(engine.touch, hash_str)
@@ -83,11 +97,17 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         info["_last_play_time"] = _time.time()
         info["_play_count"] = info.get("_play_count", 0) + 1
 
-    # Recheck only reads disk data to compute hashes; it does not modify
-    # the file. Streaming from already-verified head/tail regions during
-    # recheck is safe — hole detection below catches any missing data.
-    t2 = _time.perf_counter()
-    t3 = _time.perf_counter()
+    # File exists but head not ready (finished-state deadlock).
+    # Trigger _set_stream_window to fix via truncate+force_recheck.
+    if path and not head_ready:
+        with engine.lock:
+            info = engine.torrents.get(hash_str)
+        if info:
+            handle = info.get("handle")
+            if handle:
+                await asyncio.to_thread(
+                    engine._set_stream_window, handle, info, 0.0, 0.0, 30
+                )
 
     total_size = os.path.getsize(path)
     range_hdr = request.headers.get("Range")
@@ -124,7 +144,6 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             "mime": mime,
             "timing_ms": {
                 "find_state": round((t1-t0)*1000, 2),
-                "check_checking": round((t3-t2)*1000, 2),
                 "read_range": round((t5-t4)*1000, 2),
                 "total": round((_time.perf_counter()-t0)*1000, 2),
             },

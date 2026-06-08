@@ -298,7 +298,15 @@ class TorrentEngine:
         settings["upload_rate_limit"] = 0
         settings["checking_mem_usage"] = 1024  # 1GB RAM for faster hash checking
         settings["alert_queue_size"] = 10000  # prevent alert drop under load
+        # CRITICAL: disable mmap storage to avoid finished-state deadlock.
+        # libtorrent 2.0 mmap creates full-size sparse files on add, then
+        # force_recheck reads page-cache zeros and falsely marks pieces
+        # complete. POSIX storage does not have this bug.
+        settings["mmap_file_size_cutoff"] = 0
         self.session.apply_settings(settings)
+        # Verify setting was applied
+        applied = self.session.get_settings().get("mmap_file_size_cutoff")
+        log.info(f"session mmap_file_size_cutoff={applied}")
 
         # hash -> { handle, magnet, added_at, last_access, video_idx, video_path, video_size }
         self.torrents: dict[str, dict[str, Any]] = {}
@@ -584,10 +592,8 @@ class TorrentEngine:
             existing = self.torrents.get(hash_str)
         if existing:
             existing["last_access"] = time.time()
-            # Only re-run _on_metadata if tracker is missing (first time metadata
-            # becomes available after a bare-hash add). Repeated _on_metadata
-            # calls spam logs, overwrite .torrent files, and can race with
-            # bootstrap/recheck state transitions.
+            # Only re-run _on_metadata if tracker is missing (first time
+            # metadata becomes available after a bare-hash add).
             if existing["handle"].status().has_metadata and not existing.get("tracker"):
                 self._on_metadata(existing["handle"])
             return existing
@@ -609,6 +615,13 @@ class TorrentEngine:
         # Magnet URI defaults to paused; resume so it actually connects to
         # trackers / DHT and downloads metadata.
         params.flags &= ~lt.torrent_flags.paused
+        # CRITICAL: default file priority to 0 (don't download) to prevent
+        # libtorrent from creating full-size sparse files on metadata load.
+        # We only enable the video file in _on_metadata after verifying disk.
+        params.flags |= lt.torrent_flags.default_dont_download
+        # Explicitly clear have_pieces to prevent libtorrent session from
+        # restoring stale piece state (causes finished-state deadlock).
+        params.have_pieces = []
 
         # Load cached metadata if available (skips peer discovery + metadata download).
         # Skip cache if video file does not exist — using cached metadata when
@@ -702,6 +715,18 @@ class TorrentEngine:
             with self.lock:
                 info = self.torrents.get(hash_str)
             if not info:
+                log.debug(
+                    f"torrent_finished_alert ignored: {hash_str[:12]}... "
+                    f"torrent not in engine (stale alert)"
+                )
+                return
+            # Validate alert handle matches current handle to detect stale alerts
+            current_handle = info["handle"]
+            if h.status().num_pieces != current_handle.status().num_pieces:
+                log.debug(
+                    f"torrent_finished_alert ignored: {hash_str[:12]}... "
+                    f"handle mismatch (stale alert)"
+                )
                 return
             tracker = info.get("tracker")
             # finished state does NOT mean data is actually on disk.
@@ -873,10 +898,15 @@ class TorrentEngine:
                     else:
                         log.warning(
                             f"finished with holes: {hash_str[:12]}... "
-                            f"disk scan shows missing data, will re-download"
+                            f"disk scan shows missing data, triggering readd"
                         )
-                # Do NOT force_recheck — it causes finished-state deadlock.
-                # Let _set_stream_window set urgent priorities instead.
+                        self._readd_torrent(hash_str)
+                        return
+                else:
+                    # No tracker yet — cannot verify disk state.
+                    # Leave ready=False until bootstrap completes.
+                    info["ready"] = False
+                    return
 
         info["ready"] = True
 
@@ -898,24 +928,18 @@ class TorrentEngine:
         # torrent size on add_torrent, then reports finished even though no
         # data was actually written. In finished state libtorrent ignores
         # piece_priority / set_piece_deadline, causing playback deadlock.
-        # Truncate to 1 byte so libtorrent sees incomplete file.
+        # force_recheck() is INEFFECTIVE for mmap storage — recheck reads
+        # page-cache zeros and falsely marks pieces complete. The only reliable
+        # fix is to remove the torrent + delete the sparse file, then re-add.
         status = h.status()
         if status.state == lt.torrent_status.finished:
             tracker = info.get("tracker")
             if tracker and tracker.verified_count() == 0:
-                path = info.get("video_path")
-                if path:
-                    try:
-                        os.makedirs(os.path.dirname(path), exist_ok=True)
-                        with open(path, "wb") as f:
-                            f.write(b"\x01")
-                        h.force_recheck()
-                        log.warning(
-                            f"finished false-positive fixed: {info['hash'][:12]}... "
-                            f"created 1-byte file, forcing recheck"
-                        )
-                    except Exception as e:
-                        log.warning(f"fix finished failed: {info['hash'][:12]}... {e}")
+                log.warning(
+                    f"finished false-positive: {info['hash'][:12]}... "
+                    f"triggering readd to clear stale state"
+                )
+                self._readd_torrent(info["hash"])
                 return False
 
         if not status.has_metadata:
@@ -1231,9 +1255,10 @@ class TorrentEngine:
     def _readd_torrent(self, hash_str: str) -> dict[str, Any] | None:
         """Remove and re-add a torrent to clear libtorrent's stale finished state.
 
-        Preserves files on disk. Restores moov range and play state.
-        CRITICAL: fsync() before re-add so recheck reads actual disk state,
-        not stale page-cache zeros that produce false positives.
+        Uses write_resume_data + cleared pieces instead of deleting .torrent,
+        to preserve metadata while forcing libtorrent to re-evaluate disk state.
+        This avoids the finished-state deadlock where libtorrent restores
+        have_pieces from session cache.
         """
         with self.lock:
             info = self.torrents.get(hash_str)
@@ -1255,34 +1280,13 @@ class TorrentEngine:
             saved["moov_start"] = moov_start
         if moov_end:
             saved["moov_end"] = moov_end
-        path = info.get("video_path")
 
         with self.lock:
             info = self.torrents.pop(hash_str, None)
         if not info:
             return None
 
-        try:
-            # option=0: do NOT delete files
-            self.session.remove_torrent(info["handle"], 0)
-        except Exception as e:
-            log.warning(f"_readd_torrent remove failed: {e}")
-
-        # CRITICAL: delete ALL files including .torrent so libtorrent re-downloads
-        # metadata from peers. Keeping .torrent causes libtorrent to finish
-        # immediately on add (sparse file size matches), creating deadlock loop.
-        save_path = os.path.join(self.cache_dir, hash_str)
-        if os.path.exists(save_path):
-            try:
-                shutil.rmtree(save_path)
-            except Exception as e:
-                log.warning(f"_readd_torrent rmtree failed: {e}")
-
-        # Give libtorrent time to release file descriptors
-        time.sleep(0.3)
-
-        # Rate-limit readd to prevent infinite loops when libtorrent
-        # repeatedly false-positives into finished state.
+        # Rate-limit readd to prevent infinite loops
         now = time.time()
         last_readd = info.get("_last_readd_time", 0)
         if now - last_readd < 60:
@@ -1293,15 +1297,95 @@ class TorrentEngine:
             return None
         saved["_last_readd_time"] = now
 
-        new_info = self.add_torrent(magnet, prefetch=prefetch)
-        if new_info:
-            new_info.update(saved)
-            tracker = new_info.get("tracker")
-            moov_start = saved.get("moov_start")
-            moov_end = saved.get("moov_end")
-            if moov_start and moov_end and tracker:
-                tracker.set_moov_range(moov_start, moov_end)
-            log.info(f"readded torrent: {hash_str[:12]}... to clear finished deadlock")
+        h = info["handle"]
+        ti = h.torrent_file()
+
+        # Get resume data and clear all pieces to force re-download
+        try:
+            rd = h.write_resume_data()
+            if b"pieces" in rd and rd[b"pieces"]:
+                rd[b"pieces"] = b"\x00" * len(rd[b"pieces"])
+                log.info(
+                    f"_readd_torrent: cleared {len(rd[b'pieces'])} pieces "
+                    f"for {hash_str[:12]}..."
+                )
+        except Exception as e:
+            log.warning(f"_readd_torrent write_resume_data failed: {e}")
+            rd = None
+
+        try:
+            self.session.remove_torrent(h, 0)
+        except Exception as e:
+            log.warning(f"_readd_torrent remove failed: {e}")
+
+        # Give libtorrent time to fully remove torrent
+        time.sleep(1.0)
+        self.session.pop_alerts()
+
+        # Re-add with cleared resume data + metadata
+        save_path = os.path.join(self.cache_dir, hash_str)
+        os.makedirs(save_path, exist_ok=True)
+
+        params = lt.parse_magnet_uri(magnet)
+        params.save_path = save_path
+        params.flags &= ~lt.torrent_flags.auto_managed
+        params.flags &= ~lt.torrent_flags.seed_mode
+        params.flags &= ~lt.torrent_flags.paused
+        params.flags |= lt.torrent_flags.default_dont_download
+        params.have_pieces = []
+
+        # Load metadata from cached .torrent if available
+        torrent_path = os.path.join(save_path, f"{hash_str}.torrent")
+        if os.path.exists(torrent_path):
+            try:
+                cached_ti = lt.torrent_info(torrent_path)
+                if str(cached_ti.info_hash()) == hash_str:
+                    params.ti = cached_ti
+            except Exception as e:
+                log.warning(f"_readd_torrent metadata load failed: {e}")
+
+        if rd:
+            try:
+                resume_params = lt.read_resume_data(lt.bencode(rd))
+                # Merge resume params (except ti) into params
+                for key in ("download_limit", "upload_limit", "max_connections",
+                            "max_uploads", "trackers", "tracker_tiers"):
+                    if hasattr(resume_params, key) and getattr(resume_params, key):
+                        setattr(params, key, getattr(resume_params, key))
+            except Exception as e:
+                log.warning(f"_readd_torrent read_resume_data failed: {e}")
+
+        new_handle = self.session.add_torrent(params)
+
+        new_info = {
+            "handle": new_handle,
+            "magnet": magnet,
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": None,
+            "video_path": None,
+            "video_size": 0,
+            "ready": False,
+            "prefetch": prefetch,
+            "work_code": _extract_work_code(magnet) or None,
+            "_last_play_time": 0,
+            "_play_count": 0,
+            "progress": 0.0,
+        }
+        with self.lock:
+            self.torrents[hash_str] = new_info
+
+        # If metadata was loaded, run _on_metadata immediately
+        if params.ti is not None:
+            self._on_metadata(new_handle)
+
+        new_info.update(saved)
+        tracker = new_info.get("tracker")
+        if moov_start and moov_end and tracker:
+            tracker.set_moov_range(moov_start, moov_end)
+
+        log.info(f"readded torrent: {hash_str[:12]}... to clear finished deadlock")
         return new_info
 
     def remove_torrent(self, hash_str: str) -> bool:

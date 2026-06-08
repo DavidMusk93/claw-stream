@@ -44,6 +44,33 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     start_piece = max(0, (file_offset + start_byte) // piece_length - 2)
     end_piece = min(num_pieces - 1, (file_offset + end_byte) // piece_length + 2)
 
+    status = h.status()
+    state = status.state
+
+    # CRITICAL: finished-state deadlock — libtorrent 2.0 creates a sparse file
+    # of full torrent size, then reports finished even though no data was
+    # written. In finished state libtorrent ignores piece_priority and
+    # set_piece_deadline, so nudging here is useless. Trigger readd to clear
+    # stale state (uses write_resume_data with cleared pieces).
+    if state == lt.torrent_status.finished:
+        tracker = info.get("tracker")
+        if tracker and tracker.verified_count() == 0:
+            log.warning(
+                f"finished false-positive (seek): {hash_str[:12]}... "
+                f"triggering readd to clear stale state"
+            )
+            engine._readd_torrent(hash_str)
+            return
+
+    # Skip during checking — piece_priority/deadline calls are ignored or
+    # cause undefined behavior while libtorrent is verifying hashes.
+    if state == lt.torrent_status.checking_files:
+        log.debug(
+            "seek_priority: checking_files, skipping",
+            extra={"hash": hash_str[:12]},
+        )
+        return
+
     # Always directly nudge libtorrent for the requested pieces.
     # Tracker's VERIFIED state can be stale in finished-state deadlock
     # (libtorrent reports have_piece=true but filesystem shows holes).
