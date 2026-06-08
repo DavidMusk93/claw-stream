@@ -1,8 +1,26 @@
-# 进程生命周期管理 — Star Archive
+# Process Lifecycle Management
 
-## 1. 服务架构
+---
 
-Star Archive 前后端均为 **systemd 托管的长期运行服务**，通过 Caddy 反向代理对外暴露 HTTPS。
+## Table of Contents
+
+- [Service Architecture](#service-architecture)
+- [Restart Rules After Code Changes](#restart-rules-after-code-changes)
+  - [Frontend](#frontend)
+  - [Backend](#backend)
+  - [Caddy](#caddy)
+- [systemd Service Configuration](#systemd-service-configuration)
+  - [star-archive-backend.service](#star-archive-backendservice)
+  - [star-archive-frontend.service](#star-archive-frontendservice)
+- [Common Operations Commands](#common-operations-commands)
+- [Startup Order Dependencies](#startup-order-dependencies)
+- [Log File Locations](#log-file-locations)
+
+---
+
+## Service Architecture
+
+Both frontend and backend are **long-running services managed by systemd**, exposed via Caddy reverse proxy over HTTPS.
 
 ```
 ┌─────────────┐     ┌─────────────────────────────┐     ┌──────────────┐
@@ -15,66 +33,66 @@ Star Archive 前后端均为 **systemd 托管的长期运行服务**，通过 Ca
                                                             └──────────────┘
 ```
 
-| 服务 | 端口 | 进程 | systemd unit | 说明 |
-|------|------|------|--------------|------|
-| Frontend | 3000 | `node .output/server/index.mjs` | `star-archive-frontend.service` | Nuxt 3 SSR 生产构建 |
+| Service | Port | Process | systemd Unit | Description |
+|---------|------|---------|--------------|-------------|
+| Frontend | 3000 | `node .output/server/index.mjs` | `star-archive-frontend.service` | Nuxt 3 SSR production build |
 | Backend | 8765 | `uvicorn backend.main:app` | `star-archive-backend.service` | FastAPI + libtorrent |
-| Caddy | 443 | `caddy` | `caddy-claw.service` | HTTPS 反向代理 |
+| Caddy | 443 | `caddy` | `caddy-claw.service` | HTTPS reverse proxy |
 
 ---
 
-## 2. 修改代码后的重启规则
+## Restart Rules After Code Changes
 
 ### Frontend
 
-**任何 `frontend/` 目录下的源码修改（Vue/TS/CSS）都必须重新构建并重启服务。**
+**Any source change under `frontend/` (Vue / TS / CSS) requires a rebuild and service restart.**
 
 ```bash
-cd frontend
+cd /root/claw-stream/frontend
 npm run build
 systemctl restart star-archive-frontend
 ```
 
-> Nuxt 3 生产模式运行的是 `.output/server/index.mjs`，代码热更新不生效。
+> Nuxt 3 production mode runs `.output/server/index.mjs`; hot reload does not apply.
 
 ### Backend
 
-**任何 `backend/**/*.py` 修改后必须重启后端服务。**
+**Any change under `backend/**/*.py` requires a backend service restart.**
 
 ```bash
 systemctl restart star-archive-backend
 ```
 
-> 不要手动 `pkill` + `nohup &` 启动。所有进程由 systemd 托管。
+> Do not manually `pkill` + `nohup &`. All processes are managed by systemd.
 
 ### Caddy
 
-**`Caddyfile` 或 TLS 配置变更后需要重载或重启。**
+**Changes to `Caddyfile` or TLS configuration require a reload or restart.**
 
 ```bash
 systemctl reload caddy-claw
-# 或
+# or
 systemctl restart caddy-claw
 ```
 
 ---
 
-## 3. systemd 服务配置
+## systemd Service Configuration
 
 ### star-archive-backend.service
 
 ```ini
 [Unit]
-Description=Star Archive Backend (FastAPI + BitTorrent)
+Description=claw-stream Backend (FastAPI + BitTorrent)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/claw-stream/
-Environment=PYTHONPATH=/root/claw-stream/
+WorkingDirectory=/root/claw-stream
+Environment=PYTHONPATH=/root/claw-stream
 ExecStart=/root/claw-stream/.venv/bin/python \
           -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --log-level info
-Restart=always
+Restart=on-failure
 RestartSec=5s
 User=root
 
@@ -86,7 +104,7 @@ WantedBy=multi-user.target
 
 ```ini
 [Unit]
-Description=Star Archive Frontend (Nuxt production)
+Description=claw-stream Frontend (Nuxt production)
 After=network.target star-archive-backend.service
 Wants=star-archive-backend.service
 
@@ -106,45 +124,47 @@ WantedBy=multi-user.target
 
 ---
 
-## 4. 常用运维命令
+## Common Operations Commands
 
 ```bash
-# 查看状态
+# View status
 systemctl status star-archive-backend
 systemctl status star-archive-frontend
 
-# 查看日志
+# View logs
 journalctl -u star-archive-backend -f
 journalctl -u star-archive-frontend -f
 
-# 重启
+# Restart
 systemctl restart star-archive-backend
 systemctl restart star-archive-frontend
 
-# 查看端口占用
+# Check port usage
 ss -tlnp | grep -E '3000|8765|443'
 ```
 
 ---
 
-## 5. 启动顺序依赖
+## Startup Order Dependencies
 
 ```
 network.target
     └─ star-archive-backend.service
          └─ star-archive-frontend.service (After + Wants)
-              └─ caddy-claw.service (反向代理到 3000/8765)
+              └─ caddy-claw.service (reverse proxy to 3000/8765)
 ```
 
 ---
 
-## 6. 日志文件位置
+## Log File Locations
 
-| 日志 | 路径 | 说明 |
-|------|------|------|
-| 后端访问日志 | `logs/backend-access.log` | AccessLogMiddleware 输出 |
-| Torrent 引擎 | `logs/torrent-engine.log` | libtorrent 状态与 alert |
-| 视频流 | `logs/video-stream.log` | Range 请求与 hole 检测 |
-| Piece 追踪 | `logs/piece-tracker.log` | PieceStateTracker 状态变化 |
-| 前端 | `logs/frontend.log` | Nuxt 运行时日志 |
-| systemd | `journalctl` | 进程启动/崩溃/重启记录 |
+| Log | Path | Description |
+|-----|------|-------------|
+| Backend access log | `logs/backend-access.log` | AccessLogMiddleware output |
+| Torrent engine | `logs/torrent-engine.log` | libtorrent status and alerts |
+| Video stream | `logs/video-stream.log` | Range requests and hole detection |
+| Piece tracker | `logs/piece-tracker.log` | PieceStateTracker state changes |
+| Frontend | `logs/frontend.log` | Nuxt runtime logs |
+| systemd | `journalctl` | Process start / crash / restart records |
+
+See [`tracing-logging.md`](tracing-logging.md) for log query examples and troubleshooting.

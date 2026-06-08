@@ -1,17 +1,17 @@
-# HTTPS 架构与维护指南
+# HTTPS Architecture and Maintenance Guide
 
-## 1. 当前架构
+## 1. Architecture
 
 ```
-用户浏览器
+User Browser
      │
      │ HTTPS :443
      v
 ┌─────────────────────────────┐
 │  Caddy (reverse proxy)      │
-│  - 自动 TLS (Let's Encrypt) │
-│  - 证书自动续期             │
-│  - 访问日志                 │
+│  - Auto TLS (Let's Encrypt) │
+│  - Certificate auto-renewal │
+│  - Access logs              │
 └─────────────────────────────┘
      │
      │  HTTP :3000 / :8765
@@ -20,33 +20,29 @@
 │  Frontend    │    │  Backend     │
 │  (:3000)     │    │  (:8765)     │
 └──────────────┘    └──────────────┘
-
-s-ui (:8444) ──→ 独立运行，与 Web 服务无交集
 ```
-
-**历史：为什么曾经走 8443？**
-
-最初 443 端口被 `s-ui`（代理面板）占用，Caddy 无法监听 443，因此 HTTPS 临时部署在 **8443**。后续已将 s-ui 的 443 入站迁移到 **8444**，Caddy 接管 443。
 
 ---
 
-## 2. 组件说明
+## 2. Components
 
 ### 2.1 Caddy
 
-- **版本**: v2.11.2（静态编译二进制）
-- **安装路径**: `/usr/local/bin/caddy`
-- **配置路径**: `Caddyfile`
-- **systemd 服务**: `caddy-claw`
-- **数据目录**: `/root/.local/share/caddy/`（证书、ACME 账户）
+| Property | Value |
+|----------|-------|
+| Version | v2.11.2 (static binary) |
+| Binary | `/usr/local/bin/caddy` |
+| Config | `/root/claw-stream/Caddyfile` |
+| systemd unit | `caddy-claw` |
+| Data directory | `/root/.local/share/caddy/` (certificates, ACME account) |
 
-**Caddyfile 内容：**
+**Caddyfile:**
 
-```
+```caddyfile
 rn.guohuasun.com {
     reverse_proxy localhost:3000
     log {
-        output file logs/caddy-access.log {
+        output file /root/claw-stream/logs/caddy-access.log {
             roll_size 10MB
             roll_keep 5
         }
@@ -58,33 +54,33 @@ rn.guohuasun.com {
 }
 ```
 
-- `rn.guohuasun.com` 默认监听 443，提供 HTTPS
-- `:80` 仅用于 Let's Encrypt HTTP-01 挑战验证（必须保持开放）
+- `rn.guohuasun.com` listens on 443 and serves HTTPS by default.
+- `:80` is required for Let's Encrypt HTTP-01 challenge validation and must remain open.
 
 ---
 
-## 3. 端口占用表
+## 3. Port Allocation
 
-| 端口 | 协议 | 服务 | 外部可访问 | 说明 |
-|------|------|------|-----------|------|
-| 80 | TCP | Caddy | ✅ | Let's Encrypt 验证，不可关闭 |
-| 443 | TCP | Caddy | ✅ | **HTTPS 入口** |
-| 8444 | TCP | s-ui | ✅ | 代理服务（原 443，已迁移） |
-| 8765 | TCP | FastAPI backend | ❌ | 仅 localhost + Caddy |
-| 3000 | TCP | Nuxt frontend | ❌ | 仅 localhost + Caddy |
+| Port | Protocol | Service | Externally Accessible | Notes |
+|------|----------|---------|----------------------|-------|
+| 80 | TCP | Caddy | Yes | Let's Encrypt validation; do not block |
+| 443 | TCP | Caddy | Yes | **HTTPS entrypoint** |
+| 8765 | TCP | FastAPI backend | No | localhost + Caddy only |
+| 3000 | TCP | Nuxt frontend | No | localhost + Caddy only |
 
 ---
 
-## 4. 证书管理
+## 4. Certificate Management
 
-### 4.1 自动申请与续期
+### 4.1 Auto-provisioning and Renewal
 
-Caddy 内置证书管理，无需手动操作：
-1. **首次启动**: Caddy 自动向 Let's Encrypt 申请证书
-2. **续期**: Caddy 在证书到期前自动续期（默认 60 天周期内检查）
-3. **存储**: `/root/.local/share/caddy/certificates/`
+Caddy manages certificates automatically:
 
-### 4.2 强制重新申请
+1. **First start**: Caddy requests a certificate from Let's Encrypt.
+2. **Renewal**: Caddy renews the certificate before expiry (checks within the default 60-day window).
+3. **Storage**: `/root/.local/share/caddy/certificates/`
+
+### 4.2 Force Re-issue
 
 ```bash
 systemctl stop caddy-claw
@@ -94,46 +90,39 @@ systemctl start caddy-claw
 
 ---
 
-## 5. 日常维护
+## 5. Operations
 
 ```bash
-# 查看服务状态
+# Check service status
 systemctl status caddy-claw
 
-# 重启
+# Restart
 systemctl restart caddy-claw
 
-# 验证配置后热重载
-caddy reload --config Caddyfile
+# Validate config and hot-reload
+caddy reload --config /root/claw-stream/Caddyfile
 
-# 查看访问日志
-tail -f logs/caddy-access.log
+# View access logs
+tail -f /root/claw-stream/logs/caddy-access.log
 
-# 测试 HTTPS
+# Test HTTPS
 curl -s https://rn.guohuasun.com/ | head
 ```
 
 ---
 
-## 6. 故障排查
+## 6. Troubleshooting
 
-### 6.1 浏览器报证书错误
+### 6.1 Browser Certificate Error
 
-1. 检查证书是否过期：`openssl s_client -connect rn.guohuasun.com:443`
-2. 检查 Caddy 是否运行：`systemctl status caddy-claw`
-3. 检查 80 端口是否开放：`curl -I http://rn.guohuasun.com/.well-known/acme-challenge/test`
+1. Check certificate expiry: `openssl s_client -connect rn.guohuasun.com:443`
+2. Check Caddy status: `systemctl status caddy-claw`
+3. Verify port 80 is open: `curl -I http://rn.guohuasun.com/.well-known/acme-challenge/test`
 
-### 6.2 HTTPS 通但页面空白/404
+### 6.2 HTTPS Works but Page is Blank / 404
 
-1. 检查 backend：`curl http://localhost:8765/api/health`
-2. 检查 frontend：`curl http://localhost:3000/`
-3. 检查 Caddy 反向代理配置：`grep reverse_proxy Caddyfile`
+1. Check backend: `curl http://localhost:8765/api/health`
+2. Check frontend: `curl http://localhost:3000/`
+3. Check reverse proxy config: `grep reverse_proxy /root/claw-stream/Caddyfile`
 
-### 6.3 s-ui 与 Caddy 端口冲突
-
-```bash
-ss -tlnp | grep :443
-lsof -i :443
-```
-
-解决：将 s-ui 的 443 入站迁移到 8444，然后重启 Caddy。
+See also [Tracing and Logging](tracing-logging.md) for log analysis.

@@ -1,14 +1,31 @@
-# Cache 模块架构文档
+# Cache Module Architecture
 
-## 第一性原理
+## Table of Contents
 
-> **流畅播放 = 数据在需要时可用**
-
-一切设计围绕这个唯一目标展开。缓存不是"存得越多越好"，而是"在播放器请求的那一刻，目标数据必须已经躺在磁盘上"。
+1. [First Principles](#first-principles)
+2. [Architecture Overview](#architecture-overview)
+3. [Core Components](#core-components)
+   - [3.1 TorrentEngine](#31-torrentengine)
+   - [3.2 PieceStateTracker](#32-piecestatetracker)
+   - [3.3 VideoStream](#33-videostream)
+   - [3.4 Cache Router](#34-cache-router)
+4. [Key Data Flows](#key-data-flows)
+   - [4.1 Playback Flow](#41-playback-flow)
+   - [4.2 Cache Eviction Flow](#42-cache-eviction-flow)
+5. [Fixed Bugs](#fixed-bugs)
+6. [Best Practices](#best-practices)
 
 ---
 
-## 架构概览
+## First Principles
+
+> **Smooth playback = data is available when needed.**
+
+Every design decision serves this single goal. Cache is not "store as much as possible"; it is "the target data must already be on disk when the player requests it."
+
+---
+
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -25,8 +42,8 @@
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │                 TorrentEngine                         │   │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐ │   │
-│  │  │ libtorrent│  │ sparse │  │ seek   │  │ GC     │ │   │
-│  │  │ session  │  │ file   │  │ priority│  │ (orphan│ │   │
+│  │  │libtorrent│  │ sparse  │  │  seek   │  │   GC    │ │   │
+│  │  │ session │  │  file   │  │priority │  │(orphan) │ │   │
 │  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘ │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                               │
@@ -40,140 +57,151 @@
 
 ---
 
-## 核心组件
+## Core Components
 
-### 1. TorrentEngine
+### 3.1 TorrentEngine
 
-职责：libtorrent 会话生命周期、缓存管理、分级淘汰。
+Responsibility: libtorrent session lifecycle, cache management, tiered eviction.
 
-#### 1.1 缓存分级（L1/L2/L3/L4）
+#### 3.1.1 Cache Tiers (L1/L2/L3/L4)
 
-| Tier | 条件 | 保护级别 | 淘汰策略 |
-|---|---|---|---|
-| **L1 (hot)** | 24h 内播放过 | 最高 | soft limit 不驱逐；hard limit 才驱逐 |
-| **L2 (warm)** | 100% 完成 + 7d 内访问 | 高 | 不驱逐 |
-| **L3 (seed)** | 100% 完成 + 冷数据 (>7d) | 中 | 先 punch hole（L3→L4），再驱逐 |
-| **L4 (fragment)** | 未完成 + 冷数据 | 低 | 直接驱逐 |
+| Tier | Condition | Protection Level | Eviction Strategy |
+|------|-----------|------------------|-------------------|
+| **L1 (hot)** | Played within 24h | Highest | Soft limit does not evict; hard limit may evict |
+| **L2 (warm)** | 100% complete + accessed within 7d | High | Not evicted at soft limit |
+| **L3 (seed)** | 100% complete + cold (>7d) | Medium | Punch hole first (L3→L4), then evict |
+| **L4 (fragment)** | Incomplete + cold | Low | Evict directly |
 
-**like 保护**：liked 作品在 scoring 中 +5000 分，相当于一个独立保护层级。
+**Like protection**: Liked works receive +5000 in scoring, effectively creating an independent protection layer.
 
-#### 1.2 滑动窗口下载策略
+#### 3.1.2 Sliding Window Download Strategy
 
-- **prefetch**：head 2%（moov 优先）
-- **play**：moov + 极小窗口（严格 head only）
-- **playing**：当前位置 ±30 piece（约 2-4 分钟缓冲）
-- **seek**：目标位置 ±15 piece
+| Mode | Window | Description |
+|------|--------|-------------|
+| **Prefetch** | First 2% | Moov prioritized |
+| **Play** | Moov only | Strict head-only; no window until progress reported |
+| **Playing** | Current position ±30 pieces | ~2–4 minutes buffer |
+| **Seek** | Target position ±15 pieces | Fast seek response |
 
-已下载 piece 保留（priority=1），不在窗口内的未下载 piece 设为 0。避免"遍地开花"。
+Downloaded pieces are retained (priority=1); undownloaded pieces outside the window are set to 0. This prevents "blooming everywhere."
 
-#### 1.3 稀疏文件 + Hole 检测
+#### 3.1.3 Sparse File + Hole Detection
 
-- Linux sparse file：未下载区域不占磁盘
-- `SEEK_HOLE` / `SEEK_DATA`：O(1) 检测 hole
-- `FALLOC_FL_PUNCH_HOLE`：L3→L4 降级时释放中间 piece 磁盘空间
+- Linux sparse file: undownloaded regions occupy no disk space
+- `SEEK_HOLE` / `SEEK_DATA`: O(1) hole detection
+- `FALLOC_FL_PUNCH_HOLE`: L3→L4 downgrade releases middle-piece disk space
 
----
+#### 3.1.4 Cache Preload
 
-### 2. PieceStateTracker
-
-3×int bitmap 状态机：
-- `VERIFIED`：SEEK_HOLE 确认有数据，或 libtorrent piece_finished_alert
-- `DOWNLOADING`：priority/deadline 已设置，等待 peers
-- `CORRUPT`：hash failed 或读取到零数据
-
-O(1) `head_ready()`：预计算 moov mask + POPCNT。
+On startup, `TorrentEngine._preload_cached_torrents()` scans `cache/torrent/` and auto-loads all existing `.torrent` files. This skips peer discovery and metadata download on first play.
 
 ---
 
-### 3. VideoStream
+### 3.2 PieceStateTracker
 
-- **mmap 读取**：避免用户态拷贝
-- **piece 级 hole 检测**：`_detect_hole_offset` 按 piece 边界切分 chunk
-- **partial return**：hole 在中间时返回 hole 前的有效数据，播放器可继续解码
-- **corrupt 自修复**：verified piece 读零 → 标记 corrupt + trigger re-download
+3×int bitmap state machine:
 
----
+- `VERIFIED`: Confirmed by `SEEK_HOLE` or `libtorrent piece_finished_alert`
+- `DOWNLOADING`: Priority/deadline set, waiting for peers
+- `CORRUPT`: Hash failed or zero data read
 
-### 4. Cache Router
+O(1) `head_ready()`: Pre-computed moov mask + POPCNT.
 
-- `GET /api/cache`：列出所有有数据的缓存项
-- `GET /api/cache/metrics`：统计（completed / downloading / used / max）
-- `POST /api/cache/gc-orphans`：清理磁盘存在但 DB 无记录的孤儿 torrent
-- `DELETE /api/cache/{hash}`：手动删除
+See [piece-tracker.md](piece-tracker.md) for the full specification.
 
 ---
 
-## 关键数据流
+### 3.3 VideoStream
 
-### 播放流程
+- **mmap read**: Avoids userspace copy
+- **Piece-level hole detection**: `_detect_hole_offset` splits chunks at piece boundaries
+- **Partial return**: If a hole is mid-chunk, return valid data before the hole so the player can keep decoding
+- **Corrupt self-healing**: Verified piece reads zero → mark corrupt + trigger re-download
+
+See [architecture.md](architecture.md) §4.2 for the read flow.
+
+---
+
+### 3.4 Cache Router
+
+- `GET /api/cache`: List all cache items with actual data
+- `GET /api/cache/metrics`: Statistics (completed / downloading / used / max)
+- `POST /api/cache/gc-orphans`: Clean up disk orphans not in the database
+- `DELETE /api/cache/{hash}`: Manual deletion
+
+---
+
+## Key Data Flows
+
+### 4.1 Playback Flow
 
 ```
-1. 前端点击 play
-   → POST /torrent/add（如果尚未加载）
-   → GET  /api/check/{hash}（轮询 head_ready）
+1. Frontend clicks play
+   → POST /torrent/add (if not yet loaded)
+   → GET  /api/check/{hash} (poll head_ready)
 
 2. head_ready = true
-   → GET /stream/{hash}（Range 请求）
-   → stream_router 调用 read_video_range
-   → seek_priority 设置 urgent piece
-   → _read_once 通过 mmap 读取
-   → _detect_hole_offset 检测零数据
-   → 返回 206 Partial Content
+   → GET /stream/{hash} (Range request)
+   → stream_router calls read_video_range
+   → seek_priority sets urgent pieces
+   → _read_once reads via mmap
+   → _detect_hole_offset checks for zero data
+   → Returns 206 Partial Content
 
-3. 播放器持续请求
-   → update_play_progress 滑动窗口 ±30 piece
-   → libtorrent 自动下载窗口内 piece
+3. Player keeps requesting
+   → update_play_progress slides window ±30 pieces
+   → libtorrent downloads pieces inside the window
 ```
 
-### 缓存淘汰流程
+### 4.2 Cache Eviction Flow
 
 ```
-1. add_torrent 触发 _enforce_cache_limit
-2. 如果 used > soft_limit (95%)
-   → 构建候选列表（排除 hot + liked）
-   → 按 _cache_score 排序（最低分优先）
-   → L3 → punch hole（保留 head+tail）
-   → L2/L4 → remove_torrent（删除文件）
-3. _periodic_clean 每 60s 重复检查
+1. add_torrent triggers _enforce_cache_limit
+2. If used > soft_limit (95%)
+   → Build candidate list (exclude hot + liked)
+   → Sort by _cache_score (lowest first)
+   → L3 → punch hole (keep head+tail)
+   → L2/L4 → remove_torrent (delete files)
+3. _periodic_clean repeats every 60s
 ```
 
 ---
 
-## 当前 Bug 与修复
+## Fixed Bugs
 
-### Bug 1：_enforce_cache_limit 只驱逐一个 torrent
+### Bug 1: `_enforce_cache_limit` evicted only one torrent per cycle
 
-**症状**：缓存远超 soft limit 时，一次只驱逐一个，需要多次 60s 周期才能降到限制内。
+**Symptom**: Cache far exceeded soft limit, but only one torrent was evicted per 60s cycle.
 
-**根因**：设计为"每周期一个"，但未考虑批量添加场景。
+**Root cause**: Designed as "one per cycle," but batch-add scenarios were not considered.
 
-**修复**：循环驱逐，直到缓存降到 soft limit 以下。
+**Fix**: Loop eviction until cache drops below soft limit.
 
-### Bug 2：_cleanup_orphaned 只在启动时执行
+### Bug 2: `_cleanup_orphaned` only ran at startup
 
-**症状**：运行过程中 `_readd_torrent` 或手动删除后，旧缓存目录残留。
+**Symptom**: After `_readd_torrent` or manual deletion during runtime, old cache directories remained.
 
-**修复**：加入 `_periodic_clean`，每 60s 执行一次。
+**Fix**: Integrated into `_periodic_clean`, executed every 60s.
 
-### Bug 3：remove_torrent sleep 0.5s 阻塞线程
+### Bug 3: `remove_torrent` blocked thread for 0.5s
 
-**症状**：线程池中的线程被 sleep 0.5s，降低并发效率。
+**Symptom**: Thread-pool workers were blocked by `sleep 0.5s`, reducing concurrency.
 
-**修复**：缩短到 0.1s，或改为轮询检查文件是否可删除。
+**Fix**: Reduced to 0.1s with retry loop.
 
-### Bug 4：hot 但未 liked 的 torrent 可被驱逐
+### Bug 4: Hot torrents without like could be evicted
 
-**症状**：24h 内播放过但未 like 的作品，在 soft limit 时可能被驱逐。
+**Symptom**: Torrents played within 24h but not liked could be evicted at soft limit.
 
-**修复**：soft limit 时保护所有 hot torrent（无论是否 liked）。liked 只影响 warm/seed 的 scoring。
+**Fix**: Soft limit protects all hot torrents (regardless of like). Like only affects warm/seed scoring.
 
 ---
 
-## 最佳实践
+## Best Practices
 
-1. **缓存大小 = 磁盘 60%**：留 40% 给系统和其他服务，避免 IO 竞争导致播放卡顿。
-2. **优先 moov**：没有 moov 的 MP4 无法播放，moov 必须在任何其他数据之前下载。
-3. **保留已下载 piece**：窗口滑动时，旧窗口的已下载 piece 设为 priority=1（保留），不丢弃。避免反复重新下载。
-4. **punch hole 而非全删**：L3 降级时只删除中间 piece，保留 head+tail。用户重新播放时不需要重新下载头部。
-5. **hole 绝不返回播放器**：stream 层检测到零数据时返回 416 或等待，绝不把零数据发给解码器。
-6. **一个改动一个 commit**：缓存逻辑敏感，每次只改一处，便于回滚。
+1. **Cache size = 60% of disk**: Leave 40% for the system and other services to avoid IO contention causing playback stutter.
+2. **Moov first**: MP4 cannot play without the moov atom. Moov must download before any other data.
+3. **Retain downloaded pieces**: When the window slides, old downloaded pieces keep priority=1. Do not discard them to avoid repeated downloads.
+4. **Punch hole, do not delete**: L3 downgrade only removes middle pieces, keeping head+tail. Users re-playing do not need to re-download the head.
+5. **Never return holes to the player**: The stream layer returns 416 or waits when zero data is detected. Zero data never reaches the decoder.
+6. **One change, one commit**: Cache logic is sensitive. Change one thing at a time for easy rollback.

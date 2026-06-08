@@ -1,22 +1,43 @@
-# Star Archive — 系统架构
+# claw-stream System Architecture
 
-> 适用项目：``
-> 后端版本：FastAPI + libtorrent 2.0.11
-> 核心目标：按需下载、分级缓存、无缝播放
+> Project: `claw-stream`  
+> Backend: FastAPI + libtorrent 2.0.11  
+> Goal: On-demand download, tiered cache, seamless playback.
 
 ---
 
-## 1. 服务架构
+## Table of Contents
+
+1. [Service Architecture](#1-service-architecture)
+2. [Playback Flow](#2-playback-flow)
+   - [2.1 Full Interaction](#21-full-interaction)
+   - [2.2 Engine State Machine](#22-engine-state-machine)
+   - [2.3 Prefetch vs. Play Mode](#23-prefetch-vs-play-mode)
+3. [Key Subsystems](#3-key-subsystems)
+   - [3.1 PieceStateTracker](#31-piecestatetracker)
+   - [3.2 Bootstrap-first Verification](#32-bootstrap-first-verification)
+   - [3.3 Tiered Cache](#33-tiered-cache)
+   - [3.4 Cache Preload](#34-cache-preload)
+   - [3.5 GC Touch Protection](#35-gc-touch-protection)
+4. [Sparse Files and Hole Detection](#4-sparse-files-and-hole-detection)
+   - [4.1 SEEK_DATA / SEEK_HOLE](#41-seek_data--seek_hole)
+   - [4.2 Stream Read Flow](#42-stream-read-flow)
+5. [Troubleshooting Cheat Sheet](#5-troubleshooting-cheat-sheet)
+6. [Monitoring Endpoints](#6-monitoring-endpoints)
+
+---
+
+## 1. Service Architecture
 
 ```
-用户浏览器
+User Browser
     │
     │ HTTPS :443
     v
 ┌─────────────────────────────────────┐
 │ Caddy (reverse proxy)               │
-│ - 自动 TLS (Let's Encrypt)          │
-│ - 证书自动续期                      │
+│ - Auto TLS (Let's Encrypt)          │
+│ - Auto certificate renewal          │
 └─────────────────────────────────────┘
     │
     ├─ / ────────────────► Nuxt frontend (:3000)
@@ -27,31 +48,31 @@
 
 ---
 
-## 2. 播放流程
+## 2. Playback Flow
 
-### 2.1 完整交互
+### 2.1 Full Interaction
 
 ```
-用户点击播放
+User clicks play
     │
     v
 GET /api/check/<hash>  ──►  check_stream()
-    │                           - find_video_state() 扫描文件
-    │                           - 若 checking_files → head_ready=false
+    │                           - find_video_state() scans file
+    │                           - If checking_files → head_ready=false
     │
     ├─ head_ready = true ──► video.src = /stream/<hash>
-    │                           - stream_video() 读取 Range
-    │                           - seek_priority() 触发 urgent 下载
-    │                           - 返回 206 Partial Content
+    │                           - stream_video() reads Range
+    │                           - seek_priority() triggers urgent download
+    │                           - Returns 206 Partial Content
     │
     └─ head_ready = false ─► POST /torrent/add
-                              - add_torrent() 添加 magnet
-                              - _on_metadata() 设置 play priority
-                              - 轮询 /torrent/status (1s 间隔)
-                              - head_ready 后播放
+                              - add_torrent() adds magnet
+                              - _on_metadata() selects video file
+                              - Polls /torrent/status (1s interval)
+                              - Plays after head_ready
 ```
 
-### 2.2 引擎状态机
+### 2.2 Engine State Machine
 
 ```
 add_torrent(magnet)
@@ -59,44 +80,41 @@ add_torrent(magnet)
     v
 ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
 │ metadata_wait │────►│ checking_files│────►│ downloading   │
-│ (DHT/tracker) │     │ (hash verify) │     │ (priority=7)  │
+│ (DHT/tracker) │     │ (hash verify) │     │ (priority=0)  │
 └───────────────┘     └───────────────┘     └───────────────┘
-       │                                           │
-       │                                           v
-       │                                    head+tail urgent
        │                                           │
        │                                           v
        │                                    bootstrap-first
        │                                    (finished → skip recheck)
        │                                           │
        v                                           v
-metadata_received_alert                    cache warming retry
-       │                                    (every 10s re-apply)
-       v                                           │
-_on_metadata() ◄──────────────────────────────────┘
-- 选 hhd800 视频文件
-- 扫描/缓存 moov 范围
-- 设置 file priority=4
-- _apply_play_priority() → head+tail=7
+metadata_received_alert                    cache preload
+       │                                    (on startup)
+       v
+_on_metadata()
+- Pick hhd800.com HD video file
+- Scan / cache moov range
+- Set file priority=4
+- Strict on-demand: all piece prio=0
 ```
 
-### 2.3 预缓存 vs 播放模式
+### 2.3 Prefetch vs. Play Mode
 
-| | 预缓存 (prefetch) | 播放模式 |
-|---|---|---|
-| 触发 | 页面加载后自动 | 用户点击播放 |
-| 策略 | piece 0~2%: prio=4 | head+tail: prio=7 + deadline=0 |
-| 其余 | prio=0 | prio=0 |
-| 目的 | 播放按钮显示绿色徽章 | moov 就绪即可播放 |
-| 磁盘 | ~100-200MB/部 | ~60MB head + ~60MB tail |
+| Aspect | Prefetch | Play Mode |
+|--------|----------|-----------|
+| Trigger | Auto after page load | User clicks play |
+| Strategy | First 2% pieces: prio=4 | Moov urgent (prio=7), others=0 |
+| Rest | prio=0 | prio=0 |
+| Goal | Green badge on play button | Moov ready → instant playback |
+| Disk | ~100–200 MB per title | ~60 MB head (moov) |
 
 ---
 
-## 3. 关键子系统
+## 3. Key Subsystems
 
-### 3.1 PieceStateTracker — 位图状态机
+### 3.1 PieceStateTracker
 
-3 个 Python `int` bitmap 编码 4 个状态：
+Three Python `int` bitmaps encode four states:
 
 ```python
 _verified    = 0  # bit p = 1 → VERIFIED
@@ -105,115 +123,118 @@ _downloading = 0  # bit p = 1 → DOWNLOADING
 # all 0 → NOT_DOWNLOADED
 ```
 
-- `head_ready()`: `_moov_vc == _moov_pc` → O(1) 整数比较
+- `head_ready()`: `_moov_vc == _moov_pc` → O(1) integer comparison
 - `verified_count()`: `_verified.bit_count()` → O(1) POPCNT
-- `request_pieces()`: 位掩码过滤 + 批量 `prioritize_pieces()`
+- `request_pieces()`: Bitmask filtering + batch `prioritize_pieces()`
 
-详见 `piece-tracker.md`。
+See [piece-tracker.md](piece-tracker.md) for details.
 
-### 3.2 Bootstrap-first 验证
+### 3.2 Bootstrap-first Verification
 
-finished torrent → `SEEK_HOLE` lseek 扫描 → 若 `head_ready=True` → 跳过 `force_recheck()`
+For finished torrents, `SEEK_HOLE` lseek scan verifies disk state. If `head_ready=True`, skip `force_recheck()`.
 
-**之前**: 无条件 recheck → 5-15 分钟 blocking
-**之后**: 数据完好时秒 ready，只有缺失才回退 recheck
+**Before**: Unconditional recheck → 5–15 min blocking.  
+**After**: Data intact → ready in seconds; only missing data falls back to recheck.
 
-详见 `bootstrap-first.md`。
+See [bootstrap-first.md](bootstrap-first.md).
 
-### 3.3 分级缓存 (Tiered Cache)
+### 3.3 Tiered Cache
 
 ```
-L1 hot:      24h 内播放过 → 永不淘汰
-L2 warm:     100% 完成 + 7 天内访问 → 高优先级保留
-L3 seed:     100% 完成 + 冷存 → 可 punch hole 降级
-L4 fragment: 未完成 + 冷存 → 优先淘汰
+L1 hot:      Played within 24h  → never evict at soft limit
+L2 warm:     100% complete + accessed within 7d → high retention
+L3 seed:     100% complete + cold (>7d) → punch hole eligible
+L4 fragment: Incomplete + cold → evict first
 ```
 
-淘汰决策用 `_cache_score()` 替代纯 LRU：
+Eviction uses `_cache_score()` instead of pure LRU:
+
+```python
+score = (play_bonus + completion) / size_gb * heat_decay + play_bonus
 ```
-score = (play_bonus + completion) / size_gb × heat_decay + play_bonus
-```
 
-详见 `tiered-cache.md`。
+See [tiered-cache.md](tiered-cache.md).
 
-### 3.4 Cache-warming 重试
+### 3.4 Cache Preload
 
-`get_status()` 每秒被前端 poll。若 `head_ready=False` 且超过 10 秒未重试：
-- 自动重新 `_apply_play_priority()`
-- 防止 peer 断线后 priority 失效
+On startup, `TorrentEngine` scans `cache/torrent/` and auto-loads all cached `.torrent` files via `add_torrent()`. This eliminates the peer-discovery wait on first play.
 
-### 3.5 GC touch 保护
+### 3.5 GC Touch Protection
 
-`/stream/{hash}` 和 `/api/check/{hash}` 每次调用都会 `engine.touch(hash_str)`：
-- 更新 `last_access`
-- 标记 `_last_play_time` 和 `_play_count`
+`/stream/{hash}` and `/api/check/{hash}` call `engine.touch(hash_str)` on every request:
 
-防止"正在播放的 torrent 被 GC 驱逐"。
+- Updates `last_access`
+- Prevents actively streamed torrents from eviction
+
+`_last_play_time` and `_play_count` are only updated by `/stream/{hash}` (not `/api/check`), preventing every checked torrent from being promoted to L1 (hot).
 
 ---
 
-## 4. 稀疏文件与 Hole 检测
+## 4. Sparse Files and Hole Detection
 
 ### 4.1 SEEK_DATA / SEEK_HOLE
 
 ```python
-# 检测 offset 处是否有真实数据（非 sparse hole）
+# Check if offset has real data (not a sparse hole)
 os.lseek(fd, offset, os.SEEK_DATA) == offset
 
-# 检测 [start, end] 范围内是否有 hole
-os.lseek(fd, start, os.SEEK_HOLE) > end
+# Check if [start, end] range contains a hole
+os.lseek(fd, start, os.SEEK_HOLE) >= end + 1
 ```
 
-比 `not any(data)` 全零检测更可靠：
-- libtorrent checking_files 期间会临时清零 piece
-- MP4 ftyp 开头就是 `00 00`，全零检测会误判
+More reliable than `not any(data)` zero-detection:
 
-### 4.2 stream 读取流程
+- libtorrent temporarily zeros pieces during `checking_files`
+- MP4 `ftyp` headers contain `00 00` bytes, causing false positives with zero-detection
+
+### 4.2 Stream Read Flow
 
 ```
 read_video_range(start, end)
     │
-    ├─► seek_priority(start, end)  # 设置 urgency
+    ├─► seek_priority(start, end)  # set urgency
     │
     ├─► _read_once(path, start, chunk_size)
-    │   ├─► mmap 读取
-    │   └─► 若 16KB 全 0 → hole detected
+    │   └─► mmap read (fallback to buffered read)
     │
-    ├─► _detect_hole() → SEEK_DATA 确认
+    ├─► _detect_hole_offset() → piece-level zero check
+    │   └─► If tracker says VERIFIED but data is zero → mark CORRUPT + re-download
     │
-    └─► 若 hole: 等待 0.1s，重试（最多 2s）
-            ├─► libtorrent 下载该 piece
-            └─► 再次读取 → 有数据 → 返回
+    └─► If hole: wait 0.1s, retry (max 2s)
+            ├─► libtorrent downloads the piece
+            └─► Re-read → data present → return
 ```
 
-Hole 时返回空 bytes → 调用方返回 416（不是 200/206 含零数据）。
+If a hole is at the start of the chunk and the 2s timeout expires, return empty bytes → caller returns **416** (not 200/206 with zero data).
+
+If a hole is mid-chunk, return the valid prefix before the hole → player can keep decoding.
 
 ---
 
-## 5. 故障排查速查
+## 5. Troubleshooting Cheat Sheet
 
-| 症状 | 排查 | 解决 |
-|------|------|------|
-| 点击播放无反应 | `curl /api/check/<hash>` → head_ready? | false → 等 30-60s，或检查 peers |
-| 播放中黑屏/卡顿 | 检查 `state=checking_files` | 等 checking 完成（503 自动重试） |
-| seek 卡住 | 检查 video-stream.log 的 hole timeout | 正常，libtorrent 在 urgent 下载 |
-| 进度 100% 但无法播放 | moov 在尾部（非 faststart） | 这类文件无法边下边播 |
-| 磁盘瞬间爆满 | 检查 piece priorities | 应只有 head+tail=7，其余=0 |
-| 后端 502 | `journalctl -u caddy-claw` | 检查 upstream timeout |
+| Symptom | Check | Solution |
+|---------|-------|----------|
+| Click play, no response | `curl /api/check/<hash>` → head_ready? | If false, wait 30–60s or check peers |
+| Black screen / stutter during playback | Check `state=checking_files` | Wait for checking to complete (503 auto-retry) |
+| Seek hangs | Check `video-stream.log` for hole timeout | Normal — libtorrent is urgent-downloading |
+| 100% progress but unplayable | Moov is at tail (non-faststart) | These files cannot stream while downloading |
+| Disk fills up instantly | Check piece priorities | Only moov + window = 7, others = 0 |
+| Backend 502 | `journalctl -u caddy-claw` | Check upstream timeout |
 
-### 5.1 常用命令
+### 5.1 Common Commands
 
 ```bash
-# 查看 torrent 状态
+# Check torrent status
 curl -s http://localhost:8765/torrent/status/<hash> | python3 -m json.tool
 
-# 检查稀疏文件真实大小
-stat --format="逻辑=%s 实际=%b*%B=%B" cache/torrent/<hash>/.../*.mp4
+# Check sparse file real size
+stat --format="logical=%s actual=%b*%B=%B" cache/torrent/<hash>/.../*.mp4
 
-# 查看后端日志
+# View backend logs
 journalctl -u star-archive-backend -f
 
-# 检查 piece priorities (debug)
+# Check piece priorities (debug)
 python3 -c "
 import libtorrent as lt
 s = lt.session()
@@ -223,12 +244,12 @@ s = lt.session()
 
 ---
 
-## 6. 监控端点
+## 6. Monitoring Endpoints
 
 ```bash
 GET /api/health              → {"status": "ok"}
-GET /api/cache               → 缓存列表 + 总大小
-GET /api/cache/metrics       → 完成数/下载中/已用/上限
-GET /torrent/status/<hash>   → 单个 torrent 完整状态（含 tier）
+GET /api/cache               → Cache list + total size
+GET /api/cache/metrics       → Completed / downloading / used / limit
+GET /torrent/status/<hash>   → Full torrent status (including tier)
 GET /api/check/<hash>        → head_ready / cached / mime
 ```

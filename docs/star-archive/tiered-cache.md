@@ -1,22 +1,32 @@
-# 分级缓存 (Tiered Cache)
+# Tiered Cache
 
-> 适用：`backend/services/torrent_engine.py` — `_enforce_cache_limit()`
-> 目标：用数据价值替代纯时间做淘汰决策，缓存利用率从 80% → 95%
-
----
-
-## 四级分类
-
-```
-L1 hot        ──►  24h 内播放过  ──►  永不淘汰
-L2 warm       ──►  100% 完成 + 7天内访问  ──►  高优先级保留
-L3 seed       ──►  100% 完成 + 冷存(>7d)  ──►  可 punch hole 降级
-L4 fragment   ──►  未完成 + 冷存  ──►  优先淘汰
-```
+> Applies to: `backend/services/torrent_engine.py` — `_enforce_cache_limit()`  
+> Goal: Replace pure time-based eviction with data-value scoring, improving cache utilization from 80% → 95%.
 
 ---
 
-## 评分函数
+## Table of Contents
+
+1. [Four-tier Classification](#four-tier-classification)
+2. [Scoring Function](#scoring-function)
+3. [Progressive Eviction](#progressive-eviction)
+4. [L3 Punch Hole](#l3-punch-hole)
+5. [Comparison with Legacy LRU](#comparison-with-legacy-lru)
+
+---
+
+## Four-tier Classification
+
+```
+L1 hot        ──►  Played within 24h        ──►  Never evict at soft limit
+L2 warm       ──►  100% complete + accessed within 7d  ──►  High retention
+L3 seed       ──►  100% complete + cold (>7d)          ──►  Punch hole eligible
+L4 fragment   ──►  Incomplete + cold                   ──►  Evict first
+```
+
+---
+
+## Scoring Function
 
 ```python
 def _cache_score(info) -> float:
@@ -26,6 +36,7 @@ def _cache_score(info) -> float:
     progress = info.get("progress", 0)
     size = info.get("video_size", 1024)
     play_count = info.get("_play_count", 0)
+    hash_str = info.get("hash", "")
 
     hours_since_play = (now - last_play) / 3600 if last_play else 9999
     heat = math.exp(-hours_since_play / 168)  # 7-day half-life
@@ -35,83 +46,109 @@ def _cache_score(info) -> float:
     size_gb = size / (1024 ** 3)
     value_per_gb = (play_bonus + completion_score) / max(size_gb, 0.1)
 
-    return value_per_gb * heat + play_bonus
+    score = value_per_gb * heat + play_bonus
+
+    # Like bonus: liked works get strong protection
+    if hash_str in self.liked_hashes:
+        score += 5000.0
+    else:
+        score -= 2000.0
+
+    return score
 ```
 
-**因素拆解：**
+**Factor Breakdown:**
 
-| 因素 | 权重 | 说明 |
-|------|------|------|
-| `play_bonus` | 1000×/次 | 播放过的 torrent 价值高一个数量级 |
-| `completion` | 10×/% | 100% = 1000 pts，重新下载成本高 |
-| `value_per_gb` | 密度 | 6GB 完成文件 > 6GB 未完成文件 |
-| `heat` | 指数衰减 | 7 天半衰期，最近播放的分数更高 |
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| `play_bonus` | 1000× per play | Played torrents are an order of magnitude more valuable |
+| `completion` | 10× per % | 100% = 1000 pts; re-download cost is high |
+| `value_per_gb` | Density | A completed 6GB file scores higher than an incomplete 6GB file |
+| `heat` | Exponential decay | 7-day half-life; recent plays score higher |
+| `like` | +5000 / –2000 | Liked works receive strong protection |
 
 ---
 
-## 渐进淘汰
+## Progressive Eviction
 
 ```python
 def _enforce_cache_limit(self):
     total = self._get_cache_size()
-    threshold = int(self.max_size_bytes * 0.95)  # 95% 阈值
-    if total <= threshold:
+    soft_threshold = int(self.max_size_bytes * 0.95)
+    hard_threshold = int(self.max_size_bytes * 1.20)
+
+    if total <= soft_threshold:
         return
 
-    # 排除 L1 (hot)
-    candidates = [(h, i) for h, i in self.torrents.items()
-                  if self._get_tier(i) != "hot"]
-    candidates.sort(key=lambda x: self._cache_score(x[1]))
-    hash_str, info = candidates[0]  # 只淘汰一个最冷的
+    force_evict_hot = total > hard_threshold
 
-    tier = self._get_tier(info)
+    while True:
+        total = self._get_cache_size()
+        if total <= soft_threshold:
+            break
 
-    # L3 → punch hole 降级
-    if tier == "seed" and progress >= 99.9:
-        freed = self._punch_hole_middle_pieces(hash_str)
-        if freed > 0 and new_size <= threshold:
-            return
+        candidates = [
+            (h, i) for h, i in self.torrents.items()
+            if force_evict_hot or self._get_tier(i) != "hot"
+        ]
+        candidates.sort(key=lambda x: self._cache_score(x[1]))
+        hash_str, info = candidates[0]
+        tier = self._get_tier(info)
 
-    # 其余 → 整文件删除
-    self.remove_torrent(hash_str)
+        # L3 → punch hole downgrade
+        if tier == "seed" and info.get("progress", 0) >= 99.9:
+            freed = self._punch_hole_middle_pieces(hash_str)
+            if freed > 0:
+                continue
+
+        # L2/L4 or punch-hole-insufficient L3 → full eviction
+        self.remove_torrent(hash_str)
 ```
 
-**渐进式**：每次只处理一个 torrent，避免 I/O 突刺。
+**Progressive**: Processes one torrent per iteration, avoiding IO spikes. The loop continues until usage drops below the soft threshold.
 
 ---
 
-## L4 Punch Hole
+## L3 Punch Hole
 
-对 completed 但 cold 的 torrent，保留 head+tail，释放中间 pieces：
+For completed but cold torrents, keep head+tail and release middle pieces:
 
 ```python
 def _punch_hole_middle_pieces(self, hash_str):
-    # 保留 head+tail 各 30 pieces
-    head_end = start_piece + 30
-    tail_start = end_piece - 30
+    tracker = self.torrents[hash_str].get("tracker")
+    path = self.torrents[hash_str].get("video_path")
 
-    for p in range(start_piece, end_piece + 1):
-        if p < head_end or p > tail_start:
-            continue
-        if not tracker.is_verified(p):
-            continue
-        start = p * piece_length - file_offset
-        os.fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                     start, piece_length)
+    head_end = tracker.start_piece + 30
+    tail_start = tracker.end_piece - 30
+
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        for p in range(tracker.start_piece, tracker.end_piece + 1):
+            if p < head_end or p > tail_start:
+                continue
+            if not tracker.is_verified(p):
+                continue
+            start = p * tracker.piece_length - tracker.file_offset
+            os.fallocate(fd, os.FALLOC_FL_PUNCH_HOLE | os.FALLOC_FL_KEEP_SIZE,
+                         start, tracker.piece_length)
+    finally:
+        os.close(fd)
 ```
 
-**效果**：6GB 文件 → 保留 120MB (head+tail)，释放 5.88GB。
-- 用户仍能立即播放（moov 在 tail）
-- seek 到中间时需要重新下载
+**Effect**: A 6GB file → keeps ~120MB (head+tail), releases ~5.88GB.
+
+- Users can still start playback immediately (moov in head is preserved; tail is also preserved)
+- Seeking to the middle requires re-download
 
 ---
 
-## 与旧 LRU 的对比
+## Comparison with Legacy LRU
 
-| | 旧 LRU | 新分级缓存 |
-|---|---|---|
-| 阈值 | 80% | 95% |
-| 决策依据 | last_access 时间戳 | 播放历史 + 完成度 + 热度 + 价值密度 |
-| 淘汰粒度 | 整 torrent | 整 torrent 或 punch hole (L3→L4) |
-| 播放保护 | 5 分钟 last_access | L1 (24h) + touch() 实时更新 |
-| 大文件惩罚 | 无 | value_per_gb 降低大未完成文件分数 |
+| Aspect | Legacy LRU | Tiered Cache |
+|--------|------------|--------------|
+| Threshold | 80% | 95% |
+| Decision basis | `last_access` timestamp | Play history + completion + heat + value density |
+| Eviction granularity | Whole torrent | Whole torrent or punch hole (L3→L4) |
+| Playback protection | 5-minute `last_access` | L1 (24h) + `touch()` real-time update |
+| Large-file penalty | None | `value_per_gb` lowers score of large incomplete files |
+| Like protection | None | +5000 / –2000 scoring modifier |

@@ -1,99 +1,105 @@
-# Safari code=4 播放失败根因分析
+# Safari code=4 Playback Failure Root Cause
 
-> **关键词：** MEDIA_ERR_SRC_NOT_SUPPORTED, libtorrent checking_files, sparse file, MP4 demuxer
-
----
-
-## 现象
-
-视频文件已下载 ~99%（`real_size=3849969664/3849944387`），后端所有 `/stream/` 请求返回 206 + 有效数据，ffprobe 验证文件为有效 MP4/H.264，moov 区域完整。但 Safari 仍报 `code=4`（`MEDIA_ERR_SRC_NOT_SUPPORTED`），重试多次无效。
-
-Chrome 播放正常。
+> **Keywords:** `MEDIA_ERR_SRC_NOT_SUPPORTED`, libtorrent `checking_files`, sparse file, MP4 demuxer
 
 ---
 
-## 排查时间线
+## Symptoms
+
+The video file is ~99 % downloaded (`real_size=3849969664/3849944387`). All `/stream/` requests return 206 with valid data, ffprobe confirms a valid MP4/H.264 file, and the moov atom is intact. Yet Safari reports `code=4` (`MEDIA_ERR_SRC_NOT_SUPPORTED`) and retries do not help.
+
+Chrome plays the same file normally.
+
+---
+
+## Investigation Timeline
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Step 1: 检查后端响应                                                │
-│  → 206 Partial Content, Content-Range 正确, 数据长度匹配             │
-│  → 排除 HTTP 协议层问题                                              │
+│  Step 1: Inspect backend responses                                   │
+│  → 206 Partial Content, correct Content-Range, matching payload      │
+│  → Ruled out HTTP protocol layer issues                              │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 2: ffprobe 直接验证文件                                        │
-│  → 有效 MP4/H.264 + AAC, moov=[36, 7627023] 完整                    │
-│  → 排除文件本身损坏                                                  │
+│  Step 2: ffprobe the file directly                                   │
+│  → Valid MP4/H.264 + AAC, moov=[36, 7627023] intact                  │
+│  → Ruled out file corruption                                         │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 3: 模拟 Safari 请求模式拼接                                    │
-│  → Safari 发送: 0-1, 0-3849944386, 3014656-..., 7602176-...         │
-│  → 后端截断为 1MB chunk 返回                                         │
-│  → 顺序拼接后 ffprobe 报 "contradictionary STSC and STCO"            │
-│  → 怀疑 range 重叠/截断导致拼接问题                                  │
+│  Step 3: Simulate Safari request pattern and concatenate             │
+│  → Safari sends: 0-1, 0-3849944386, 3014656-..., 7602176-...         │
+│  → Backend truncates to 1 MB chunks                                  │
+│  → Concatenated output fails ffprobe with "contradictory STSC and    │
+│    STCO"                                                             │
+│  → Suspected range overlap / truncation causing concatenation issues │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 4: 重新审视拼接方式                                            │
-│  → 发现 Safari 的第二次请求是 0-3849944386（整个文件）               │
-│  → 后端截断为 0-1048575，但 Safari 可能期望收到完整文件？            │
-│  → 排除：HTTP 206 明确允许截断，Safari 会发后续 range 补齐           │
+│  Step 4: Re-evaluate concatenation                                   │
+│  → Safari's second request is 0-3849944386 (entire file)             │
+│  → Backend truncates to 0-1048575, but Safari may expect the full    │
+│    file?                                                             │
+│  → Ruled out: HTTP 206 explicitly allows truncation; Safari issues   │
+│    follow-up ranges to fill gaps                                     │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 5: 检查日志中的 hole 标记                                      │
-│  → stream-router.log 中大量 hole=true                                │
-│  → 但 hole=true 时后端仍然返回 206 + 数据（日志字段不影响响应）       │
-│  → 深入：hole 检测用 "not any(data)"，对 MP4 前 2 字节 00 00 误判   │
-│  → 这是日志误导，不是根本原因                                        │
+│  Step 5: Inspect hole markers in logs                                │
+│  → stream-router.log shows many hole=true entries                    │
+│  → hole=true still returns 206 + data (log field does not affect     │
+│    response)                                                         │
+│  → Deep dive: hole detection uses "not any(data)", which misjudges   │
+│    the first two bytes 00 00 of an MP4                               │
+│  → This is a log red herring, not the root cause                     │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 6: 观察 torrent 状态                                           │
+│  Step 6: Observe torrent status                                      │
 │  → video-stream.log: state=checking_files                            │
-│  → libtorrent 在 checking_files 期间会做什么？                       │
-│  → 答案：临时清零/修改文件中的 piece，验证 hash                      │
+│  → What does libtorrent do during checking_files?                    │
+│  → Answer: temporarily zeroes / modifies pieces to verify hashes     │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Step 7: 锁定根因                                                    │
-│  → checking_files + read_video_range 并发                           │
-│  → read_video_range 读到被 libtorrent 临时清零的区域                  │
-│  → 返回全零数据给 Safari                                            │
-│  → Safari MP4 demuxer 解析到全零 chunk → code=4                     │
+│  Step 7: Lock root cause                                             │
+│  → checking_files + read_video_range concurrent access               │
+│  → read_video_range reads regions temporarily zeroed by libtorrent   │
+│  → Returns all-zero data to Safari                                   │
+│  → Safari MP4 demuxer hits an all-zero chunk → code=4                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 根因详解
+## Root Cause Details
 
-### libtorrent checking_files 的行为
+### libtorrent `checking_files` Behavior
 
-当 torrent 被添加到 session 时（尤其是从缓存目录加载已有文件），libtorrent 会进入 `checking_files` 状态：
+When a torrent is added to the session (especially when loading an existing file from the cache directory), libtorrent enters the `checking_files` state:
 
-1. 读取文件中的每个 piece
-2. 计算 piece hash
-3. 与 torrent metadata 中的 hash 对比
-4. **如果 hash 不匹配，将 piece 标记为未下载（清零或删除）**
+1. Reads every piece from the file.
+2. Computes the piece hash.
+3. Compares it with the hash in the torrent metadata.
+4. **If the hash does not match, marks the piece as not downloaded (zeroes or deletes it).**
 
-在这个过程中，文件内容可能被临时修改。如果我们同时从文件中读取数据用于 HTTP 流式传输，就可能读到不一致的全零数据。
+During this process the file content may be temporarily modified. If the HTTP streaming layer reads from the file at the same time, it can observe inconsistent all-zero data.
 
-### 为什么 Chrome 正常而 Safari 报错
+### Why Chrome Works and Safari Fails
 
-Chrome 的媒体解析器可能对数据不一致更容错，或者重试逻辑不同。Safari 的 MP4 demuxer（基于 AVFoundation）对数据一致性要求严格，遇到全零 chunk 立即报 `MEDIA_ERR_SRC_NOT_SUPPORTED`。
+Chrome's media parser is more tolerant of data inconsistency, or its retry logic differs. Safari's MP4 demuxer (based on AVFoundation) is strict: it aborts with `MEDIA_ERR_SRC_NOT_SUPPORTED` as soon as it encounters an all-zero chunk.
 
-### 为什么 SEEK_HOLE 没检测出来
+### Why `SEEK_HOLE` Did Not Catch It
 
-`SEEK_HOLE` 检测的是 sparse file 的 hole（未分配磁盘块的区域）。libtorrent 清零的是已分配磁盘块的区域，只是内容变成了全零。所以 `SEEK_HOLE` 认为"这里有数据"，但实际上数据是无效的。
+`SEEK_HOLE` detects holes in a sparse file (unallocated disk blocks). libtorrent zeroes already-allocated blocks, so `SEEK_HOLE` reports "data present" even though the content is invalid.
 
 ---
 
-## 修复方案
+## Fix
 
-核心原则：**checking_files 期间禁止流式读取**。
+Core principle: **Do not stream while `checking_files` is in progress.**
 
-### 1. `/api/check/{hash}` — 延迟就绪信号
+### 1. `/api/check/{hash}` — Delay ready signal
 
 ```python
 def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
-    # 若 torrent 处于 checking_files，即使文件系统有数据也报告未就绪
+    # If the torrent is checking_files, report not ready even when the
+    # filesystem has data.
     head_ready = head_ready_fs and not _is_torrent_checking(engine, hash_str)
     return StreamCheckResponse(head_ready=head_ready, ...)
 ```
 
-### 2. `/stream/{hash}` — 503 拒绝服务
+### 2. `/stream/{hash}` — 503 rejection
 
 ```python
 def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
@@ -104,37 +110,39 @@ def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engi
             headers={"Retry-After": "10"},
             detail="Torrent checking files"
         )
-    # ... 正常流式传输
+    # ... normal streaming
 ```
 
-### 3. 前端行为
+### 3. Frontend Behavior
 
-前端 `waitForHeadReady` 轮询 `/api/check/`，在 `head_ready=false` 时继续等待。`/stream/` 返回 503 时，浏览器会自动重试（HTTP 503 + Retry-After 标准行为）。
-
----
-
-## 教训与反思
-
-### 不要假设"文件系统有数据"="数据可安全读取"
-
-torrent 客户端不是静态文件服务器。它的内部状态（checking、downloading、seeding）会直接影响文件一致性。
-
-### 并发访问 sparse file 的风险
-
-sparse file + 动态下载引擎的组合，使得"文件存在"和"文件可读"是两个不同的概念。需要额外的状态机来协调。
-
-### Safari 是更严格的测试平台
-
-Chrome 可能容错一些数据不一致的情况，但 Safari 不会。如果 Safari 能播，Chrome 一定能播；反之不成立。用 Safari 作为兼容性基准更可靠。
-
-### 日志误导
-
-`not any(data)` 对 MP4 `00 00` 开头的误判，让我们在排查初期走了很多弯路。数据验证逻辑必须与文件格式解耦。
+The frontend `waitForHeadReady` polls `/api/check/`. When `head_ready=false` it keeps waiting. A 503 response from `/stream/` causes the browser to retry automatically (standard HTTP 503 + `Retry-After` behavior).
 
 ---
 
-## 参考
+## Lessons Learned
+
+### Do Not Assume "Data on Disk" Equals "Safe to Read"
+
+A torrent client is not a static file server. Its internal states (`checking_files`, `downloading`, `seeding`) directly affect file consistency.
+
+### Concurrent Access to Sparse Files Is Risky
+
+The combination of sparse files and a dynamic download engine means "file exists" and "file is readable" are two distinct concepts. An additional state machine is required to coordinate them.
+
+### Safari Is a Stricter Test Platform
+
+Chrome may tolerate some data inconsistency, but Safari does not. If Safari can play the file, Chrome can too; the converse is not guaranteed. Use Safari as the compatibility baseline.
+
+### Log Red Herrings
+
+The `not any(data)` check misjudges MP4 files that start with `00 00`. This sent the investigation down the wrong path early on. Data-validation logic must be decoupled from file-format assumptions.
+
+---
+
+## References
 
 - [libtorrent documentation — torrent_status](https://libtorrent.org/reference-Core.html#torrent-status)
 - [Apple Developer — AVErrorMediaDiscontinuity](https://developer.apple.com/documentation/avfoundation/averror/averrormediadiscontinuity)
 - [RFC 7233 — HTTP Range Requests](https://tools.ietf.org/html/rfc7233)
+
+See also [Timeout Debug](timeout-debug.md) for upstream timeout issues and [Tracing and Logging](tracing-logging.md) for log analysis.

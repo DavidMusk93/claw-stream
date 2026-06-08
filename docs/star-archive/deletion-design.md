@@ -1,180 +1,210 @@
-# actor删除设计 —— 安全稳健的数据与缓存清理流程
+# Actor Deletion Design — Safe and Robust Data and Cache Cleanup
 
-## 1. 问题背景
+## 1. Problem Background
 
-删除一个actor（star）会触发多个数据层面的变更：
+Deleting an actor (star) triggers changes across multiple data layers:
 
-| 层面 | 数据 | 位置 |
+| Layer | Data | Location |
 |---|---|---|
-| 配置 | `config.json` 中的 star 条目 | 文件系统 |
-| 数据库 | `stars` / `titles` / `social_posts` | DuckDB |
-| 缓存 | 已下载的 torrent 文件（视频 + `.torrent`） | `cache/torrent/<hash>/` |
-| 内存 | `TorrentEngine.torrents` 中的 handle / tracker | 进程内存 |
+| Config | Star entries in `config.json` | File system |
+| Database | `stars` / `titles` / `social_posts` | `data/claw.duckdb` |
+| Cache | Downloaded torrent files (video + `.torrent`) | `cache/torrent/<hash>/` |
+| Memory | Handles / trackers in `TorrentEngine.torrents` | Process memory |
 
-**历史 bug**：`delete_star` 端点先调用 `db.delete_star_by_code()` 删除数据库记录，再查询 `titles.magnet_hash` 以清理缓存。由于记录已被删除，`SELECT ... WHERE star_code = ?` 永远返回空，导致 torrent 文件残留在磁盘上，成为**孤儿 torrent**。
+**Historical bug**: The `delete_star` endpoint originally called `db.delete_star_by_code()` first, then queried `titles.magnet_hash` to clean up cache. Because the records were already deleted, `SELECT ... WHERE star_code = ?` always returned empty, leaving torrent files on disk as **orphan torrents**.
 
-## 2. 安全删除流程
+## 2. Safe Deletion Flow
 
-正确的时序必须保证：
-1. **先收集待清理的资源标识**（magnet_hash、video_path）
-2. **再删除持久化数据**（config.json、数据库记录）
-3. **最后释放外部资源**（磁盘缓存、内存句柄）
+The correct ordering guarantees that resource identifiers are collected **before** persistent data is removed:
 
-### 2.1 流程图
+1. Collect identifiers (magnet hashes, video paths)
+2. Delete persistent data (`config.json`, database records)
+3. Release external resources (disk cache, memory handles)
+
+### 2.1 Flow Diagram
 
 ```
-用户调用 DELETE /api/stars/{code}
+User calls DELETE /api/stars/{code}
         │
         ▼
 ┌─────────────────────────┐
-│ 1. 从 config.json 移除   │
-│    star 配置条目         │
+│ 1. Remove star entry    │
+│    from config.json     │
 └─────────────────────────┘
         │
         ▼
 ┌─────────────────────────┐
-│ 2. 查询数据库收集该 star  │
-│    所有作品的 magnet_hash│
-│    保存到本地列表        │
+│ 2. Query database for   │
+│    all magnet hashes    │
+│    belonging to star    │
 └─────────────────────────┘
         │
         ▼
 ┌─────────────────────────┐
-│ 3. 删除数据库记录        │
-│    stars / titles /      │
-│    social_posts          │
+│ 3. Delete database      │
+│    records (stars /     │
+│    titles / social_posts│
 └─────────────────────────┘
         │
         ▼
 ┌─────────────────────────┐
-│ 4. 逐个调用              │
-│    engine.remove_torrent │
-│    清理磁盘与内存        │
+│ 4. Call engine.         │
+│    remove_torrent()     │
+│    for each hash        │
 └─────────────────────────┘
         │
         ▼
 ┌─────────────────────────┐
-│ 5. 使 stars 缓存失效     │
+│ 5. Invalidate stars     │
+│    response cache       │
 └─────────────────────────┘
 ```
 
-### 2.2 关键代码结构
+### 2.2 Key Code Structure
 
 ```python
+@router.delete("/{code}")
 async def delete_star(code: str, request: Request) -> dict[str, Any]:
-    # 1. 配置层删除
+    # 1. Config layer removal
     config = _load_config()
+    original_len = len(config.get("stars", []))
     config["stars"] = [s for s in config["stars"] if s.get("code") != code]
+    if len(config["stars"]) == original_len:
+        raise HTTPException(status_code=404, detail="Actor not found")
     _save_config(config)
 
-    # 2. 先收集 magnet_hash（必须在数据库删除前完成）
+    # 2. Collect magnet hashes BEFORE database deletion
+    engine = request.app.state.engine
     magnet_hashes: list[str] = []
     try:
         conn = duckdb.connect(DB_PATH)
-        rows = conn.execute(
-            "SELECT magnet_hash FROM titles WHERE star_code = ? AND magnet_hash IS NOT NULL",
-            [code],
-        ).fetchall()
-        magnet_hashes = [h for (h,) in rows if h]
-        conn.close()
+        try:
+            rows = conn.execute("""
+                SELECT magnet_hash
+                FROM titles
+                WHERE star_code = ? AND magnet_hash IS NOT NULL
+            """, [code]).fetchall()
+            magnet_hashes = [h for (h,) in rows if h]
+        finally:
+            conn.close()
     except Exception as e:
-        log.warning(...)
+        log.warning(f"delete_star: failed to query magnet hashes for {code}: {e}")
 
-    # 3. 数据库层删除
-    db.delete_star_by_code(code)
+    # 3. Database layer deletion
+    from core import db
+    deleted = db.delete_star_by_code(code)
+    if not deleted:
+        log.warning(f"star {code} removed from config but not found in db")
 
-    # 4. 缓存层删除（逐个处理，单点失败不影响后续）
-    engine = request.app.state.engine
+    # 4. Cache layer deletion (per-torrent try/except)
     for hash_str in magnet_hashes:
         try:
             await asyncio.to_thread(engine.remove_torrent, hash_str)
         except Exception as e:
-            log.warning(...)
+            log.warning(f"delete_star: failed to remove torrent {hash_str[:12]}...: {e}")
 
-    # 5. 缓存失效
+    # 5. Cache invalidation
     invalidate_stars_cache()
     return {"code": code, "deleted": True}
 ```
 
-## 3. 容错与幂等性
+## 3. Fault Tolerance and Idempotency
 
-### 3.1 单点失败隔离
+### 3.1 Per-Torrent Failure Isolation
 
-`engine.remove_torrent()` 可能因为文件被占用、libtorrent 句柄状态异常等原因失败。必须：
-- **逐个 try/except 包裹**，一个失败不影响其他 torrent 的清理
-- **记录 warning 日志**，便于人工排查
-- 不因为单个 torrent 清理失败而回滚数据库删除（actor记录应当被删除）
+`engine.remove_torrent()` may fail due to file locks or abnormal libtorrent handle states. The design requirements are:
 
-### 3.2 重复删除安全
+- Wrap each call in its own `try/except` so one failure does not block cleanup of other torrents
+- Log a warning for manual investigation
+- Do **not** roll back database deletion because the actor record should still be removed
 
-- `engine.remove_torrent()` 内部应当幂等：torrent 不存在时返回 `False`，不抛异常
-- `db.delete_star_by_code()` 内部使用 `DELETE ... WHERE id = ?`，重复执行无影响
-- `config.json` 的去重过滤天然幂等
+### 3.2 Repeated Deletion Safety
 
-### 3.3 数据库事务边界
+| Operation | Idempotency Guarantee |
+|---|---|
+| `engine.remove_torrent()` | Returns `False` if torrent is absent; does not raise |
+| `db.delete_star_by_code()` | Uses `DELETE ... WHERE id = ?`; repeated execution is harmless |
+| `config.json` filtering | List comprehension naturally deduplicates |
 
-`delete_star_by_code` 在一个连接内完成：
+### 3.3 Database Transaction Boundary
+
+`delete_star_by_code` executes all deletions inside a single connection:
+
 ```sql
 DELETE FROM social_posts WHERE star_id = ?;
 DELETE FROM titles WHERE star_id = ?;
 DELETE FROM stars WHERE id = ?;
 COMMIT;
 ```
-三条语句在同一个事务中，保证原子性。如果事务失败，数据库状态一致，可以重新调用 `delete_star`。
 
-## 4. 孤儿 torrent GC
+The three statements are atomic. If the transaction fails, the database remains consistent and `delete_star` can be retried.
 
-即使删除流程正确，仍可能因以下原因产生孤儿 torrent：
-- 删除流程执行期间后端崩溃
-- `engine.remove_torrent()` 某次调用失败且未重试
-- 旧 bug 遗留（如此次 `IPVR-317` 案例）
+## 4. Orphan Torrent GC
 
-### 4.1 检测逻辑
+Even with a correct deletion flow, orphan torrents can still appear:
 
-周期性地（例如每天一次，或启动时）扫描 `cache/torrent/` 目录，对比数据库中的 `magnet_hash`：
+- Backend crash during deletion
+- A single `remove_torrent()` failure that is not retried
+- Legacy bugs (e.g., the historical `IPVR-317` case)
+
+### 4.1 Detection Logic
+
+`TorrentEngine.gc_orphaned_torrents()` scans `cache/torrent/` and compares directory names against `titles.magnet_hash` in the database:
 
 ```python
-def orphaned_hashes(cache_dir: str, db_path: str) -> list[str]:
+def gc_orphaned_torrents(self, db_path: str) -> int:
     disk_hashes = {
-        name for name in os.listdir(cache_dir)
-        if len(name) == 40 and os.path.isdir(os.path.join(cache_dir, name))
+        name for name in os.listdir(self.cache_dir)
+        if len(name) == 40 and os.path.isdir(os.path.join(self.cache_dir, name))
     }
     conn = duckdb.connect(db_path)
     try:
         db_hashes = {
-            row[0] for row in conn.execute(
+            h for (h,) in conn.execute(
                 "SELECT DISTINCT magnet_hash FROM titles WHERE magnet_hash IS NOT NULL"
-            ).fetchall()
+            ).fetchall() if h
         }
     finally:
         conn.close()
-    return sorted(disk_hashes - db_hashes)
+
+    orphaned = sorted(disk_hashes - db_hashes)
+    removed = 0
+    for hash_str in orphaned:
+        # If loaded in engine, use standard removal to release handles;
+        # otherwise delete the directory directly.
+        ...
+    return removed
 ```
 
-### 4.2 清理策略
+### 4.2 Cleanup Strategy
 
-发现孤儿 hash 后：
-1. 尝试调用 `engine.remove_torrent(hash)`（如果 torrent 已加载到内存）
-2. 如果引擎中没有，直接删除 `cache/torrent/<hash>/` 目录
-3. 记录 info 日志，汇报清理数量
+1. If the torrent is loaded in `TorrentEngine`, call `remove_torrent(hash)` to release libtorrent file descriptors
+2. If not loaded, delete `cache/torrent/<hash>/` directly
+3. Log the count of cleaned directories
 
-### 4.3 与 `_enforce_cache_limit` 的关系
+### 4.3 Relationship with `_enforce_cache_limit`
 
-`TorrentEngine._enforce_cache_limit()` 在缓存超过阈值时触发驱逐，但它只驱逐 `engine.torrents` 中已知的 torrent。**孤儿 torrent 不在 `engine.torrents` 中，因此永远不会被 cache eviction 清理**，只会持续占用磁盘空间。这就是必须引入独立 GC 的原因。
+`TorrentEngine._enforce_cache_limit()` evicts torrents when cache exceeds the threshold, but it only iterates over `engine.torrents`. **Orphan torrents are not in `engine.torrents`, so cache eviction never cleans them.** This is why an independent GC mechanism is required.
 
-## 5. 建议实现清单
+## 5. Implementation Checklist
 
-- [x] 修复 `delete_star` 时序 bug：先查 magnet_hash 再删数据库
-- [ ] 启动时扫描并清理孤儿 torrent（`lifespan` 中调用）
-- [ ] 提供手动触发 GC 的 API：`POST /api/cache/gc-orphans`
-- [ ] 在 `/api/cache/metrics` 中汇报孤儿 torrent 数量
-- [ ] 删除操作记录审计日志（谁、何时、删除了哪个 star、清理了几个 torrent）
+| Item | Status | Notes |
+|---|---|---|
+| Fix `delete_star` ordering bug | ✅ Done | Query magnet hashes before DB deletion |
+| Startup orphan scan | ✅ Done | `_cleanup_orphaned()` runs at engine startup |
+| Manual GC API | ✅ Done | `POST /api/cache/gc-orphans` triggers `gc_orphaned_torrents()` |
+| Orphan count in metrics | ❌ Not implemented | `/api/cache/metrics` does not report orphans yet |
+| Deletion audit log | ❌ Not implemented | No structured log of who deleted which actor |
 
-## 6. 相关文件
+## 6. Related Files
 
-| 文件 | 职责 |
+| File | Responsibility |
 |---|---|
-| `backend/routers/stars.py` | `delete_star` 端点 |
-| `core/db/crud.py` | `delete_star_by_code` 数据库事务 |
-| `backend/services/torrent_engine.py` | `remove_torrent` 磁盘与内存清理 |
-| `docs/star-archive/deletion-design.md` | 本文档 |
+| [`backend/routers/stars.py`](../../backend/routers/stars.py) | `delete_star` endpoint |
+| [`core/db/crud.py`](../../core/db/crud.py) | `delete_star_by_code` transaction |
+| [`backend/services/torrent_engine.py`](../../backend/services/torrent_engine.py) | `remove_torrent`, `gc_orphaned_torrents`, `_enforce_cache_limit` |
+| [`backend/routers/cache.py`](../../backend/routers/cache.py) | `POST /api/cache/gc-orphans` and metrics endpoints |
+
+See also:
+- [Tiered Cache](tiered-cache.md) — eviction policy details
+- [Cache Architecture](cache-architecture.md) — cache lifecycle and best practices
