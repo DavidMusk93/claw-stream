@@ -326,4 +326,4 @@ PYTHONPATH=/root/claw-stream \
 
 3. **Bulk `have_pieces()` query**: libtorrent has no `have_pieces(start, end) → bitmap` API. If one is added, the entire bitmap can be fetched in one call and synchronized with `& |` operations.
 
-See [`piece-tracker.md`](piece-tracker.md) for the state-machine architecture.
+See [`piece-tracker.md`](../design/piece-tracker.md) for the state-machine architecture.

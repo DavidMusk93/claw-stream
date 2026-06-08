@@ -1,27 +1,51 @@
-# claw-stream Documentation Center
+# claw-stream Documentation
 
-> All documentation lives in `docs/star-archive/`.
+> Domain-organized knowledge base. Future development experiences should be auto-archived here.
 
 ---
 
-## Document Index
+## `docs/design/` — Architecture & Design
+
+System architecture, module design, and algorithm specifications.
 
 | Document | Content |
 |----------|---------|
-| [architecture.md](star-archive/architecture.md) | System architecture, playback flow, state machine, component interaction, troubleshooting |
-| [cache-architecture.md](star-archive/cache-architecture.md) | Cache module architecture (first principle: smooth playback), lifecycle, eviction strategy, best practices |
-| [tiered-cache.md](star-archive/tiered-cache.md) | Four-tier cache policy & scoring formula |
-| [bootstrap-first.md](star-archive/bootstrap-first.md) | Skip-recheck verification mechanism |
-| [piece-tracker.md](star-archive/piece-tracker.md) | Bitmap state machine architecture |
-| [process-lifecycle.md](star-archive/process-lifecycle.md) | systemd service config & ops |
-| [https-setup.md](star-archive/https-setup.md) | Caddy + TLS config |
-| [safari-code4.md](star-archive/safari-code4.md) | Safari compatibility analysis |
-| [ui-design.md](star-archive/ui-design.md) | Frontend design spec |
-| [piece-tracker-optimization.md](star-archive/piece-tracker-optimization.md) | Bitwise optimization records |
-| [timeout-debug.md](star-archive/timeout-debug.md) | Caddy 502 troubleshooting case |
-| [tracing-logging.md](star-archive/tracing-logging.md) | Logging system & troubleshooting |
-| [deletion-design.md](star-archive/deletion-design.md) | Safe actor deletion flow design |
-| [diff-sync-design.md](star-archive/diff-sync-design.md) | Diff-Sync incremental sync algorithm design |
+| [architecture.md](design/architecture.md) | System architecture, playback flow, state machine, component interaction, troubleshooting |
+| [cache-architecture.md](design/cache-architecture.md) | Cache module architecture (first principle: smooth playback), lifecycle, eviction strategy, best practices |
+| [tiered-cache.md](design/tiered-cache.md) | Four-tier cache policy & scoring formula |
+| [bootstrap-first.md](design/bootstrap-first.md) | Skip-recheck verification mechanism |
+| [piece-tracker.md](design/piece-tracker.md) | Bitmap state machine architecture |
+| [deletion-design.md](design/deletion-design.md) | Safe actor deletion flow design |
+| [diff-sync-design.md](design/diff-sync-design.md) | Diff-Sync incremental sync algorithm design |
+| [ui-design.md](design/ui-design.md) | Frontend design spec |
+
+## `docs/analysis/` — Root Cause Analysis & Investigations
+
+Post-mortems, performance analysis, and debugging case studies.
+
+| Document | Content |
+|----------|---------|
+| [safari-code4.md](analysis/safari-code4.md) | Safari code=4 playback failure root cause analysis |
+| [timeout-debug.md](analysis/timeout-debug.md) | Caddy 502 upstream timeout troubleshooting case |
+| [piece-tracker-optimization.md](analysis/piece-tracker-optimization.md) | Bitwise optimization records & benchmarks |
+
+## `docs/ops/` — Operations & Deployment
+
+systemd, Caddy, HTTPS, logging, and production runbooks.
+
+| Document | Content |
+|----------|---------|
+| [process-lifecycle.md](ops/process-lifecycle.md) | systemd service config & process lifecycle |
+| [https-setup.md](ops/https-setup.md) | HTTPS architecture, Caddy + TLS, maintenance |
+| [tracing-logging.md](ops/tracing-logging.md) | Logging system, trace_id flow, per-module log files |
+
+## `docs/skill/` — Best Practices & Experience
+
+Refactoring experiences, coding conventions, and lessons learned.
+
+| Document | Content |
+|----------|---------|
+| [project-refactor.md](skill/project-refactor.md) | Layout migration, terminology unification, english-ification log |
 
 ---
 
@@ -29,3 +53,14 @@
 
 - **[AGENTS.md](../AGENTS.md)** — AI coding assistant guide (build, run, code style, tests, ops)
 - **[README.md](../README.md)** — Project overview & quick start
+
+---
+
+## Auto-Archive Convention
+
+When developing new features or fixing bugs, agents should archive experiences here:
+
+- New architecture decisions → `docs/design/`
+- Post-mortem / RCA → `docs/analysis/`
+- Deployment / ops changes → `docs/ops/`
+- Refactoring lessons → `docs/skill/`

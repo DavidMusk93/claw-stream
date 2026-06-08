@@ -192,4 +192,4 @@ For example, ABF-328 has `file_offset=2,001,226`; using the absolute offset caus
 | `verified_count` (5,000 pieces) | 210,271 ns | 456 ns | **461×** |
 | moov scan (per request) | 10.9 ms | 0.026 ms | **829×** |
 
-See [`piece-tracker-optimization.md`](piece-tracker-optimization.md) for full benchmark methodology.
+See [`piece-tracker-optimization.md`](../analysis/piece-tracker-optimization.md) for full benchmark methodology.

@@ -76,7 +76,7 @@ journalctl -u star-archive-frontend | grep -E "error|warn"
 # 3. Verify Nuxt has not crashed and restarted repeatedly
 ```
 
-See [Timeout Debug](timeout-debug.md) for upstream timeout analysis and [Safari code=4](safari-code4.md) for media errors.
+See [Timeout Debug](../analysis/timeout-debug.md) for upstream timeout analysis and [Safari code=4](../analysis/safari-code4.md) for media errors.
 
 ---
 

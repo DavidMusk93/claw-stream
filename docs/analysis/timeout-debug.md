@@ -179,4 +179,4 @@ TTFB variance directly affects reverse-proxy timeout decisions. Production envir
 
 - `8ad3b3f` fix(caddy): increase reverse proxy timeouts for Nuxt SSR
 
-See also [Tracing and Logging](tracing-logging.md) for log identifiers and [HTTPS Setup](https-setup.md) for Caddy configuration.
+See also [Tracing and Logging](../ops/tracing-logging.md) for log identifiers and [HTTPS Setup](../ops/https-setup.md) for Caddy configuration.

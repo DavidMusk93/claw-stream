@@ -145,4 +145,4 @@ The `not any(data)` check misjudges MP4 files that start with `00 00`. This sent
 - [Apple Developer — AVErrorMediaDiscontinuity](https://developer.apple.com/documentation/avfoundation/averror/averrormediadiscontinuity)
 - [RFC 7233 — HTTP Range Requests](https://tools.ietf.org/html/rfc7233)
 
-See also [Timeout Debug](timeout-debug.md) for upstream timeout issues and [Tracing and Logging](tracing-logging.md) for log analysis.
+See also [Timeout Debug](timeout-debug.md) for upstream timeout issues and [Tracing and Logging](../ops/tracing-logging.md) for log analysis.
