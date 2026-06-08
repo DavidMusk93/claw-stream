@@ -1,7 +1,9 @@
-"""core/db/queries.py — 聚合查询与导出
+"""core/db/queries.py — Aggregate queries and exports
 
-大宽表简化后，不再 JOIN magnets 表，直接从 titles.magnet 读取 primary magnet。
+After wide-table simplification, no longer JOIN the magnets table; read primary magnet directly from titles.magnet.
 """
+
+from __future__ import annotations
 
 import json
 from .connection import _conn
@@ -10,9 +12,9 @@ from .ops_log import trace_db
 
 @trace_db
 def get_all_titles_json():
-    """导出所有数据为 JSON 格式（SQL 层聚合）
+    """Export all data as JSON (aggregated at SQL layer)
 
-    返回: { "stars": [ { name, titles: [...] } ] }
+    Returns: { "stars": [ { name, titles: [...] } ] }
     """
     conn = _conn()
     rows = conn.execute("""
@@ -60,9 +62,9 @@ def get_all_titles_json():
 
 @trace_db
 def export_report_json():
-    """导出为 JSON（stdout），SQL 层聚合。
+    """Export as JSON (stdout), aggregated at SQL layer.
 
-    格式: { "<star_code>": { "name": "...", "titles": [...] } }
+    Format: { "<star_code>": { "name": "...", "titles": [...] } }
     """
     conn = _conn()
     rows = conn.execute("""
@@ -95,7 +97,7 @@ def export_report_json():
 
 @trace_db
 def get_stats() -> dict:
-    """聚合统计：作品总数、各 star 作品数"""
+    """Aggregate statistics: total titles, titles per star"""
     conn = _conn()
     total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
     stars_count = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]

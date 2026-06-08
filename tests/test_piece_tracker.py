@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for PieceStateTracker.
 
-基于真实 BitTorrent 下载的视频文件运行，验证：
+Run against real BitTorrent-downloaded video files, verifying:
 - Bootstrap from filesystem (SEEK_HOLE scan)
 - head_ready() is O(pieces) not O(filesystem_scan)
 - Alert sync (piece_finished, hash_failed)
@@ -43,20 +43,20 @@ class TestTrackerBootstrap(unittest.TestCase):
         shutil.rmtree(cls.tmp_dir, ignore_errors=True)
 
     def test_video_downloaded(self) -> None:
-        """确认视频已真实下载到本地。"""
+        """Verify the video has actually been downloaded locally."""
         self.assertTrue(os.path.exists(self.video_path))
         self.assertGreater(os.path.getsize(self.video_path), 1024 * 1024)
         print(f"  Video downloaded: {self.video_path} ({os.path.getsize(self.video_path)} bytes)")
 
     def test_bootstrap_head(self) -> None:
-        """已下载视频的头部应有实际数据（通过 SEEK_HOLE 验证）。"""
+        """The head of the downloaded video should contain actual data (verified via SEEK_HOLE)."""
         file_size = os.path.getsize(self.video_path)
         check_end = min(file_size - 1, 8_686_350)
         self.assertTrue(_range_has_data(self.video_path, 0, check_end))
         print(f"  Head range [0, {check_end}] verified via SEEK_HOLE")
 
     def test_bootstrap_tail(self) -> None:
-        """已下载视频的尾部 moov 区域应有实际数据。"""
+        """The tail moov region of the downloaded video should contain actual data."""
         moov_start, moov_end = _scan_mp4_moov(self.video_path)
         self.assertGreater(moov_end, 0, "应找到 moov")
         self.assertTrue(_range_has_data(self.video_path, moov_start, moov_end - 1))

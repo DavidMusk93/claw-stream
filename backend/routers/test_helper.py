@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""测试辅助API路由。
+"""Test helper API routes.
 
-提供简单的HTTP端点，让回归测试可以通过API创建合成数据、
-调用内部函数，从而无需依赖真实的SNOS-171/EBWH-322缓存文件。
+Provide simple HTTP endpoints so regression tests can create synthetic data via API,
+call internal functions, thus eliminating the need for real SNOS-171/EBWH-322 cache files.
 
-仅在开发/测试环境使用，生产环境不应暴露。
+For development/test environments only; should not be exposed in production.
 """
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ from core import get_logger
 log = get_logger("test-helper")
 router = APIRouter(prefix="/api/test", tags=["test"])
 
-# 默认使用项目根目录下的 cache/torrent
+# Default to cache/torrent under the project root
 _SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_CACHE_DIR = os.path.join(_SCRIPT_DIR, "cache", "torrent")
 
 
 class SyntheticCreateRequest(BaseModel):
     hash: str
-    moov_position: str = "head"  # "head" 或 "tail"
-    logic_size: int = 32 * 1024 * 1024  # 默认 32MB
+    moov_position: str = "head"  # "head" or "tail"
+    logic_size: int = 32 * 1024 * 1024  # default 32MB
 
 
 class SyntheticCreateResponse(BaseModel):
@@ -41,18 +41,18 @@ class SyntheticCreateResponse(BaseModel):
 
 @router.post("/create-synthetic", response_model=SyntheticCreateResponse)
 async def create_synthetic(req: SyntheticCreateRequest):
-    """在 cache/torrent/{hash} 下创建合成稀疏MP4文件。
+    """Create a synthetic sparse MP4 file under cache/torrent/{hash}.
 
-    返回创建的文件路径，供后续 stream / check API 使用。
+    Return the created file path for subsequent use by the stream / check API.
     """
     cache_dir = _DEFAULT_CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
 
-    # 导入 synthetic_mp4 模块（tests 目录在 PYTHONPATH 下）
+    # Import synthetic_mp4 module (tests directory is on PYTHONPATH)
     try:
         from tests.synthetic_mp4 import _build_moov_box
     except ImportError:
-        # 如果 tests 不在 PYTHONPATH，尝试相对导入
+        # If tests is not on PYTHONPATH, try relative import
         import sys
         tests_dir = os.path.join(_SCRIPT_DIR, "tests")
         if tests_dir not in sys.path:
@@ -98,7 +98,7 @@ async def create_synthetic(req: SyntheticCreateRequest):
 
 @router.delete("/cleanup-synthetic/{hash_str}")
 async def cleanup_synthetic(hash_str: str):
-    """删除 cache/torrent/{hash} 下的合成文件。"""
+    """Delete synthetic files under cache/torrent/{hash}."""
     cache_dir = _DEFAULT_CACHE_DIR
     target = os.path.join(cache_dir, hash_str)
     if os.path.exists(target):
@@ -109,7 +109,7 @@ async def cleanup_synthetic(hash_str: str):
 
 @router.get("/scan-moov")
 async def api_scan_moov(path: str):
-    """API封装 _scan_mp4_moov：扫描MP4的moov位置。"""
+    """API wrapper for _scan_mp4_moov: scan the moov position of an MP4."""
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     moov_start, moov_end = _scan_mp4_moov(path)
@@ -118,7 +118,7 @@ async def api_scan_moov(path: str):
 
 @router.get("/range-has-data")
 async def api_range_has_data(path: str, start: int, end: int):
-    """API封装 _range_has_data：检查[start, end]范围是否有实际数据。"""
+    """API wrapper for _range_has_data: check whether the [start, end] range has actual data."""
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     result = _range_has_data(path, start, end)
@@ -127,7 +127,7 @@ async def api_range_has_data(path: str, start: int, end: int):
 
 @router.get("/is-data-at-offset")
 async def api_is_data_at_offset(path: str, offset: int):
-    """API封装 _is_data_at_offset：检查offset处是否有实际数据。"""
+    """API wrapper for _is_data_at_offset: check whether there is actual data at offset."""
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     result = _is_data_at_offset(path, offset)
@@ -136,7 +136,7 @@ async def api_is_data_at_offset(path: str, offset: int):
 
 @router.get("/find-video-state/{hash_str}")
 async def api_find_video_state(hash_str: str):
-    """API封装 find_video_state：查找视频状态。"""
+    """API wrapper for find_video_state: look up video state."""
     path, real_size, head_ready, mime = find_video_state(hash_str)
     return {
         "hash": hash_str,

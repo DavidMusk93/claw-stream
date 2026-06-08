@@ -1,7 +1,7 @@
-"""scrapers/v2/sinks.py — 统一写入层（大宽表简化版）
+"""scrapers/v2/sinks.py — Unified write layer (wide-table simplified)
 
-将抽取结果通过 UPSERT 直接写入 titles 宽表，
-一个 star 的所有作品只需一次 SQL 执行，彻底消除串行队列瓶颈。
+Write extraction results directly to the titles wide table via UPSERT;
+all works of one star need only one SQL execution, completely eliminating serial queue bottleneck.
 """
 
 from __future__ import annotations
@@ -19,17 +19,17 @@ log = get_logger("title-sync-sink")
 
 
 class Sink(Protocol):
-    """写入器协议"""
+    """Sink protocol"""
 
     async def write(self, item):
         ...
 
 
 class TitleSyncSink:
-    """同步作品数据到 DuckDB（大宽表 UPSERT 模式）
+    """Sync work data to DuckDB (wide-table UPSERT mode)
 
-    每个 star 一次批量 UPSERT，无需预加载 existing_codes，
-    无需判断新/旧，无需串行写队列往返。
+    Batch UPSERT per star, no need to preload existing_codes,
+    no need to judge new/old, no serial write queue round-trips.
     """
 
     def __init__(self, star_id: int, star_code: str, star_name: str):
@@ -38,16 +38,16 @@ class TitleSyncSink:
         self.star_name = star_name
 
     async def write(self, item: VideoItem, cover_b64: str | None = None) -> None:
-        """写入单个 title（兼容旧接口，内部仍走 batch）。"""
+        """Write single title (backward-compatible interface, internally still uses batch)."""
         await self.write_batch([item], {it.code for it in [item]}, {item.code: cover_b64 or ""})
 
     async def write_batch(
         self, items: list[VideoItem], new_codes: set[str], cover_map: dict[str, str]
     ) -> dict[str, int]:
-        """批量 UPSERT 该 star 的所有 titles，一次 SQL 完成。
+        """Batch UPSERT all titles for this star in one SQL.
 
-        构造多行 VALUES + ON CONFLICT DO UPDATE，
-        利用 DuckDB 原生 UPSERT 能力，无需手动判断 insert/update。
+        Build multi-row VALUES + ON CONFLICT DO UPDATE,
+        leveraging DuckDB native UPSERT capability, no manual insert/update judgment needed.
         """
         import time as _time
 
@@ -114,7 +114,7 @@ class TitleSyncSink:
                         v["magnet"], v["magnet_hash"], v["all_magnets"],
                     ])
 
-                # ON CONFLICT 只更新元数据，保留已有 cover_b64
+                # ON CONFLICT only updates metadata, preserving existing cover_b64
                 managed.execute(
                     f"""
                     INSERT INTO titles (
@@ -140,9 +140,9 @@ class TitleSyncSink:
                     flat,
                 )
 
-                # 统计本次插入 vs 更新
-                # DuckDB 没有内置 returning/row_count 区分 insert/update，
-                # 我们用 new_codes 近似（已知的新作品数）
+                # Count insert vs update this round
+                # DuckDB has no built-in returning/row_count to distinguish insert/update;
+                # we approximate with new_codes (known new work count)
                 new_count = len(new_codes)
                 updated_count = len(values) - new_count
 
@@ -160,7 +160,7 @@ class TitleSyncSink:
 
     @staticmethod
     def _best_resolution(item: VideoItem) -> str:
-        """从 candidates 中挑选最佳 resolution 字符串（用于 titles 表）"""
+        """Pick the best resolution string from candidates (for titles table)"""
         if not item.magnets:
             return ""
         best = max(item.magnets, key=lambda m: TitleSyncSink._score_magnet(m))
@@ -168,7 +168,7 @@ class TitleSyncSink:
 
     @staticmethod
     def _score_magnet(m: MagnetCandidate) -> float:
-        """MagnetCandidate 评分"""
+        """MagnetCandidate scoring"""
         res_score = 0
         res = m.resolution
         if "[4K]" in res or "4k" in res.lower():
@@ -189,13 +189,13 @@ class TitleSyncSink:
                 size_mb = float(m.size.lower().replace("gb", "").strip()) * 1024
             except ValueError:
                 pass
-        # hhd800 高清源额外加分，确保在相同分辨率下优先
+        # hhd800 HD source gets extra points to ensure priority at same resolution
         hhd800_bonus = 1000 if m.is_hhd800 else 0
         return res_score + hhd800_bonus + m.seed + size_mb / 100
 
 
 class StdoutSink:
-    """调试用：直接打印"""
+    """Debug use: direct print"""
 
     async def write(self, item):
         print(item)

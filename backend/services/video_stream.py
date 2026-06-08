@@ -190,7 +190,7 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
     """Read video data for a given byte range, stopping at holes.
     Returns the actual data read (may be less than requested if hole encountered).
     """
-    # 优先使用 _pick_video_file 已选定的目标文件，避免下载过程中误选广告文件
+    # Prefer the target file already selected by _pick_video_file to avoid mistakenly selecting ad files during downloading
     preferred_path = None
     with engine.lock:
         info = engine.torrents.get(hash_str)
@@ -227,7 +227,7 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
             log.debug("read_video_range: auto-add failed", extra={"hash": hash_str[:12], "error": str(e)})
 
     total_size = await asyncio.to_thread(os.path.getsize, path)
-    # 限制单次最大读取 8MB。Safari needs enough data to parse moov + first frames.
+    # Limit single read to 8MB. Safari needs enough data to parse moov + first frames.
     # 1MB truncates range responses too aggressively, causing Safari demuxer issues.
     MAX_CHUNK = 8 * 1024 * 1024
     chunk_size = min((end - start) + 1, MAX_CHUNK)

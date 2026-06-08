@@ -1,7 +1,9 @@
-"""core/db/ops_log.py — DB 操作日志装饰器
+"""core/db/ops_log.py — DB operation logging decorator
 
-自动记录所有 CRUD/查询的调用、耗时和异常。
+Automatically records all CRUD/query calls, elapsed time, and exceptions.
 """
+
+from __future__ import annotations
 
 import functools
 import time
@@ -11,9 +13,9 @@ from core.logger import get_logger
 
 log = get_logger("db-ops")
 
-# 参数中超过此长度会被截断
+# Arguments longer than this will be truncated
 _MAX_ARG_LEN = 200
-# 敏感/大字段名（不记录值）
+# Sensitive / large field names (values not logged)
 _SENSITIVE_KEYS = {"cover_b64", "cover_path", "magnet", "content", "post_url"}
 
 
@@ -25,7 +27,7 @@ def _truncate(val):
 
 
 def _sanitize_args(func_name: str, args, kwargs) -> str:
-    """生成脱敏后的参数摘要"""
+    """Generate a sanitized argument summary"""
     parts = []
     for i, v in enumerate(args):
         key = f"arg{i}"
@@ -46,7 +48,7 @@ def _sanitize_args(func_name: str, args, kwargs) -> str:
 
 
 def trace_db(func: Callable) -> Callable:
-    """装饰器：记录 DB 操作的耗时和结果"""
+    """Decorator: record DB operation elapsed time and result"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         start = time.perf_counter()

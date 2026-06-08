@@ -21,7 +21,7 @@ class FrontendLog(BaseModel):
 
 @router.post("")
 async def receive_log(body: FrontendLog, request: Request):
-    """接收前端上报的日志/错误"""
+    """Receive logs/errors reported by the frontend."""
     tid = body.trace_id or get_trace_id() or "-"
     set_trace_id(tid)
     msg = f"[{body.tag}] {body.msg}"

@@ -1,6 +1,6 @@
-"""scrapers/v2/pipeline.py — 异步生产者-消费者管道
+"""scrapers/v2/pipeline.py — Async producer-consumer pipeline
 
-背压控制、自动重试、限速，简洁可扩展。
+Backpressure control, auto retry, rate limiting, concise and extensible.
 """
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ T = TypeVar("T")
 
 
 class Pipeline(Generic[T]):
-    """统一爬虫管道
+    """Unified crawler pipeline
 
-    使用 asyncio.Queue 连接 producer → consumer，
-    支持并发消费者、失败隔离、优雅关闭。
+    Uses asyncio.Queue to connect producer → consumer,
+    supporting concurrent consumers, failure isolation, and graceful shutdown.
     """
 
     def __init__(
@@ -42,7 +42,7 @@ class Pipeline(Generic[T]):
         urls: list[str],
         semaphore: asyncio.Semaphore | None = None,
     ) -> asyncio.Queue[T | Exception | None]:
-        """生产侧：抓取并抽取，结果放入队列。完成后放入 None 毒丸。"""
+        """Producer side: fetch and extract, put results into queue. Put None poison pill when done."""
         queue: asyncio.Queue[T | Exception | None] = asyncio.Queue()
         sem = semaphore or asyncio.Semaphore(self.concurrency)
 
@@ -68,11 +68,11 @@ class Pipeline(Generic[T]):
         return queue
 
     async def consume(self, queue: asyncio.Queue[T | Exception | None]):
-        """消费侧：从队列取出写入 sink"""
+        """Consumer side: dequeue and write to sink"""
         stop_sentinel = object()
         consumer_queue: asyncio.Queue[T | Exception | object] = asyncio.Queue()
 
-        # 把 produce 队列搬运到 consumer_queue
+        # Move produce queue to consumer_queue
         async def _pump():
             while True:
                 item = await queue.get()
@@ -111,6 +111,6 @@ class Pipeline(Generic[T]):
         extractor,
         urls: list[str],
     ) -> None:
-        """一键运行：produce + consume"""
+        """One-click run: produce + consume"""
         queue = await self.produce(fetcher, extractor, urls)
         await self.consume(queue)

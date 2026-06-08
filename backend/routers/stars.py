@@ -1,6 +1,6 @@
 """backend/routers/stars.py — Actor aggregate data router
 
-大宽表简化后，查询不再 JOIN magnets，直接从 titles.magnet 读取。
+After the wide-table simplification, queries no longer JOIN magnets; read directly from titles.magnet.
 """
 
 from __future__ import annotations
@@ -181,7 +181,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     """Add a new actor: parse homepage URL, dedupe, write to config.json and DB, background sync titles."""
     url = request.star_page_url.strip()
 
-    # URL 格式校验
+    # URL format validation
     if not url.startswith("https://ijavtorrent.com/actress/"):
         raise HTTPException(status_code=400, detail="URL 必须是 ijavtorrent actress 页面")
 
@@ -191,7 +191,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     slug, star_id = m.groups()
     handle = slug.replace("-", "_")
 
-    # 加载配置并去重
+    # Load config and deduplicate
     config = _load_config()
     stars = config.get("stars", [])
     for s in stars:
@@ -200,7 +200,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
         if s.get("handle") == handle:
             raise HTTPException(status_code=409, detail="该 handle 已被占用")
 
-    # Fetch 页面提取信息
+    # Fetch page and extract info
     from scrapers.v2.fetchers import HttpxFetcher
     from scrapers.v2.extractors import IJavTorrentExtractor
     from selectolax.parser import HTMLParser
@@ -212,7 +212,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     h1 = tree.css_first("h1")
     name = h1.text().strip() if h1 else slug.replace("-", " ").title()
 
-    # 提取页面作品，取第一个作品的 code 作为 star code
+    # Extract titles from page, use the first title's code as the star code
     extractor = IJavTorrentExtractor()
     items = extractor.extract(html)
     if items:
@@ -220,7 +220,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     else:
         code = f"PENDING-{star_id}"
 
-    # 再次检查 code 是否冲突
+    # Re-check code conflict
     for s in stars:
         if s.get("code") == code:
             raise HTTPException(status_code=409, detail=f"code {code} already used by another actor")
@@ -234,12 +234,12 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
         "star_page_url": url,
     }
 
-    # 写入 config.json
+    # Write to config.json
     stars.append(new_star)
     config["stars"] = stars
     _save_config(config)
 
-    # 写入数据库
+    # Write to database
     from core import db
     db.upsert_star(name=name, handle=handle, code=code)
 
@@ -337,7 +337,7 @@ class LikeResponse(BaseModel):
 
 @router.post("/like")
 async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
-    """Like / unlike 作品；like 后若存在 magnet 则立即触发下载。"""
+    """Like / unlike a title; if magnet exists after liking, trigger download immediately."""
     code = request.code.strip().upper()
     liked = request.liked
 
@@ -353,7 +353,7 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
     finally:
         conn.close()
 
-    # 更新数据库
+    # Update database
     conn = duckdb.connect(DB_PATH)
     try:
         conn.execute(
@@ -381,7 +381,7 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
         else:
             log.warning(f"like_title: auto-download failed for {code}")
 
-    # Unlike 时立即清理已下载的缓存
+    # When unliking, immediately clean up downloaded cache
     removed = False
     if not liked and magnet_hash:
         removed = await asyncio.to_thread(engine.remove_torrent, magnet_hash)

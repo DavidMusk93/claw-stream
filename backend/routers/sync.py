@@ -1,7 +1,7 @@
 """backend/routers/sync.py — Actor title sync router
 
-在主事件循环中直接运行 scrapers.v2.tasks.sync_titles，
-配合全局 DuckDB 串行写队列，彻底消除跨进程/跨线程锁冲突。
+Run scrapers.v2.tasks.sync_titles directly in the main event loop,
+coordinated with the global DuckDB serial write queue, completely eliminating cross-process / cross-thread lock conflicts.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ _sync_state: dict[str, Any] = {
 
 
 async def _run_sync_bg() -> None:
-    """在主事件循环中运行 sync-titles（完全 async，不会阻塞 loop）。"""
+    """Run sync-titles in the main event loop (fully async, won't block the loop)."""
     global _sync_state
     _sync_state["log_lines"] = []
     _sync_state["last_error"] = None
@@ -67,7 +67,7 @@ async def start_sync() -> dict[str, Any]:
 
 @router.get("/sync")
 async def get_sync_status() -> dict[str, Any]:
-    """查询同步状态。"""
+    """Query sync status."""
     elapsed = None
     if _sync_state["started_at"]:
         elapsed = round(time.time() - _sync_state["started_at"], 1)

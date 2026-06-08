@@ -39,7 +39,7 @@ async def delete_cache(hash_str: str, engine: Any = Depends(get_engine)):
 
 @router.post("/gc-orphans")
 async def gc_orphans(engine: Any = Depends(get_engine)):
-    """手动触发孤儿 torrent GC：清理磁盘上存在但数据库无对应记录的 torrent。"""
+    """Manually trigger orphan torrent GC: clean up torrents that exist on disk but have no corresponding record in the database."""
     script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     db_path = os.path.join(script_dir, "data", "claw.duckdb")
     removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)

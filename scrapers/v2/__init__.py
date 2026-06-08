@@ -1,11 +1,11 @@
-"""scrapers/v2 — 声明式管道爬虫架构
+"""scrapers/v2 — Declarative pipeline crawler architecture
 
-核心设计：
-- Schema-first: Pydantic 模型定义数据结构
-- Fetcher: 统一获取层 (httpx / playwright)
-- Extractor: 统一抽取层 (selectolax CSS)
-- Sink: 统一写入层 (DuckDB)
-- Pipeline: 异步生产者-消费者管道
+Core design:
+- Schema-first: Pydantic models define data structures
+- Fetcher: Unified fetch layer (httpx / playwright)
+- Extractor: Unified extraction layer (selectolax CSS)
+- Sink: Unified write layer (DuckDB)
+- Pipeline: Async producer-consumer pipeline
 """
 
 from __future__ import annotations

@@ -1,3 +1,3 @@
-"""scrapers/v2/sources — 站点特定配置与抽取逻辑"""
+"""scrapers/v2/sources — Site-specific config and extraction logic"""
 
 from __future__ import annotations

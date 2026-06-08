@@ -32,7 +32,7 @@ IMAGES_DIR = os.path.join(SCRIPT_DIR, "images")
 
 
 def _guess_image_mime(data: bytes) -> str:
-    """根据二进制头部推断图片 MIME 类型。"""
+    """Guess image MIME type from binary header."""
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -43,7 +43,7 @@ def _guess_image_mime(data: bytes) -> str:
         return "image/webp"
     if data.startswith(b"BM"):
         return "image/bmp"
-    return "image/jpeg"  # 默认回退
+    return "image/jpeg"  # Default fallback
 
 
 def _get_engine() -> TorrentEngine:
@@ -52,7 +52,7 @@ def _get_engine() -> TorrentEngine:
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
-    """记录每个 HTTP 请求的访问日志（方法、URL、状态码、耗时、客户端 IP、trace_id）"""
+    """Log every HTTP request (method, URL, status code, elapsed time, client IP, trace_id)."""
     async def dispatch(self, request: Request, call_next):
         start = time.perf_counter()
         client = request.client.host if request.client else "-"
@@ -95,12 +95,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = engine
     log.info(f"TorrentEngine initialized, cache dir: {CACHE_DIR}")
 
-    # 确保 DuckDB schema 已初始化（幂等）
+    # Ensure DuckDB schema is initialized (idempotent)
     from core import db as _db
     _db.init_schema()
     log.info("DuckDB schema initialized")
 
-    # 加载用户已 like 的作品到引擎保护集合
+    # Load user-liked titles into the engine protection set
     try:
         conn = duckdb.connect(os.path.join(SCRIPT_DIR, "data", "claw.duckdb"))
         try:
@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         log.warning(f"Failed to load liked torrents: {e}")
 
-    # 启动时清理孤儿 torrent（历史 bug 遗留或删除流程中断导致）
+    # Clean up orphan torrents on startup (caused by historical bugs or interrupted deletion flows)
     try:
         db_path = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
         removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
@@ -133,7 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 async def _global_exception_handler(request: Request, exc: Exception):
-    """全局异常捕获：记录未处理的异常并返回统一错误响应"""
+    """Global exception handler: log unhandled exceptions and return a unified error response."""
     access_log.error(
         f"Unhandled exception on {request.method} {request.url.path}: {type(exc).__name__}: {exc}",
         exc_info=True,
@@ -193,13 +193,13 @@ async def health():
 
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
-# 内存缓存：避免重复查询 DuckDB（封面不会变化）
+# In-memory cache: avoid repeatedly querying DuckDB (covers don't change)
 _cover_cache: dict[str, tuple[bytes, str]] = {}
 
 
 def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
-    """同步函数：从 DuckDB 或文件系统读取封面，返回 (image_bytes, media_type)。"""
-    # 1. 优先从 DuckDB 读取
+    """Synchronous function: read cover from DuckDB or filesystem, return (image_bytes, media_type)."""
+    # 1. Prefer reading from DuckDB
     try:
         conn = duckdb.connect(DB_PATH)
         try:
@@ -222,7 +222,7 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
     except Exception:
         pass
 
-    # 2. 回退到文件系统 images/titles/{code}/{code}.jpg
+    # 2. Fallback to filesystem images/titles/{code}/{code}.jpg
     code_lower = code_upper.lower()
     cover_dir = os.path.join(IMAGES_DIR, "titles", code_lower)
     if os.path.isdir(cover_dir):
@@ -242,14 +242,14 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
 
 @app.get("/api/cover/{code}")
 async def cover_image(code: str):
-    """从 DuckDB cover_b64 字段读取封面，或回退到 images/titles/{code}/ 文件系统。
+    """Read cover from DuckDB cover_b64 field, or fallback to images/titles/{code}/ filesystem.
     
-    使用线程池执行同步 I/O，避免阻塞事件循环。并发大量封面请求时，
-    不会串行阻塞其他 API。
+    Use thread pool for synchronous I/O to avoid blocking the event loop. When there are many concurrent cover requests,
+    it won't serially block other APIs.
     """
     code_upper = code.upper()
 
-    # 内存缓存命中直接返回（无需线程切换）
+    # In-memory cache hit returns directly (no thread switch needed)
     cached = _cover_cache.get(code_upper)
     if cached:
         image_bytes, media_type = cached
@@ -262,7 +262,7 @@ async def cover_image(code: str):
     result = await asyncio.to_thread(_read_cover_from_db, code_upper)
     if result:
         image_bytes, media_type = result
-        # 限制缓存大小，防止内存无限增长（简单 LRU：超过 1000 时清空）
+        # Limit cache size to prevent unbounded memory growth (simple LRU: clear when exceeding 1000)
         if len(_cover_cache) > 1000:
             _cover_cache.clear()
         _cover_cache[code_upper] = result

@@ -3,9 +3,9 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright", "httpx", "duckdb", "selectolax", "pydantic"]
 # ///
-"""scrapers/v2/cli.py — 统一爬虫入口
+"""scrapers/v2/cli.py — Unified crawler entrypoint
 
-用法:
+Usage:
     python -m scrapers.v2.cli sync-titles  [config.json]
 """
 

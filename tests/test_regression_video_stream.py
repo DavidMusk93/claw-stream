@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for video streaming pipeline.
 
-基于真实 BitTorrent 下载的视频文件运行，覆盖：
+Run against real BitTorrent-downloaded video files, covering:
 1. False hole detection (MP4 ftyp 00 00 misdetected as hole)
 2. Memory explosion (bytes=0- reading entire file)
 3. Finished-state deadlock (libtorrent ignores priorities)
@@ -184,7 +184,7 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
         return r
 
     def test_api_check_reports_ready(self) -> None:
-        """/api/check 对真实下载文件返回 head_ready=True。"""
+        """/api/check returns head_ready=True for real downloaded files."""
         r = self.client.get(f"/api/check/{self.hash_str}")
         self.assertEqual(r.status_code, 200)
         data = r.json()

@@ -23,7 +23,7 @@ def get_engine(request: Request) -> Any:
 
 
 def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
-    """解析 Range 请求头，返回 (start, end)。格式无效时抛出 ValueError。"""
+    """Parse Range request header, return (start, end). Raises ValueError on invalid format."""
     if not range_hdr.startswith("bytes="):
         raise ValueError("Invalid range unit")
     parts = range_hdr.replace("bytes=", "").split("-")
@@ -40,7 +40,7 @@ def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
 
 
 def _is_torrent_checking(engine: Any, hash_str: str) -> bool:
-    """检查指定 torrent 是否处于 checking_files 状态。"""
+    """Check whether the specified torrent is in checking_files state."""
     with engine.lock:
         info = engine.torrents.get(hash_str)
     if not info:
@@ -55,14 +55,14 @@ def _is_torrent_checking(engine: Any, hash_str: str) -> bool:
 async def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
     """Serve video stream with Range support.
 
-    大文件流式播放使用线程池执行文件 I/O，避免阻塞 FastAPI 事件循环。
-    不带 Range 头的请求返回前 8MB（200），避免 Safari 收到 416 后报 code=4。
-    带 Range 头的请求返回 206 Partial Content；若请求范围全是 hole 则返回 416。
-    若 torrent 处于 checking_files 状态返回 503，防止读取到不一致数据。
+    Large-file streaming playback uses the thread pool for file I/O, avoiding blocking the FastAPI event loop.
+    Requests without a Range header return the first 8MB (200), preventing Safari from throwing code=4 after receiving 416.
+    Requests with a Range header return 206 Partial Content; if the requested range is entirely a hole, return 416.
+    If the torrent is in checking_files state, return 503 to prevent reading inconsistent data.
     """
     import time as _time
     t0 = _time.perf_counter()
-    # 优先使用 _pick_video_file 已选定的目标文件，避免下载过程中误选广告文件
+    # Prefer the target file already selected by _pick_video_file, to avoid accidentally selecting ad files during download
     preferred_path = None
     with engine.lock:
         info = engine.torrents.get(hash_str)
@@ -106,7 +106,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             }
             raise HTTPException(status_code=416, headers=headers, detail="Invalid range")
 
-    # 文件 I/O 通过 read_video_range 内部异步化，不再阻塞事件循环
+    # File I/O is internally async via read_video_range, no longer blocking the event loop
     t4 = _time.perf_counter()
     data = await read_video_range(hash_str, start, end, engine)
     t5 = _time.perf_counter()
@@ -133,7 +133,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
 
     if range_hdr:
         if actual_size == 0:
-            # 请求范围全是 hole，返回 416 + 空范围 Content-Range
+            # Requested range is entirely a hole, return 416 + empty-range Content-Range
             headers = {
                 "Content-Range": f"bytes */{total_size}",
                 "Accept-Ranges": "bytes",
@@ -148,7 +148,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         }
         return Response(content=data, status_code=206, headers=headers)
     else:
-        # Safari 等浏览器首次请求可能不带 Range；返回 200 + 前 1MB 避免 416 触发 code=4
+        # Safari and other browsers may not send Range on the first request; return 200 + first 1MB to avoid 416 triggering code=4
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(actual_size),

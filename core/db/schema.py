@@ -1,16 +1,18 @@
-"""core/db/schema.py — Schema 初始化与迁移
+"""core/db/schema.py — Schema initialization and migration
 
-大宽表设计：titles 表直接内联 star_code、star_name 和 magnet 信息，
-彻底消除 stars-titles-magnets 三表 JOIN 和跨表事务。
+Wide-table design: the titles table directly inlines star_code, star_name, and magnet info,
+completely eliminating stars-titles-magnets triple-table JOINs and cross-table transactions.
 """
+
+from __future__ import annotations
 
 from .connection import _conn
 
 
 def init_schema(conn=None):
-    """初始化表结构（幂等）
+    """Initialize table schema (idempotent)
 
-    conn: 若传入外部连接，则使用之且不关闭；否则新建连接。
+    conn: if an external connection is passed, use it without closing; otherwise create a new one.
     """
     should_close = conn is None
     conn = conn or _conn()
@@ -58,7 +60,7 @@ def init_schema(conn=None):
                 UNIQUE(star_id, code)
             )
         """)
-        # 为已存在表追加列（向后兼容）
+        # Append columns to existing tables (backward compatibility)
         for col in [
             ("release_date_sort", "TEXT"),
             ("charming_intro", "TEXT"),
@@ -100,7 +102,7 @@ def init_schema(conn=None):
 
 
 def backfill_release_date_sort():
-    """回填已有数据的 release_date_sort 列"""
+    """Backfill release_date_sort column for existing data"""
     conn = _conn()
     conn.execute("""
         UPDATE titles

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""log_viewer.py — 日志查询 CLI
+"""log_viewer.py — Log query CLI
 
-用法:
-    python3 core/log_viewer.py tail -n 50          # 查看最近 50 行
-    python3 core/log_viewer.py tail -f             # 实时监控
-    python3 core/log_viewer.py tail --trace-id abc # 按 trace_id 过滤
-    python3 core/log_viewer.py grep "error"        # 关键词搜索
+Usage:
+    python3 core/log_viewer.py tail -n 50          # View last 50 lines
+    python3 core/log_viewer.py tail -f             # Real-time monitoring
+    python3 core/log_viewer.py tail --trace-id abc # Filter by trace_id
+    python3 core/log_viewer.py grep "error"        # Keyword search
 """
+
+from __future__ import annotations
 
 import os, sys, glob, argparse, time
 
@@ -37,7 +39,7 @@ def _tail_all(n=50, trace_id=None):
                 continue
             if trace_id and f"[{trace_id}]" not in line:
                 continue
-            # 从行首提取时间戳用于排序
+            # Extract timestamp from line start for sorting
             ts = line[:15] if len(line) > 15 else line
             entries.append((ts, line))
     entries.sort(key=lambda x: x[0])

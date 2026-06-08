@@ -1,4 +1,4 @@
-"""core/db/connection.py — 数据库连接管理与通用工具"""
+"""core/db/connection.py — Database connection management and utilities"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 
 def _conn(max_retries: int = 5, retry_delay: float = 0.5):
-    """获取 DuckDB 连接（单文件，每次新建连接），带锁冲突重试。"""
+    """Get DuckDB connection (single-file, new connection each time) with lock-conflict retry."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     for attempt in range(max_retries):
         try:
@@ -25,7 +25,7 @@ def _conn(max_retries: int = 5, retry_delay: float = 0.5):
 
 
 def _date_to_sort(date_str: str | None) -> str | None:
-    """将 dd/mm/YYYY 转为 YYYYMMDD 用于正确排序"""
+    """Convert dd/mm/YYYY to YYYYMMDD for correct sorting"""
     if not date_str:
         return None
     try:

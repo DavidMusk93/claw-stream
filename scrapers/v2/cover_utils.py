@@ -1,6 +1,6 @@
-"""scrapers/v2/cover_utils.py — 封面下载与处理工具
+"""scrapers/v2/cover_utils.py — Cover download and processing utilities
 
-从多个源获取高清封面，返回 base64 data URI。
+Fetch HD covers from multiple sources, return base64 data URI.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from scrapers.v2.fetchers import HttpxFetcher, USER_AGENTS
 
 
 def parse_image_size(data: bytes) -> tuple[int, int]:
-    """解析 JPEG/PNG/WebP 图片尺寸，返回 (width, height)"""
+    """Parse JPEG/PNG/WebP image dimensions, return (width, height)"""
     if len(data) < 8:
         return (0, 0)
 
@@ -73,7 +73,7 @@ def parse_image_size(data: bytes) -> tuple[int, int]:
 
 
 def _guess_mime(data: bytes) -> str:
-    """根据二进制头部推断图片 MIME 类型。"""
+    """Infer image MIME type from binary header."""
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -86,7 +86,7 @@ def _guess_mime(data: bytes) -> str:
 
 
 def is_good_cover(data: bytes) -> bool:
-    """检查封面是否足够高清：>= 15KB 且尺寸 >= 200x200"""
+    """Check if cover is HD enough: >= 15KB and dimensions >= 200x200"""
     if len(data) < 15 * 1024:
         return False
     w, h = parse_image_size(data)
@@ -94,7 +94,7 @@ def is_good_cover(data: bytes) -> bool:
 
 
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
-    """下载封面，优先高清源：DMM CDN → 给定 URL → 返回 base64 data URI 或空"""
+    """Download cover, prefer HD sources: DMM CDN → given URL → return base64 data URI or empty"""
     tried: set[str] = set()
 
     # 1. DMM CDN
@@ -112,7 +112,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
             except Exception:
                 pass
 
-    # 2. 给定 URL
+    # 2. Given URL
     for url in [cover_url] if cover_url else []:
         if url in tried:
             continue
@@ -136,7 +136,7 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
 
 
 async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) -> str:
-    """复用 fetcher client 下载单个封面，返回 base64 data URI 或空"""
+    """Reuse fetcher client to download a single cover, return base64 data URI or empty"""
     tried: set[str] = set()
 
     # 1. DMM CDN
@@ -153,7 +153,7 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
             except Exception:
                 pass
 
-    # 2. 给定 URL
+    # 2. Given URL
     for url in [cover_url] if cover_url else []:
         if url in tried:
             continue
@@ -176,10 +176,10 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
 
 
 async def download_covers_batch(items: list[tuple[str, str]], concurrency: int = 8) -> dict[str, str]:
-    """批量并发下载封面，返回 {code: base64_data_uri}。
+    """Batch concurrent cover download, returns {code: base64_data_uri}.
 
     items: list of (code, cover_url)
-    concurrency: 并发下载数
+    concurrency: concurrent download limit
     """
     sem = asyncio.Semaphore(concurrency)
     results: dict[str, str] = {}

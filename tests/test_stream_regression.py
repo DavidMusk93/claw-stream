@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests using real FastAPI TestClient + real BT download + real HTTP requests.
 
-基于本地 seed 的真实 BitTorrent 下载视频运行，覆盖：
+Run against real BitTorrent downloads from local seed, covering:
 1. Safari Range request sequence
 2. checking_files blocks stream
 3. Range response integrity
@@ -34,13 +34,13 @@ from tests.local_bt_fixture import LocalSeed, download_with_engine, cleanup_cach
 
 
 # ── Config ──────────────────────────────────────────────────────────
-# 使用本地 seed 的真实 BT 下载视频作为测试样本
+# Use real BT-downloaded video from local seed as test sample
 _sample_hash: str | None = None
 _sample_video_path: str | None = None
 
 
 def _get_sample_hash() -> str:
-    """获取本地 seed 的 hash。"""
+    """Get the hash of the local seed."""
     global _sample_hash
     if _sample_hash is None:
         seed = LocalSeed()
@@ -360,13 +360,13 @@ class TestHoleHandling(unittest.TestCase):
 
     def test_known_hole_range_returns_416(self) -> None:
         """Request a range beyond file size; must return 416 not 200/206."""
-        # 对于已下载的完整文件，没有 hole；测试请求超出文件末尾
+        # For fully downloaded files there is no hole; test requesting beyond file end
         beyond = self.total + 1_500_000_000
         r = self.client.get(
             f"/stream/{_get_sample_hash()}",
             headers={"Range": f"bytes={beyond}-{beyond + 65535}"},
         )
-        # 超出范围应返回 416
+        # Out-of-range requests should return 416
         self.assertEqual(r.status_code, 416, "超出文件范围的 Range 应返回 416")
         cr = r.headers.get("content-range", "")
         self.assertIn("bytes */", cr, "416 must have Content-Range: bytes */total")

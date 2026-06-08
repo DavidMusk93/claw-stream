@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared fixtures for star-archive regression tests.
 
-提供本地 BitTorrent seed fixture，让回归测试基于真实的 BT 下载视频运行，
-而非依赖外部网络或合成文件。
+Provides local BitTorrent seed fixtures so regression tests run against real BT-downloaded videos,
+rather than relying on external networks or synthetic files.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from tests.local_bt_fixture import LocalSeed, download_with_engine, cleanup_cach
 
 @pytest.fixture(scope="session")
 def local_seed():
-    """启动本地 seed 会话，提供真实的 BT 种子。
+    """Start local seed session, providing a real BT seed.
 
     Yields a LocalSeed instance with attributes:
         - hash: str
@@ -30,10 +30,10 @@ def local_seed():
 
 @pytest.fixture(scope="session")
 def real_video_engine(local_seed, tmp_path_factory):
-    """使用 TorrentEngine 从本地 seed 下载真实视频。
+    """Use TorrentEngine to download real video from local seed.
 
-    返回 (engine, video_path, hash_str)。
-    engine 在 session 结束时自动关闭并清理缓存。
+    Returns (engine, video_path, hash_str).
+    engine is automatically shut down and cache cleaned up at session end.
     """
     cache_dir = str(tmp_path_factory.mktemp("bt_cache"))
     hash_str = local_seed.hash

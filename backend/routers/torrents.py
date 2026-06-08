@@ -47,18 +47,18 @@ def _is_primary_title(work_code: str) -> bool:
 
 
 def _resolve_magnet(magnet: str) -> str:
-    """如果 magnet 只有 bare hash，从数据库查找包含 tracker 的完整 magnet。"""
+    """If the magnet only contains a bare hash, look up the full magnet with trackers from the database."""
     m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
     if not m:
         return magnet
     hash_str = m.group(1).lower()
-    # 已经有 tracker 就原样返回
+    # If it already has trackers, return as-is
     if "tr=" in magnet:
         return magnet
     try:
         conn = duckdb.connect(DB_PATH)
         try:
-            # 大宽表：从 titles.all_magnets JSON 中查找匹配的 hash
+            # Wide table: look up matching hash from titles.all_magnets JSON
             row = conn.execute("""
                 SELECT json_extract_string(
                     list_filter(
@@ -143,7 +143,7 @@ async def seek_torrent(req: SeekRequest, engine: Any = Depends(get_engine)):
 
 @router.post("/progress")
 async def progress_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
-    """定期报告播放进度，引擎滑动下载窗口（±30 piece），其余停止下载。"""
+    """Periodically report playback progress; engine slides the download window (±30 pieces), stops downloading the rest."""
     ok = await asyncio.to_thread(engine.update_play_progress, req.hash, req.time, req.duration)
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found or not ready")
@@ -152,7 +152,7 @@ async def progress_torrent(req: ProgressRequest, engine: Any = Depends(get_engin
 
 @router.post("/pause")
 async def pause_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
-    """暂停下载：将所有 piece 优先级设为 0，保留已完成的 piece。"""
+    """Pause download: set all piece priorities to 0, keep completed pieces."""
     ok = await asyncio.to_thread(engine.pause_download, req.hash)
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found")
@@ -161,7 +161,7 @@ async def pause_torrent(req: ProgressRequest, engine: Any = Depends(get_engine))
 
 @router.post("/resume")
 async def resume_torrent(req: ProgressRequest, engine: Any = Depends(get_engine)):
-    """恢复下载：重新设置 head+tail+当前播放窗口。"""
+    """Resume download: re-set head+tail+current playback window."""
     ok = await asyncio.to_thread(engine.resume_download, req.hash, req.time, req.duration)
     if not ok:
         raise HTTPException(status_code=404, detail="Torrent not found or not ready")

@@ -1,7 +1,7 @@
-"""scrapers/v2/fetchers.py — 统一获取层
+"""scrapers/v2/fetchers.py — Unified fetch layer
 
-支持 httpx 纯 HTTP 与 Playwright 浏览器渲染两种模式，
-通过协议抽象让上层无感切换。
+Supports both httpx pure HTTP and Playwright browser rendering modes,
+allowing seamless switching for upper layers via protocol abstraction.
 """
 
 from __future__ import annotations
@@ -25,15 +25,15 @@ HTTP_HEADERS = {
 
 
 class Fetcher(Protocol):
-    """获取器协议"""
+    """Fetcher protocol"""
 
     async def fetch(self, url: str, **kwargs) -> str:
-        """返回 URL 的 HTML 内容"""
+        """Return HTML content of the URL"""
         ...
 
 
 class HttpxFetcher:
-    """纯 HTTP 获取器，用于静态页面"""
+    """Pure HTTP fetcher for static pages"""
 
     def __init__(self, headers: dict[str, str] | None = None, timeout: float = 15.0):
         self.headers = headers or HTTP_HEADERS.copy()
@@ -56,7 +56,7 @@ class HttpxFetcher:
         return resp.text
 
     async def fetch_bytes(self, url: str, **kwargs) -> bytes:
-        """获取二进制内容（如下载封面）"""
+        """Fetch binary content (e.g., download cover)"""
         client = await self._ensure_client()
         resp = await client.get(url, headers={**self.headers, **kwargs.get("headers", {})})
         resp.raise_for_status()
@@ -76,7 +76,7 @@ class HttpxFetcher:
 
 
 class PlaywrightFetcher:
-    """浏览器渲染获取器，用于 JS 动态页面"""
+    """Browser rendering fetcher for JS dynamic pages"""
 
     def __init__(
         self,
@@ -123,7 +123,7 @@ class PlaywrightFetcher:
             await ctx.close()
 
     async def eval_on_selector_all(self, url: str, selector: str, js_expr: str, **kwargs) -> list:
-        """打开页面后对选择器执行 JS"""
+        """Execute JS on selector after opening page"""
         if self._browser is None:
             await self.start()
         ctx = await self._browser.new_context(

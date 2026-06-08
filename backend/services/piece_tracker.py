@@ -259,10 +259,10 @@ class PieceStateTracker:
         return self._verified.bit_count()
 
     def get_lane_segments(self, segments: int = 30) -> list[list[float, float, int]]:
-        """生成泳道数据：将 piece 范围分成 segments 段，每段返回 [start_pct, end_pct, state]。
+        """Generate lane data: split piece range into segments, each returning [start_pct, end_pct, state].
 
         state: 0=NOT_DOWNLOADED, 1=DOWNLOADING, 2=VERIFIED, 3=CORRUPT
-        每段取占比最高的状态。
+        Each segment takes the most prevalent state.
         """
         total_pieces = self.end_piece - self.start_piece + 1
         if total_pieces <= 0:
@@ -289,7 +289,7 @@ class PieceStateTracker:
                 else:
                     counts[0] += 1
 
-            # 取占比最高的状态（优先级：VERIFIED > DOWNLOADING > CORRUPT > NOT_DOWNLOADED）
+            # Take the most prevalent state (priority: VERIFIED > DOWNLOADING > CORRUPT > NOT_DOWNLOADED)
             best_state = 0
             best_count = counts[0]
             for state_idx in (3, 1, 2):

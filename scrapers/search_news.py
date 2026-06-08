@@ -3,9 +3,9 @@
 # requires-python = ">=3.11"
 # dependencies = ["playwright", "httpx", "duckdb", "selectolax", "pydantic"]
 # ///
-"""scrapers/search_news.py — 兼容层
+"""scrapers/search_news.py — Compatibility layer
 
-保留原有入口与函数导出，内部委托 scrapers/v2/ 实现。
+Preserve original entrypoints and function exports, internally delegate to scrapers/v2/ implementation.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-# 保留旧 import 路径兼容性
+# Preserve old import path compatibility
 from scrapers.v2.cover_utils import parse_image_size, download_cover_b64, is_good_cover
 from scrapers.v2.tasks.sync_titles import run
 

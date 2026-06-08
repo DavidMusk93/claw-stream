@@ -20,16 +20,16 @@ log = get_logger("torrent-engine")
 _SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(_SCRIPT_DIR, "cache", "torrent")
 
-MAX_CACHE_SIZE_GB = 0   # 0 表示自动按磁盘容量的 60% 计算
+MAX_CACHE_SIZE_GB = 0   # 0 means auto-calculate as 60% of disk capacity
 PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
-CACHE_CLEAN_INTERVAL_SEC = 60  # 后台清理间隔
+CACHE_CLEAN_INTERVAL_SEC = 60  # Background cleanup interval
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
     r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
 ]]
 
-# 常见番号格式匹配器
+# Common work-code format matcher
 _WORK_CODE_RE = re.compile(r"[A-Z]{2,6}-\d{3,5}", re.I)
 
 # Cache MP4 moov scan results: path -> (moov_start, moov_end).
@@ -40,7 +40,7 @@ _MOOV_CACHE: dict[str, tuple[int, int]] = {}
 
 
 def _extract_work_code(name: str) -> str | None:
-    """从文件名或 torrent 名中提取作品番号（如 ABC-123）。"""
+    """Extract work code from file name or torrent name (e.g., ABC-123)."""
     if not name:
         return None
     m = _WORK_CODE_RE.search(name)
@@ -50,10 +50,10 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, int]:
-    """扫描 MP4 文件，查找 moov box 的起始和结束位置。
+    """Scan MP4 file for moov box start and end positions.
 
-    返回 (moov_start, moov_end)。moov_start=0 且 moov_end>0 表示 head-moov。
-    moov_start>0 表示 tail-moov。返回 (0, 0) 表示未找到。
+    Returns (moov_start, moov_end). moov_start=0 and moov_end>0 means head-moov.
+    moov_start>0 means tail-moov. Returns (0, 0) if not found.
     """
     cached = _MOOV_CACHE.get(path)
     if cached is not None:
@@ -116,7 +116,7 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
 
 
 def _mime_type(path: str) -> str:
-    """根据文件扩展名返回对应的 MIME 类型。"""
+    """Return MIME type based on file extension."""
     ext = os.path.splitext(path)[1].lower()
     return {
         ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
@@ -217,14 +217,14 @@ def _check_video_ready(path: str, hash_str: str = "") -> tuple[int, bool, str]:
 
 
 def find_video_state(hash_str: str, preferred_path: str | None = None) -> tuple[str | None, int, bool, str]:
-    """查找视频文件并检查是否已下载足够的头部数据以供播放。
+    """Find video file and check if enough head data is downloaded for playback.
 
-    如果提供了 preferred_path（来自 _pick_video_file 的目标文件），
-    优先使用它，避免在下载过程中误选已下载更多的广告文件。
+    If preferred_path (target file from _pick_video_file) is provided,
+    use it first to avoid mistakenly selecting ad files that have downloaded more.
 
-    返回: (文件路径, 实际磁盘大小, 头部是否就绪, MIME 类型)
+    Returns: (file_path, actual_disk_size, head_ready, mime_type)
     """
-    # 优先使用 _pick_video_file 已选定的目标文件
+    # Prefer the target file already selected by _pick_video_file
     if preferred_path and os.path.exists(preferred_path):
         ext = os.path.splitext(preferred_path)[1].lower()
         if ext in VIDEO_EXTS:
@@ -258,7 +258,7 @@ def find_video_state(hash_str: str, preferred_path: str | None = None) -> tuple[
 
 
 def format_size(b: int) -> str:
-    """将字节数格式化为人类可读的字符串。"""
+    """Format byte count as human-readable string."""
     if b == 0:
         return "0 B"
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -268,7 +268,7 @@ def format_size(b: int) -> str:
 
 # ── BitTorrent engine ───────────────────────────────────
 def _get_disk_total_bytes(path: str) -> int:
-    """获取 path 所在分区的总容量（字节）。"""
+    """Get total capacity (bytes) of the partition containing path."""
     try:
         st = os.statvfs(path)
         return st.f_blocks * st.f_frsize
@@ -277,7 +277,7 @@ def _get_disk_total_bytes(path: str) -> int:
 
 
 class TorrentEngine:
-    """BitTorrent 下载引擎，管理缓存、优先级和播放状态。"""
+    """BitTorrent download engine; manages cache, priorities, and playback state."""
 
     def __init__(self, cache_dir: str, max_size_gb: int) -> None:
         self.cache_dir = cache_dir
@@ -323,7 +323,7 @@ class TorrentEngine:
         self._preload_thread.start()
 
     def _preload_cached_torrents(self) -> None:
-        """扫描 cache 目录，自动加载所有已缓存的 .torrent 文件。"""
+        """Scan cache directory and auto-load all cached .torrent files."""
         if not os.path.isdir(self.cache_dir):
             return
         loaded = 0
@@ -350,7 +350,7 @@ class TorrentEngine:
             log.info(f"preloaded {loaded} cached torrents from {self.cache_dir}")
 
     def _pick_video_file(self, ti: lt.torrent_info) -> tuple[int, int, str, bool]:
-        """从 torrent 文件中挑选视频文件。优先 hhd800.com 高清源，否则选最大的。"""
+        """Pick video file from torrent. Prefer hhd800.com HD source, otherwise largest."""
         fs = ti.files()
         hhd800_candidates = []
         all_video_candidates = []
@@ -368,14 +368,14 @@ class TorrentEngine:
         if hhd800_candidates:
             hhd800_candidates.sort(reverse=True)
             return (*hhd800_candidates[0], True)
-        # 没有 hhd800 时回退到最大的视频文件
+        # Fall back to largest video file when no hhd800
         if all_video_candidates:
             all_video_candidates.sort(reverse=True)
             return (*all_video_candidates[0], False)
         return (0, -1, "", False)
 
     def _calc_prefetch_pieces(self, ti: lt.torrent_info, video_idx: int) -> tuple[int, int]:
-        """计算预下载的 piece 范围（前 2%）。"""
+        """Calculate prefetch piece range (first 2%)."""
         fs = ti.files()
         file_offset = fs.file_offset(video_idx)
         file_size = fs.file_size(video_idx)
@@ -409,7 +409,7 @@ class TorrentEngine:
         return "fragment"
 
     def set_liked(self, hash_str: str, liked: bool) -> None:
-        """更新作品的 user_liked 状态，liked 作品受缓存保护。"""
+        """Update user_liked status for a work; liked works are protected from cache eviction."""
         with self.lock:
             if liked:
                 self.liked_hashes.add(hash_str)
@@ -453,7 +453,7 @@ class TorrentEngine:
         return score
 
     def _punch_hole_middle_pieces(self, hash_str: str) -> int:
-        """L4降级: punch holes in non-head-tail pieces to free disk space.
+        """L4 downgrade: punch holes in non-head-tail pieces to free disk space.
 
         Returns bytes freed. Only operates on completed (L3) torrents.
         """
@@ -575,7 +575,7 @@ class TorrentEngine:
         )
 
     def add_torrent(self, magnet: str, prefetch: bool = False) -> dict[str, Any] | None:
-        """添加一个 magnet 链接到下载队列。"""
+        """Add a magnet link to the download queue."""
         hash_str = self._extract_hash(magnet)
         if not hash_str:
             return None
@@ -668,19 +668,19 @@ class TorrentEngine:
         return info
 
     def _extract_hash(self, magnet: str) -> str | None:
-        """从 magnet 链接中提取 info hash。"""
+        """Extract info hash from magnet link."""
         m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
         return m.group(1).lower() if m else None
 
     def _process_alerts(self) -> None:
-        """后台线程：处理 libtorrent 的 alert 队列。"""
+        """Background thread: process libtorrent alert queue."""
         while not self._stop:
             for alert in self.session.pop_alerts():
                 self._handle_alert(alert)
             time.sleep(0.5)
 
     def _handle_alert(self, alert: lt.alert) -> None:
-        """处理单个 libtorrent alert。"""
+        """Handle a single libtorrent alert."""
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
@@ -741,7 +741,7 @@ class TorrentEngine:
                         tracker.on_hash_failed(alert.piece_index)
 
     def _on_metadata(self, handle: lt.torrent_handle) -> None:
-        """当 torrent metadata 下载完成后，选定视频文件并设置优先级。"""
+        """When torrent metadata download completes, select video file and set priorities."""
         hash_str = str(handle.info_hash())
         with self.lock:
             if hash_str not in self.torrents:
@@ -821,7 +821,7 @@ class TorrentEngine:
             },
         )
 
-        # 持久化 metadata，下次播放时无需重新寻找 peers 下载 metadata
+        # Persist metadata so next playback doesn't need to re-find peers to download metadata
         try:
             torrent_path = os.path.join(info["handle"].status().save_path, f"{hash_str}.torrent")
             info_sec = ti.info_section()
@@ -888,10 +888,11 @@ class TorrentEngine:
         duration_sec: float,
         window_pcs: int = 30,
     ) -> bool:
-        """滑动窗口策略：窗口内 urgent(7)，已下载保留(1)，其余停止(0)。
+        """Sliding-window strategy: urgent(7) inside window, retain(1) for downloaded, stop(0) for others.
 
-        不再全量重置为 0 —— 那样会丢弃已下载的 piece，导致播放时反复重新下载，
-        体验极差。改为保留已下载 piece（priority=1），只把未下载且不在窗口内的设 0。
+        No longer reset all to 0 — that would drop downloaded pieces, causing repeated re-downloads,
+        severely hurting experience. Instead retain downloaded pieces (priority=1), only set
+        undownloaded pieces outside window to 0.
         """
         # CRITICAL: libtorrent 2.0 mmap storage creates a sparse file of full
         # torrent size on add_torrent, then reports finished even though no
@@ -936,11 +937,11 @@ class TorrentEngine:
         head_ready = tracker.head_ready() if tracker else False
         moov_end = info.get("moov_end", 0)
 
-        # 读取当前优先级，做增量修改（避免全量重置丢弃已下载数据）
+        # Read current priorities and apply incremental changes (avoid full reset dropping downloaded data)
         piece_prios = list(h.piece_priorities())
         changed = False
 
-        # ---- moov / head_ready 处理 ----
+        # ---- moov / head_ready handling ----
         moov_pieces: set[int] = set()
         if not head_ready and moov_end > 0 and tracker:
             moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
@@ -973,7 +974,7 @@ class TorrentEngine:
                 for p in range(max(start_piece, end_piece - probe_count + 1), end_piece + 1):
                     moov_pieces.add(p)
 
-        # ---- 播放窗口 ----
+        # ---- playback window ----
         ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
         target_byte = int(file_size * ratio)
         target_piece = start_piece + (target_byte // piece_length)
@@ -991,20 +992,20 @@ class TorrentEngine:
             is_verified = tracker.is_verified(p) if tracker else False
 
             if in_window or in_moov:
-                # 窗口内 / moov 内：urgent
+                # Inside window / inside moov: urgent
                 if piece_prios[p] != 7:
                     piece_prios[p] = 7
                     h.set_piece_deadline(p, 0)
                     changed = True
                 urgent_count += 1
             elif is_verified:
-                # 已下载：保留（priority=1），不丢弃，libtorrent 空闲时还可做种
+                # Downloaded: retain (priority=1), don't discard; can still seed when libtorrent is idle
                 if piece_prios[p] != 1:
                     piece_prios[p] = 1
                     changed = True
                 retain_count += 1
             else:
-                # 未下载且不在窗口：停止
+                # Not downloaded and outside window: stop
                 if piece_prios[p] != 0:
                     piece_prios[p] = 0
                     changed = True
@@ -1030,10 +1031,10 @@ class TorrentEngine:
         return True
 
     def _apply_play_priority(self, h: lt.torrent_handle, info: dict[str, Any]) -> bool:
-        """开始播放：全量重置后只下载必要片段（moov + 极小窗口），等待前端报告进度。
+        """Start playback: after full reset only download necessary fragments (moov + minimal window), wait for frontend to report progress.
 
-        不再使用 tracker.request_head_tail() —— 那个方法不会重置其他 piece 的优先级，
-        导致 libtorrent 默认优先级下的 piece 继续下载，形成"遍地开花"。
+        No longer use tracker.request_head_tail() — that method doesn't reset other pieces' priorities,
+        causing pieces under libtorrent default priority to keep downloading, resulting in "blooming everywhere".
         """
         result = self._set_stream_window(h, info, 0.0, 0.0, window_pcs=0)
         if result:
@@ -1053,7 +1054,7 @@ class TorrentEngine:
         return result
 
     def apply_seek_priority(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """Seek：缩小窗口到 ±15 piece，快速定位目标位置。"""
+        """Seek: shrink window to ±15 pieces, quickly locate target position."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1069,7 +1070,7 @@ class TorrentEngine:
         return result
 
     def update_play_progress(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """正常播放中滑动窗口：±30 piece（约 2–4 分钟缓冲），已下载保留。"""
+        """Normal playback sliding window: ±30 pieces (~2–4 minutes buffer), retain downloaded."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1081,15 +1082,15 @@ class TorrentEngine:
         return result
 
     def set_keep_cache(self, hash_str: str, keep: bool = True) -> None:
-        """标记该 torrent 是否需要在暂停后保留缓存。"""
+        """Mark whether this torrent should keep cache after pause."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if info:
             info["keep_cache"] = keep
 
     def pause_download(self, hash_str: str) -> bool:
-        """暂停下载：将所有 piece 优先级设为 0。
-        非第一个作品（keep_cache=false）直接删除 torrent 和缓存文件。"""
+        """Pause download: set all piece priorities to 0.
+        Non-primary works (keep_cache=false) directly remove torrent and cache files."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1108,7 +1109,7 @@ class TorrentEngine:
         return True
 
     def resume_download(self, hash_str: str, time_sec: float, duration_sec: float) -> bool:
-        """恢复下载：重新设置 moov + 当前窗口。"""
+        """Resume download: re-set moov + current window."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1122,7 +1123,7 @@ class TorrentEngine:
         return result
 
     def get_status(self, hash_str: str) -> dict[str, Any] | None:
-        """获取指定 torrent 的播放和下载状态。"""
+        """Get playback and download status for specified torrent."""
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1182,7 +1183,7 @@ class TorrentEngine:
         # Persist progress for tiered cache scoring
         info["progress"] = progress
 
-        # 校验期间不应该认为 ready，避免前端在 recheck 时开始播放后卡住
+        # Should not consider ready during checking; prevents frontend from stalling after starting playback during recheck
         checking_states = (lt.torrent_status.checking_files, lt.torrent_status.checking_resume_data)
         is_ready = info["ready"] and s.has_metadata and s.state not in checking_states
 
@@ -1222,7 +1223,7 @@ class TorrentEngine:
             info["last_access"] = time.time()
 
     def get_all_status(self) -> list[dict[str, Any]]:
-        """获取所有 torrent 的状态列表。"""
+        """Get status list for all torrents."""
         with self.lock:
             hashes = list(self.torrents.keys())
         return [self.get_status(h) for h in hashes]
@@ -1304,11 +1305,11 @@ class TorrentEngine:
         return new_info
 
     def remove_torrent(self, hash_str: str) -> bool:
-        """移除指定 torrent 并删除其缓存文件。
+        """Remove specified torrent and delete its cache files.
 
-        先从 torrents dict 中移除并调用 session.remove_torrent，让 libtorrent
-        释放文件描述符，再等待一小段时间后删除目录，避免产生 (deleted) 孤儿文件
-        占用磁盘空间。
+        First remove from torrents dict and call session.remove_torrent, letting libtorrent
+        release file descriptors, then wait a short while before deleting directory to avoid (deleted) orphan files
+        occupying disk space.
         """
         with self.lock:
             info = self.torrents.pop(hash_str, None)
@@ -1320,7 +1321,7 @@ class TorrentEngine:
         except Exception as e:
             log.warning(f"remove_torrent session.remove failed: {e}")
 
-        # 给 libtorrent 后台线程释放文件描述符的时间窗口
+        # Give libtorrent background threads time window to release file descriptors
         time.sleep(0.1)
 
         save_path = os.path.join(self.cache_dir, hash_str)
@@ -1334,14 +1335,14 @@ class TorrentEngine:
                     time.sleep(0.1)
                 else:
                     log.error(f"remove final error for {hash_str[:12]}: {e}")
-                    # 最后一次尝试忽略错误，至少清理掉能删的文件
+                    # On last attempt ignore errors, at least clean up files that can be deleted
                     shutil.rmtree(save_path, ignore_errors=True)
         return True
 
     def gc_orphaned_torrents(self, db_path: str) -> int:
-        """清理磁盘上存在但数据库中没有对应 title 的孤儿 torrent。
+        """Clean up orphaned torrents that exist on disk but have no matching title in database.
 
-        返回实际清理的目录数量。
+        Returns number of directories actually cleaned up.
         """
         if not os.path.isdir(self.cache_dir):
             return 0
@@ -1372,7 +1373,7 @@ class TorrentEngine:
         removed = 0
         for hash_str in orphaned:
             try:
-                # 若已加载到引擎，走标准移除流程以释放 libtorrent 句柄
+                # If already loaded into engine, use standard removal flow to release libtorrent handles
                 with self.lock:
                     info = self.torrents.get(hash_str)
                 if info:
@@ -1390,7 +1391,7 @@ class TorrentEngine:
         return removed
 
     def _get_cache_size(self) -> int:
-        """计算当前缓存目录占用的实际磁盘大小（字节）。"""
+        """Calculate actual disk size (bytes) occupied by current cache directory."""
         total = 0
         if not os.path.exists(self.cache_dir):
             return 0
@@ -1405,7 +1406,7 @@ class TorrentEngine:
         return total
 
     def _periodic_clean(self) -> None:
-        """后台线程：定期检查并清理超出限制的缓存。"""
+        """Background thread: periodically check and clean cache exceeding limits."""
         while not self._stop:
             time.sleep(CACHE_CLEAN_INTERVAL_SEC)
             if self._stop:
@@ -1421,17 +1422,17 @@ class TorrentEngine:
                 log.error(f"periodic orphaned cleanup error: {e}")
 
     def _cleanup_orphaned(self) -> None:
-        """清理不在引擎管理列表中的孤儿缓存目录。
+        """Clean up orphaned cache directories not in engine management list.
 
-        安全保护：如果 self.torrents 为空（刚启动尚未添加任何 torrent），
-        跳过清理，避免误删用户已有的缓存数据。
+        Safety guard: if self.torrents is empty (just started, no torrents added yet),
+        skip cleanup to avoid accidentally deleting existing user cache data.
         """
         if not os.path.exists(self.cache_dir):
             return
         with self.lock:
             known = set(self.torrents.keys())
         if not known:
-            # Engine 刚启动，torrents 字典为空，不要误删缓存
+            # Engine just started, torrents dict is empty, don't accidentally delete cache
             return
         freed = 0
         for name in os.listdir(self.cache_dir):
@@ -1455,7 +1456,7 @@ class TorrentEngine:
             log.info(f"orphaned cleanup done: freed {format_size(freed)}")
 
     def shutdown(self) -> None:
-        """关闭引擎，停止后台线程并释放 libtorrent session 资源。"""
+        """Shutdown engine, stop background threads and release libtorrent session resources."""
         self._stop = True
         self._alert_thread.join(timeout=5)
         self._clean_thread.join(timeout=5)

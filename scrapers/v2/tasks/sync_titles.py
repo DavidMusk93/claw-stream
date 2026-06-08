@@ -1,11 +1,11 @@
 """scrapers/v2/tasks/sync_titles.py — Sync actor latest titles
 
-Diff-Sync 架构（第一性原理：尽可能快地更新）：
-1. 批量 upsert stars + 预加载所有已有 title codes（内存 set）
-2. 纯 HTTP 并发抓取 star pages（HttpxFetcher，无浏览器开销）
-3. 内存 diff：只保留新作品
-4. 增量封面下载：只下载新作品的 cover
-5. 增量数据库写入：只 INSERT 新作品
+Diff-Sync architecture (first principle: update as fast as possible):
+1. Batch upsert stars + preload all existing title codes (memory set)
+2. Pure HTTP concurrent fetching of star pages (HttpxFetcher, no browser overhead)
+3. In-memory diff: keep only new works
+4. Incremental cover download: only download covers for new works
+5. Incremental database write: only INSERT new works
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ from scrapers.v2.cover_utils import download_covers_batch
 
 log = get_logger("sync-titles")
 
-MAX_NEW_TITLES = 20  # 单次同步最多处理的新作品数（防止作品过多的 star 拖垮同步）
+MAX_NEW_TITLES = 20  # Max new titles processed per sync (prevent stars with too many works from overwhelming sync)
 
 
 def _sort_key(item: VideoItem) -> str:
-    """按日期降序排序的 key。日期格式为 dd/mm/YYYY。"""
+    """Key for sorting by date descending. Date format is dd/mm/YYYY."""
     if item.release_date:
         parts = item.release_date.split("/")
         if len(parts) == 3:
@@ -39,7 +39,7 @@ def _sort_key(item: VideoItem) -> str:
 
 
 def _dedup(items: list[VideoItem]) -> list[VideoItem]:
-    """按 code 去重，按日期降序排序"""
+    """Deduplicate by code, sort by date descending"""
     seen: set[str] = set()
     unique: list[VideoItem] = []
     for it in items:
@@ -55,7 +55,7 @@ async def fetch_star_page(
     star: StarConfig,
     semaphore: asyncio.Semaphore,
 ) -> list[VideoItem]:
-    """抓取单个 star 的页面并解析出 VideoItem 列表。"""
+    """Fetch a single star's page and parse out a list of VideoItems."""
     async with semaphore:
         try:
             html = await fetcher.fetch(star.star_page_url)
@@ -71,7 +71,7 @@ async def fetch_star_page(
 
 
 async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> list[dict]:
-    """主入口：读取配置，并发同步所有 stars"""
+    """Main entry: read config, concurrently sync all stars"""
     t_total = time.perf_counter()
 
     with open(config_path, encoding="utf-8") as f:
@@ -80,7 +80,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     stars = [StarConfig(**s) for s in raw.get("stars", [])]
     log.info(f"syncing {len(stars)} stars, fetch_concurrency={fetch_concurrency}")
 
-    # 1. 批量 upsert stars 并建立 code → star_id 映射
+    # 1. Batch upsert stars and build code → star_id mapping
     t0 = time.perf_counter()
     star_id_map: dict[str, int] = {}
     for star in stars:
@@ -94,13 +94,13 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     t1 = time.perf_counter()
     log.info(f"[timing] upsert stars: {(t1 - t0) * 1000:.1f}ms")
 
-    # 2. 预加载所有已有 title codes 到内存 set
+    # 2. Preload all existing title codes into memory set
     t0 = time.perf_counter()
     existing_codes = await db_write(db.load_all_title_codes)
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)}")
 
-    # 3. 并发抓取所有 star pages（纯 HTTP，无浏览器开销）
+    # 3. Concurrently fetch all star pages (pure HTTP, no browser overhead)
     t0 = time.perf_counter()
     async with HttpxFetcher() as fetcher:
         sem = asyncio.Semaphore(fetch_concurrency)
@@ -111,7 +111,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     t1 = time.perf_counter()
     log.info(f"[timing] fetch star pages: {(t1 - t0) * 1000:.1f}ms")
 
-    # 4. Diff：只保留新作品，跳过已有作品
+    # 4. Diff: keep only new works, skip existing ones
     sync_batches: list[tuple[int, str, list[VideoItem]]] = []
     all_new_items: list[VideoItem] = []
 
@@ -135,7 +135,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
         else:
             log.info(f"{star.name}: no new titles")
 
-    # 5. 增量封面下载：只下载新作品的封面
+    # 5. Incremental cover download: only download covers for new works
     cover_map: dict[str, str] = {}
     if all_new_items:
         t0 = time.perf_counter()
@@ -145,7 +145,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
         t1 = time.perf_counter()
         log.info(f"[timing] download covers: {(t1 - t0) * 1000:.1f}ms | downloaded={len(cover_map)}")
 
-    # 6. 增量数据库写入：只 INSERT 新作品
+    # 6. Incremental database write: only INSERT new works
     t0 = time.perf_counter()
     total_new = 0
     clean: list[dict] = []
@@ -162,7 +162,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     t1 = time.perf_counter()
     log.info(f"[timing] batch write all stars: {(t1 - t0) * 1000:.1f}ms")
 
-    # 统计
+    # Statistics
     t0 = time.perf_counter()
     rows = await db_write(_query_stats)
     t1 = time.perf_counter()
@@ -178,7 +178,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
 
 
 def _query_stats(conn=None):
-    """统计每个 star 的作品数量（供 db_write 队列调用）。"""
+    """Count titles per star (for db_write queue invocation)."""
     managed, should_close = db._managed_conn(conn)
     try:
         rows = managed.execute("""

@@ -1,6 +1,6 @@
-"""scrapers/v2/extractors.py — 统一抽取层
+"""scrapers/v2/extractors.py — Unified extraction layer
 
-基于 selectolax (lexbor) 的高性能 CSS 抽取，彻底取代正则硬编码。
+High-performance CSS extraction based on selectolax (lexbor), completely replacing hard-coded regex.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ from scrapers.v2.schemas import VideoItem, MagnetCandidate
 
 
 class Extractor(Protocol):
-    """抽取器协议"""
+    """Extractor protocol"""
 
     def extract(self, html: str) -> list:
         ...
 
 
 def _extract_dn(magnet_url: str) -> str:
-    """从 magnet dn 参数中提取原始文件名"""
+    """Extract raw filename from magnet dn parameter"""
     if not magnet_url:
         return ""
     try:
@@ -37,7 +37,7 @@ def _extract_dn(magnet_url: str) -> str:
 
 
 def _extract_resolution(magnet_url: str) -> str:
-    """从 magnet dn 参数中提取清晰度标记"""
+    """Extract resolution tag from magnet dn parameter"""
     decoded = _extract_dn(magnet_url)
     if not decoded:
         return ""
@@ -48,7 +48,7 @@ def _extract_resolution(magnet_url: str) -> str:
 
 
 class IJavTorrentExtractor:
-    """从 ijavtorrent star 个人主页抽取作品列表"""
+    """Extract work list from ijavtorrent star personal page"""
 
     SKIP_CODE_PREFIXES = ("OAE", "FWAY", "OF", "REBD")
 
@@ -84,7 +84,7 @@ class IJavTorrentExtractor:
                 )
                 all_urls.append(m)
 
-            # hhd800 高清源优先排最前，确保 is_primary 指向最优版本
+            # hhd800 HD source prioritized to the front, ensuring is_primary points to the best version
             combined = list(zip(candidates, all_urls, hhd800_flags))
             combined.sort(key=lambda x: not x[2])
             candidates = [c for c, _, _ in combined]
@@ -122,7 +122,7 @@ class IJavTorrentExtractor:
         if not img:
             return ""
         alt = img.attributes.get("alt", "")
-        # 去掉 code 前缀
+        # Strip code prefix
         prefix = code + " "
         if alt.upper().startswith(prefix):
             return alt[len(prefix):]
@@ -139,7 +139,7 @@ class IJavTorrentExtractor:
 
     @staticmethod
     def _extract_views(node) -> int | None:
-        # 用正则从文本中提取，因为 class 可能嵌套
+        # Extract from text using regex because class may be nested
         html_snippet = node.html
         m = re.search(r'pageview-value">([0-9,]+)', html_snippet)
         if m:
@@ -169,9 +169,9 @@ class IJavTorrentExtractor:
 
     @staticmethod
     def _extract_star_count(node) -> int:
-        # 在 mb-1 区域内统计 /actress/ 链接数量
+        # Count /actress/ links within the mb-1 region
         html_snippet = node.html
-        # 找到 mb-1 区域（截止到 table）
+        # Find mb-1 region (up to table)
         m = re.search(r'<div class="mb-1">(.*?)</table', html_snippet, re.DOTALL)
         if m:
             return len(re.findall(r'href="/actress/[^"]+"', m.group(1)))

@@ -1,10 +1,12 @@
-"""core/db/crud.py — 基础增删改查操作
+"""core/db/crud.py — Basic CRUD operations
 
-大宽表简化后：
-- titles 表直接内联 magnet 信息，不再维护单独的 magnets 表
-- upsert_title 增加 star_code / star_name / magnet 字段
-- 删除所有 magnets 相关 CRUD
+After wide-table simplification:
+- The titles table inlines magnet info directly, no separate magnets table is maintained
+- upsert_title adds star_code / star_name / magnet fields
+- Remove all magnets-related CRUD
 """
+
+from __future__ import annotations
 
 import json
 import re
@@ -18,10 +20,10 @@ def _extract_hash(magnet):
 
 
 def _managed_conn(conn=None):
-    """连接管理助手。
+    """Connection management helper.
 
-    若传入外部连接，返回 (conn, False)——调用方不负责关闭。
-    若未传入，新建连接并返回 (new_conn, True)——调用方需 commit/close。
+    If an external connection is passed, returns (conn, False)—caller is not responsible for closing.
+    If not passed, creates a new connection and returns (new_conn, True)—caller must commit/close.
     """
     if conn is not None:
         return conn, False
@@ -30,7 +32,7 @@ def _managed_conn(conn=None):
 
 @trace_db
 def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None, conn=None):
-    """插入或更新 star 信息，返回 id"""
+    """Insert or update star info, returns id"""
     managed, should_close = _managed_conn(conn)
     try:
         row = managed.execute("SELECT id FROM stars WHERE name = ?", (name,)).fetchone()
@@ -63,7 +65,7 @@ def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None
 
 @trace_db
 def title_exists(star_id, code, conn=None):
-    """检查 title 是否已存在"""
+    """Check if title already exists"""
     managed, should_close = _managed_conn(conn)
     try:
         row = managed.execute(
@@ -78,7 +80,7 @@ def title_exists(star_id, code, conn=None):
 
 @trace_db
 def load_all_title_codes(conn=None) -> set[tuple[int, str]]:
-    """一次性加载所有 (star_id, code) 到内存 set，用于批量存在性判断"""
+    """Load all (star_id, code) into memory set at once for batch existence checks"""
     managed, should_close = _managed_conn(conn)
     try:
         rows = managed.execute("SELECT star_id, code FROM titles").fetchall()
@@ -108,10 +110,10 @@ def upsert_title(
     all_magnets=None,
     conn=None,
 ):
-    """插入或更新 title 信息。
+    """Insert or update title info.
 
-    大宽表模式下，magnet 信息直接随 title 一起写入，
-    通过 all_magnets JSON 列存储所有候选，magnet/magnet_hash 存储 primary。
+    In wide-table mode, magnet info is written directly along with the title,
+    all candidates stored via the all_magnets JSON column, magnet/magnet_hash stores the primary.
     """
     release_date_sort = _date_to_sort(release_date)
     managed, should_close = _managed_conn(conn)
@@ -122,7 +124,7 @@ def upsert_title(
         ).fetchone()
         if row:
             title_id, existing_cover = row[0], row[1]
-            # 保留已有 cover_b64（增量刷新时不覆盖）
+            # Preserve existing cover_b64 (do not overwrite during incremental refresh)
             if existing_cover and cover_b64 is None:
                 cover_b64 = existing_cover
             managed.execute("""
@@ -180,7 +182,7 @@ def upsert_title(
 def delete_star_by_code(code: str, conn=None) -> bool:
     """Delete an actor and all associated data (titles, social_posts).
 
-    返回是否成功找到并删除。
+    Returns whether the actor was found and deleted.
     """
     managed, should_close = _managed_conn(conn)
     try:
@@ -189,7 +191,7 @@ def delete_star_by_code(code: str, conn=None) -> bool:
             return False
         star_id = row[0]
 
-        # 按外键依赖顺序删除：social_posts → titles → stars
+        # Delete in foreign-key dependency order: social_posts → titles → stars
         managed.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
         managed.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
         managed.execute("DELETE FROM stars WHERE id = ?", (star_id,))

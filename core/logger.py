@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""logger.py — 共享日志模块
+"""logger.py — Shared logging module
 
-用法:
+Usage:
     from logger import get_logger
     log = get_logger("cache-server")
     log.info("server started")
     log.error("something wrong", exc_info=True)
 
-环境变量:
-    LOG_DIR     日志根目录 (默认: 脚本同级 logs/)
-    LOG_JSON    1=JSON 格式, 0=文本格式 (默认: 0)
+Environment variables:
+    LOG_DIR     Log root directory (default: logs/ next to script)
+    LOG_JSON    1=JSON format, 0=text format (default: 0)
 """
+
+from __future__ import annotations
 
 import os, sys, json, datetime, logging, contextvars
 from logging.handlers import RotatingFileHandler
 
-# ── Trace ID 链路追踪 ──
+# ── Trace ID chain tracking ──
 trace_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="-")
 
 
@@ -29,13 +31,13 @@ def get_trace_id() -> str:
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_LOG_DIR = os.path.join(SCRIPT_DIR, "logs")
 
-# 回收策略：单个日志文件 10MB，保留 5 个备份
+# Rollover policy: 10MB per log file, keep 5 backups
 LOG_MAX_BYTES = 10 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 
 
 def _ensure_log_dir(log_dir):
-    """确保日志根目录存在"""
+    """Ensure log root directory exists"""
     os.makedirs(log_dir, exist_ok=True)
     return log_dir
 
@@ -78,7 +80,7 @@ class _TextFormatter(logging.Formatter):
 
 
 class _TeeStream:
-    """双写流：同时输出到文件和 stdout，保留行缓冲行为"""
+    """Dual-write stream: outputs to both file and stdout, preserving line-buffering behavior"""
     def __init__(self, file_stream, stdout=sys.stdout):
         self.file = file_stream
         self.stdout = stdout
@@ -97,7 +99,7 @@ class _TeeStream:
 
 
 class LoggerWrapper:
-    """封装标准 logging，增加 extra 字段支持和便捷方法"""
+    """Wraps standard logging with extra field support and convenience methods"""
     def __init__(self, logger):
         self._log = logger
 
@@ -132,17 +134,17 @@ class LoggerWrapper:
         return getattr(self._log, name)
 
 
-# ── 缓存，避免重复创建 ──
+# ── Cache to avoid duplicate creation ──
 _logger_cache = {}
 
 
 def get_logger(name, log_dir=None, json_format=None):
-    """获取或创建命名日志器
+    """Get or create a named logger
 
     Args:
-        name: 日志器名称，决定文件名
-        log_dir: 日志根目录，默认从 LOG_DIR 环境变量或 logs/
-        json_format: True=JSON, False=文本, None=从 LOG_JSON 环境变量
+        name: Logger name, determines file name
+        log_dir: Log root directory, defaults to LOG_DIR env var or logs/
+        json_format: True=JSON, False=text, None=from LOG_JSON env var
     """
     cache_key = (name, log_dir, json_format)
     if cache_key in _logger_cache:
@@ -159,11 +161,11 @@ def get_logger(name, log_dir=None, json_format=None):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
-    # 清除旧 handler（防止单元测试中重复添加）
+    # Clear old handlers (prevent duplicate adds in unit tests)
     if logger.handlers:
         logger.handlers.clear()
 
-    # 文件 handler（按大小滚动，保留 N 个备份）
+    # File handler (size-based rollover, keep N backups)
     file_handler = RotatingFileHandler(
         log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8"
@@ -173,7 +175,7 @@ def get_logger(name, log_dir=None, json_format=None):
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
-    # stdout handler（保留原有输出习惯）
+    # stdout handler (preserve existing output habits)
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("%(message)s"))
@@ -185,9 +187,9 @@ def get_logger(name, log_dir=None, json_format=None):
 
 
 def capture_stdout(name, log_dir=None):
-    """将当前进程 stdout/stderr 重定向到日志文件（同时保留终端输出）
+    """Redirect current process stdout/stderr to log file (while preserving terminal output)
 
-    用于 refresh.sh 等场景，让 print() 也进入日志体系。
+    Used in refresh.sh and similar scenarios so print() also enters the logging system.
     """
     log_dir = _ensure_log_dir(log_dir or os.environ.get("LOG_DIR", DEFAULT_LOG_DIR))
     log_file = os.path.join(log_dir, f"{name}.log")
