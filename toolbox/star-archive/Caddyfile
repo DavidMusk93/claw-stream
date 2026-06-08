@@ -33,7 +33,7 @@ cc.guohuasun.com {
     }
 
     log {
-        output file /root/claw-stream/toolbox/star-archive/logs/caddy-access.log {
+        output file /root/claw-stream/logs/caddy-access.log {
             roll_size 10MB
             roll_keep 5
         }

@@ -1,4 +1,4 @@
-"""scrapers/v2/tasks/sync_titles.py — 同步女优最新作品
+"""scrapers/v2/tasks/sync_titles.py — Sync actor latest titles
 
 Diff-Sync 架构（第一性原理：尽可能快地更新）：
 1. 批量 upsert stars + 预加载所有已有 title codes（内存 set）
@@ -201,7 +201,7 @@ async def sync_star(
     star: StarConfig,
     semaphore: asyncio.Semaphore,
 ) -> dict:
-    """同步单个 star 的作品（用于新增女优后的后台同步）。"""
+    """Sync titles for a single star (background sync after adding a new actor)."""
     t0 = time.perf_counter()
     star_id = await db_write(
         db.upsert_star,

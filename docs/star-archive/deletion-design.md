@@ -1,8 +1,8 @@
-# 女优删除设计 —— 安全稳健的数据与缓存清理流程
+# actor删除设计 —— 安全稳健的数据与缓存清理流程
 
 ## 1. 问题背景
 
-删除一个女优（star）会触发多个数据层面的变更：
+删除一个actor（star）会触发多个数据层面的变更：
 
 | 层面 | 数据 | 位置 |
 |---|---|---|
@@ -103,7 +103,7 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
 `engine.remove_torrent()` 可能因为文件被占用、libtorrent 句柄状态异常等原因失败。必须：
 - **逐个 try/except 包裹**，一个失败不影响其他 torrent 的清理
 - **记录 warning 日志**，便于人工排查
-- 不因为单个 torrent 清理失败而回滚数据库删除（女优记录应当被删除）
+- 不因为单个 torrent 清理失败而回滚数据库删除（actor记录应当被删除）
 
 ### 3.2 重复删除安全
 

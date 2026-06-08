@@ -21,7 +21,7 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 
 def _is_primary_title(work_code: str) -> bool:
-    """查询数据库判断该作品是否是所属女优的第一个（最新）作品。"""
+    """Query DB to check if this title is the actor's first (latest) title."""
     if not work_code:
         return False
     try:
@@ -109,7 +109,7 @@ async def add_torrent(req: TorrentAddRequest, engine: Any = Depends(get_engine))
 
     hash_str = info["hash"]
 
-    # 判断是否是该女优的第一个作品，决定是否保留缓存
+    # Check if this is the actor's first title to decide cache retention
     work_code = info.get("work_code")
     if work_code:
         is_primary = await asyncio.to_thread(_is_primary_title, work_code)

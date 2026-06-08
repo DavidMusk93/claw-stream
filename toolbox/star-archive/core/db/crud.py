@@ -178,7 +178,7 @@ def upsert_title(
 
 @trace_db
 def delete_star_by_code(code: str, conn=None) -> bool:
-    """删除女优及其所有关联数据（titles, social_posts）。
+    """Delete an actor and all associated data (titles, social_posts).
 
     返回是否成功找到并删除。
     """

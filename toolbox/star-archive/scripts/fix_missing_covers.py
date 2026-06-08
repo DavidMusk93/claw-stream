@@ -1,11 +1,11 @@
-"""批量修复缺失的封面图片（并发版）。
+"""Batch fix missing cover images (concurrent version).
 
-根因：extractor 中 _extract_cover 用了错误的选择器 div[data-link]，
-实际应为 a[data-link]，导致 cover_url 始终为 None，封面无法下载。
+Root cause: extractor used wrong selector div[data-link],
+should be a[data-link], causing cover_url to always be None.
 
-用法：
-    cd toolbox/star-archive
-    PYTHONPATH=/root/claw-stream/toolbox/star-archive uv run python scripts/fix_missing_covers.py
+Usage:
+    cd /root/claw-stream
+    PYTHONPATH=/root/claw-stream uv run python scripts/fix_missing_covers.py
 """
 
 from __future__ import annotations

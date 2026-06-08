@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""修复数据库中尺寸过小的封面图。
+"""Fix undersized cover images in the database.
 
-用法: cd toolbox/star-archive && python3 scripts/fix_bad_covers.py
+Usage: cd /root/claw-stream && python3 scripts/fix_bad_covers.py
 """
 from __future__ import annotations
 

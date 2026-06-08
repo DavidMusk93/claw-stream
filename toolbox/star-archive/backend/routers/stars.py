@@ -1,4 +1,4 @@
-"""backend/routers/stars.py — 女优聚合数据路由
+"""backend/routers/stars.py — Actor aggregate data router
 
 大宽表简化后，查询不再 JOIN magnets，直接从 titles.magnet 读取。
 """
@@ -178,7 +178,7 @@ class AddStarResponse(BaseModel):
 
 @router.post("/add")
 async def add_star(request: AddStarRequest) -> AddStarResponse:
-    """新增女优：解析主页 URL，去重，写入 config.json 和数据库，后台同步作品。"""
+    """Add a new actor: parse homepage URL, dedupe, write to config.json and DB, background sync titles."""
     url = request.star_page_url.strip()
 
     # URL 格式校验
@@ -196,7 +196,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     stars = config.get("stars", [])
     for s in stars:
         if s.get("star_page_url") == url:
-            raise HTTPException(status_code=409, detail="该女优已存在")
+            raise HTTPException(status_code=409, detail="Actor already exists")
         if s.get("handle") == handle:
             raise HTTPException(status_code=409, detail="该 handle 已被占用")
 
@@ -223,7 +223,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     # 再次检查 code 是否冲突
     for s in stars:
         if s.get("code") == code:
-            raise HTTPException(status_code=409, detail=f"code {code} 已被其他女优占用")
+            raise HTTPException(status_code=409, detail=f"code {code} already used by another actor")
 
     new_star = {
         "name": name,
@@ -246,7 +246,7 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     invalidate_stars_cache()
     log.info(f"star added: {name} ({code}) from {url}")
 
-    # 后台异步同步该女优作品
+    # Background async sync for this actor's titles
     async def _bg_sync() -> None:
         try:
             from scrapers.v2.fetchers import PlaywrightFetcher
@@ -276,18 +276,18 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
 
 @router.delete("/{code}")
 async def delete_star(code: str, request: Request) -> dict[str, Any]:
-    """删除女优：从 config.json 和数据库中移除，同时清空该女优所有作品的缓存。"""
+    """Delete an actor: remove from config.json and DB, clear all title caches for this actor."""
     config = _load_config()
     stars = config.get("stars", [])
     original_len = len(stars)
     config["stars"] = [s for s in stars if s.get("code") != code]
 
     if len(config["stars"]) == original_len:
-        raise HTTPException(status_code=404, detail="女优不存在")
+        raise HTTPException(status_code=404, detail="Actor not found")
 
     _save_config(config)
 
-    # 先查询该女优所有作品的 magnet_hash（数据库删除后就查不到了）
+    # Query all magnet hashes for this actor's titles (unavailable after DB deletion)
     engine = request.app.state.engine
     magnet_hashes: list[str] = []
     try:
@@ -309,7 +309,7 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
     if not deleted:
         log.warning(f"star {code} removed from config but not found in db")
 
-    # 清空该女优所有作品的缓存和 tracing bits
+    # Clear all caches and tracing bits for this actor's titles
     for hash_str in magnet_hashes:
         try:
             await asyncio.to_thread(engine.remove_torrent, hash_str)

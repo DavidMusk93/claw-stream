@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import sys
 
-sys.path.insert(0, "/root/claw-stream/toolbox/star-archive")
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import db
 from scrapers.v2.cover_utils import download_covers_batch

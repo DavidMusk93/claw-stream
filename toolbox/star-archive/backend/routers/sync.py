@@ -1,4 +1,4 @@
-"""backend/routers/sync.py — 女优作品同步路由
+"""backend/routers/sync.py — Actor title sync router
 
 在主事件循环中直接运行 scrapers.v2.tasks.sync_titles，
 配合全局 DuckDB 串行写队列，彻底消除跨进程/跨线程锁冲突。
@@ -51,7 +51,7 @@ async def _run_sync_bg() -> None:
 
 @router.post("/sync")
 async def start_sync() -> dict[str, Any]:
-    """启动女优作品同步（后台运行，不可重复启动）。"""
+    """Start actor title sync (background, no duplicate runs)."""
     with _sync_lock:
         if _sync_state["running"]:
             return {
