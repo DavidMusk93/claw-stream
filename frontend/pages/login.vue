@@ -3,7 +3,7 @@
     class="min-h-screen bg-void flex items-center justify-center px-6 relative overflow-hidden"
     @mousemove="onMouseMove"
   >
-    <!-- 背景光晕 -->
+    <!-- Ambient glow -->
     <div
       class="pointer-events-none absolute inset-0 opacity-40"
       :style="{
@@ -12,7 +12,7 @@
     />
 
     <div class="w-full max-w-[340px] relative z-10">
-      <!-- Logo 区域 -->
+      <!-- Logo area -->
       <div class="flex flex-col items-center mb-10">
         <div
           class="w-[72px] h-[72px] rounded-[22px] glass flex items-center justify-center mb-5 shadow-glass text-3xl"
@@ -20,7 +20,7 @@
           🔒
         </div>
         <h1
-          class="text-[28px] font-display font-semibold text-foreground tracking-[-0.01em]"
+          class="text-[28px] font-semibold text-foreground tracking-[-0.02em]"
         >
           Star Archive
         </h1>
@@ -29,19 +29,19 @@
         </p>
       </div>
 
-      <!-- 表单 -->
+      <!-- Form -->
       <div class="space-y-3">
         <div class="relative group">
           <input
             ref="inputRef"
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
-            placeholder="🔑 暗号"
+            placeholder="🔑 Passcode"
             class="w-full h-[50px] px-12 rounded-[14px] bg-white/[0.04] border border-white/[0.08] text-foreground text-[17px] text-center placeholder:text-foreground-muted/40 outline-none transition-all duration-200 focus:bg-white/[0.07] focus:border-rose/40 focus:shadow-[0_0_0_4px_rgba(225,29,72,0.1)]"
             :class="{ 'border-rose/40 shadow-[0_0_0_4px_rgba(225,29,72,0.1)]': error }"
             @keydown.enter="submit"
           />
-          <!-- 查看明文切换 -->
+          <!-- Toggle visibility -->
           <button
             type="button"
             class="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-foreground-muted/50 hover:text-foreground-muted transition-colors"
@@ -51,7 +51,7 @@
           </button>
         </div>
 
-        <!-- 错误提示 -->
+        <!-- Error message -->
         <p
           v-if="error"
           class="text-[13px] text-rose text-center min-h-[1.25em] transition-all"
@@ -61,16 +61,16 @@
         </p>
         <p v-else class="min-h-[1.25em]" />
 
-        <!-- 进入按钮 -->
+        <!-- Enter button -->
         <button
           @click="submit"
           class="w-full h-[50px] rounded-[14px] bg-gradient-to-r from-rose to-violet text-white text-[17px] font-medium tracking-wide transition-all duration-200 hover:brightness-110 active:scale-[0.97] active:opacity-90 shadow-glass hover:shadow-rose-glow flex items-center justify-center gap-2"
         >
-          <span>🚀 进入</span>
+          <span>🚀 Enter</span>
         </button>
       </div>
 
-      <!-- 底部 -->
+      <!-- Footer -->
       <div class="h-8 flex items-center justify-center">
         <span class="text-[11px] text-foreground-muted/30">{{ randomFooter }}</span>
       </div>
@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-/* 登录页 — 每日动态密码验证 */
+/* Login page — daily rotating password validation */
 definePageMeta({ layout: false })
 
 const password = ref('')
@@ -91,25 +91,25 @@ const inputRef = ref<HTMLInputElement>()
 const mouseX = ref(0)
 const mouseY = ref(0)
 
-// 搞怪 greetings 轮换
+// Whimsical greetings rotation
 const greetings = [
-  '暗号对上了就放你进去',
-  '芝麻开门...不对，是这个',
-  '嘘，小声点',
-  '欢迎来到大人世界',
-  '你有邀请函吗？',
-  '密码不对会被幽灵抓走',
-  '欢迎回来，老伙计',
+  'Say the word and you\'re in',
+  'Open sesame... no wait, this one',
+  'Shhh, keep it down',
+  'Welcome to the grown-up world',
+  'Got your invitation?',
+  'Wrong passcode summons ghosts',
+  'Welcome back, old friend',
 ]
 const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)]
 
-// 搞怪 footer
+// Whimsical footer
 const footers = [
-  '🔮 今日运势：宜观影',
-  '🍿 记得带爆米花',
-  '👻 错误的密码会召唤幽灵',
-  '🎬 开场前请关闭闪光灯',
-  '🌙 夜深了，小声点',
+  '🔮 Today\'s fortune: great for viewing',
+  '🍿 Don\'t forget the popcorn',
+  '👻 Wrong passwords summon ghosts',
+  '🎬 Please silence your devices',
+  '🌙 It\'s late, keep it quiet',
 ]
 const randomFooter = footers[Math.floor(Math.random() * footers.length)]
 
@@ -133,7 +133,7 @@ function submit() {
     auth.value = 'ok'
     navigateTo('/')
   } else {
-    error.value = '密码不对哦'
+    error.value = 'Incorrect passcode'
     shake.value = true
     password.value = ''
     inputRef.value?.focus()

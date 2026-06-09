@@ -127,7 +127,7 @@
           <div class="w-10 h-10 rounded-full border-4 border-white/10 border-t-rose animate-spin" />
 
           <!-- Progress bar -->
-          <div class="w-64 max-w-[80vw]">
+          <div class="w-72 max-w-[80vw]">
             <div class="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
                 class="h-full bg-rose rounded-full transition-all duration-500"
@@ -136,7 +136,7 @@
             </div>
             <div class="mt-1.5 flex justify-between text-xs text-white/50">
               <span>
-                {{ status?.state?.includes('checking') ? '校验进度' : '下载进度' }}
+                {{ status?.state?.includes('checking') ? 'Verifying' : 'Downloading' }}
                 {{ (status?.progress || 0).toFixed(1) }}%
               </span>
               <span v-if="status?.video_size">{{ (status.video_size / 1024 / 1024 / 1024).toFixed(1) }} GB</span>
@@ -372,7 +372,7 @@ const cacheRatio = computed(() => {
   const pct = (s.local_size / s.video_size * 100).toFixed(1)
   const mb = (s.local_size / 1024 / 1024).toFixed(0)
   const gb = (s.video_size / 1024 / 1024 / 1024).toFixed(1)
-  return `已缓存 ${mb}MB / ${gb}GB (${pct}%)`
+  return `Cached ${mb}MB / ${gb}GB (${pct}%)`
 })
 
 const detailStatus = computed(() => {
@@ -381,7 +381,7 @@ const detailStatus = computed(() => {
   const parts: string[] = []
   if (s.peers > 0) parts.push(`${s.peers} peers`)
   if (s.download_rate > 0) parts.push(formatSpeed(s.download_rate))
-  if (s.verified_pieces > 0) parts.push(`已验证 ${s.verified_pieces} pcs`)
+  if (s.verified_pieces > 0) parts.push(`Verified ${s.verified_pieces} pcs`)
   // ETA for non-ready or buffering states
   if (!s.ready || !s.head_ready) {
     const eta = s.download_rate > 0 && s.video_size > s.local_size
@@ -399,19 +399,19 @@ function formatEta(seconds: number): string {
 }
 
 const statusText = computed(() => {
-  if (!status.value) return '连接种子...'
+  if (!status.value) return 'Connecting...'
   const s = status.value
 
   const stateMap: Record<string, string> = {
-    checking_files: '校验文件中',
-    checking_resume_data: '校验数据中',
-    downloading_metadata: '获取元数据',
-    downloading: '下载中',
-    finished: '已完成',
-    seeding: '做种中',
-    allocating: '分配空间',
+    checking_files: 'Verifying files',
+    checking_resume_data: 'Verifying data',
+    downloading_metadata: 'Fetching metadata',
+    downloading: 'Downloading',
+    finished: 'Finished',
+    seeding: 'Seeding',
+    allocating: 'Allocating',
   }
-  const stateText = stateMap[s.state] || s.state || '连接种子'
+  const stateText = stateMap[s.state] || s.state || 'Connecting'
 
   const peers = s.peers > 0 ? `${s.peers} peers` : ''
   const speed = formatSpeed(s.download_rate)
@@ -424,12 +424,12 @@ const statusText = computed(() => {
     const parts = [stateText]
     if (peers) parts.push(peers)
     if (s.download_rate > 0) parts.push(speed)
-    if (verified && s.state.includes('checking')) parts.push(`已校验 ${verified}`)
+    if (verified && s.state.includes('checking')) parts.push(`Verified ${verified}`)
     return parts.join(' | ')
   }
 
   if (!s.head_ready) {
-    const parts = ['缓冲中']
+    const parts = ['Buffering']
     if (peers) parts.push(peers)
     parts.push(speed)
     const eta = s.download_rate > 0 && s.video_size > s.local_size
@@ -440,7 +440,7 @@ const statusText = computed(() => {
   }
 
   if (s.download_rate > 0) {
-    const parts = ['播放中']
+    const parts = ['Playing']
     if (peers) parts.push(peers)
     parts.push(formatSpeed(s.download_rate))
     return parts.join(' | ')
@@ -449,18 +449,19 @@ const statusText = computed(() => {
   // finished/seeding but progress < 100% — disk has holes
   if (s.progress < 99.9 && (s.state === 'finished' || s.state === 'seeding')) {
     const vp = s.verified_pieces
-    const parts = [`进度 ${s.progress.toFixed(1)}%`]
-    if (vp) parts.push(`${vp} pcs 已验证`)
+    const parts = [`Progress ${s.progress.toFixed(1)}%`]
+    if (vp) parts.push(`${vp} pcs verified`)
     return parts.join(' | ')
   }
 
-  return '已就绪 | 等待数据'
+  return 'Ready | Waiting for data'
 })
 
-// 同时 watch hash 和 isOpen，避免 Vue 响应式时序导致两者不同时更新时漏触发
+// Watch both hash and isOpen to avoid Vue reactivity timing issues
+// where missing one update when they don't change simultaneously
 watch([() => props.hash, isOpen], async ([hash, open]) => {
   if (!hash || !open) return
-  // 避免重复加载同一 hash
+  // Avoid reloading the same hash
   if (videoRef.value?.src && videoRef.value.src.includes(hash)) return
   errorMsg.value = ''
   canplayFired.value = false
@@ -470,7 +471,7 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
 
   const ready = await waitForHeadReady(hash)
   if (!ready) {
-    errorMsg.value = error.value || '加载失败'
+    errorMsg.value = error.value || 'Load failed'
     logError('player', `load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
     return
   }
@@ -691,7 +692,7 @@ function onError() {
   if (code === 4 && retryCount.value < MAX_RETRIES) {
     retryCount.value++
     logInfo('player', `code=4 retry ${retryCount.value}/${MAX_RETRIES}`)
-    errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
+    errorMsg.value = `Loading (${retryCount.value}/${MAX_RETRIES})...`
     const src = streamUrl.value
     setTimeout(() => {
       if (videoRef.value) {
@@ -703,7 +704,7 @@ function onError() {
   }
 
   if (code === 4) {
-    errorMsg.value = '播放失败，文件格式不支持或数据损坏'
+    errorMsg.value = 'Playback failed, unsupported format or corrupted data'
     stopPolling()
     return
   }
@@ -711,7 +712,7 @@ function onError() {
   if (retryCount.value < MAX_RETRIES) {
     retryCount.value++
     logInfo('player', `retry ${retryCount.value}/${MAX_RETRIES}`)
-    errorMsg.value = `加载中 (${retryCount.value}/${MAX_RETRIES})...`
+    errorMsg.value = `Loading (${retryCount.value}/${MAX_RETRIES})...`
     const src = v?.src || streamUrl.value
     setTimeout(() => {
       if (videoRef.value) {
@@ -722,7 +723,7 @@ function onError() {
     return
   }
 
-  errorMsg.value = '播放失败，文件可能不完整'
+  errorMsg.value = 'Playback failed, file may be incomplete'
   stopPolling()
 }
 
@@ -830,19 +831,19 @@ function onDblClick(e: MouseEvent) {
   const width = rect.width
 
   if (x < width / 3) {
-    // 左侧双击：后退 10 秒
+    // Left double-click: rewind 10s
     const prev = v.currentTime
     v.currentTime = Math.max(0, v.currentTime - 10)
     logInfo('player', `dblclick left seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
-    showHint('后退 10 秒')
+    showHint('Rewind 10s')
   } else if (x > width * 2 / 3) {
-    // 右侧双击：快进 10 秒
+    // Right double-click: forward 10s
     const prev = v.currentTime
     v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
     logInfo('player', `dblclick right seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
-    showHint('快进 10 秒')
+    showHint('Forward 10s')
   } else {
-    // 中间双击：播放/暂停
+    // Center double-click: play/pause
     togglePlay()
   }
 }
@@ -870,9 +871,9 @@ function onTouchEnd(e: TouchEvent) {
     const absSec = Math.abs(seekSeconds)
     let hint = ''
     if (absSec >= 60) {
-      hint = `${seekSeconds > 0 ? '快进' : '后退'} ${Math.floor(absSec / 60)}分${absSec % 60}秒`
+      hint = `${seekSeconds > 0 ? 'Forward' : 'Rewind'} ${Math.floor(absSec / 60)}m ${absSec % 60}s`
     } else {
-      hint = `${seekSeconds > 0 ? '快进' : '后退'} ${absSec}秒`
+      hint = `${seekSeconds > 0 ? 'Forward' : 'Rewind'} ${absSec}s`
     }
     logInfo('player', `swipe seek ${seekSeconds > 0 ? '+' : ''}${seekSeconds}s ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     showHint(hint)
@@ -886,10 +887,10 @@ function onTouchEnd(e: TouchEvent) {
       const prev = v.volume
       v.volume = Math.max(0, Math.min(1, v.volume + delta))
       logInfo('player', `swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
-      showHint(`音量 ${Math.round(v.volume * 100)}%`)
+      showHint(`Volume ${Math.round(v.volume * 100)}%`)
     } else {
-      // 左侧上下滑：浏览器没有系统亮度 API，仅作提示
-      showHint(dy < 0 ? '亮度 ↑ (浏览器不支持)' : '亮度 ↓ (浏览器不支持)')
+      // Left side vertical swipe: no system brightness API in browser, show hint only
+      showHint(dy < 0 ? 'Brightness ↑ (not supported)' : 'Brightness ↓ (not supported)')
     }
   }
 }

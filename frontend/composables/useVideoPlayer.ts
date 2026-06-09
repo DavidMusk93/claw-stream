@@ -104,7 +104,7 @@ export function useVideoPlayer() {
     }
 
     loading.value = false
-    error.value = '加载超时，请检查文件完整性'
+    error.value = 'Load timeout, please check file integrity'
     logError('player', `waitForHeadReady ${hash.slice(0, 12)} timeout after ${timeoutSec}s`)
     return false
   }

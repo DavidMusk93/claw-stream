@@ -1,8 +1,8 @@
 /**
- * useCachePreheat — 页面加载后自动预热缓存
+ * useCachePreheat — Auto-preheat cache after page load
  *
- * 策略：每个 star 的作品按日期排序后，取第 1, 4, 7... 个（索引 0, 3, 6...）
- * 静默调用 /torrent/add 加入下载队列（不 prefetch，后台慢慢下载 metadata）
+ * Strategy: For each star's titles sorted by date, pick indices 0, 3, 6...
+ * Silently call /torrent/add to join the download queue (no prefetch, background metadata download)
  */
 
 import { logInfo, logError } from './useLogger'
@@ -37,10 +37,10 @@ export function useCachePreheat() {
         })
         logInfo('cache-preheat', `added ${code}`)
       } catch (e: any) {
-        // 已存在或其他错误，静默忽略
+        // Already exists or other error, silently ignore
         logError('cache-preheat', `failed ${code}: ${e.message || e}`)
       }
-      // 间隔 300ms 避免冲击后端
+      // 300ms interval to avoid backend overload
       await new Promise(r => setTimeout(r, 300))
     }
 

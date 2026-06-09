@@ -1,6 +1,6 @@
-/* 全局认证守卫：无 claw_auth=ok cookie 时重定向到登录页 */
+/* Global auth guard: redirect to login when claw_auth=ok cookie is missing */
 export default defineNuxtRouteMiddleware((to) => {
-  // 登录页本身免认证
+  // Login page itself is exempt from auth
   if (to.path === '/login') return
 
   const auth = useCookie('claw_auth', { maxAge: 86400 })

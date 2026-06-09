@@ -85,10 +85,10 @@ async function toggleLike() {
   try {
     const { likeTitle } = useApi()
     await likeTitle(props.title.code, !localLiked.value)
-    // 乐观更新：直接修改本地数据避免等待刷新
+    // Optimistic update: modify local data directly to avoid waiting for refresh
     props.title.user_liked = !localLiked.value
   } catch (e: any) {
-    alert(e?.data?.detail || '操作失败')
+    alert(e?.data?.detail || 'Action failed')
   } finally {
     liking.value = false
   }

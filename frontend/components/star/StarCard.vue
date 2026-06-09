@@ -8,7 +8,7 @@
       <div class="flex items-center gap-3">
         <button
           class="text-[#8e8e93] hover:text-[#ff453a] transition-colors"
-          title="删除女优"
+          title="Delete Star"
           @click="onDelete"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -57,12 +57,12 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z"/>
             </svg>
-            <span>播放</span>
+            <span>Play</span>
           </button>
 
           <button
             :disabled="!activeTitle?.magnet"
-            class="flex items-center gap-2 px-5 py-2.5 rounded-full text-[14px] font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            class="flex items-center gap-2 px-6 py-2.5 rounded-full text-[14px] font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             :class="copied
               ? 'bg-[#30d158] text-black'
               : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
@@ -75,11 +75,11 @@
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
               <polyline points="20 6 9 17 4 12"/>
             </svg>
-            <span>{{ copied ? '已复制 ✓' : '复制磁力 🔗' }}</span>
+            <span>{{ copied ? 'Copied ✓' : 'Copy Magnet 🔗' }}</span>
           </button>
 
           <button
-            class="flex items-center gap-2 px-4 py-2.5 rounded-full text-[14px] font-medium transition-all"
+            class="flex items-center gap-2 px-5 py-2.5 rounded-full text-[14px] font-medium transition-all"
             :class="localLiked
               ? 'bg-[#ff375f]/20 text-[#ff375f]'
               : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
@@ -89,7 +89,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" :fill="localLiked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
             </svg>
-            <span>{{ localLiked ? '已喜欢' : '喜欢' }}</span>
+            <span>{{ localLiked ? 'Liked' : 'Like' }}</span>
           </button>
         </div>
 
@@ -183,7 +183,7 @@ async function toggleLike() {
     await likeTitle(activeTitle.value.code, newVal)
     activeTitle.value.user_liked = newVal
   } catch (e: any) {
-    alert(e?.data?.detail || '操作失败')
+    alert(e?.data?.detail || 'Action failed')
   } finally {
     liking.value = false
   }
@@ -213,7 +213,7 @@ function copyMagnet() {
 const deleting = ref(false)
 
 async function onDelete() {
-  if (!confirm(`确定要删除女优「${props.star.name}」及其所有作品数据吗？\n（cache 中的下载文件会被保留）`)) {
+  if (!confirm(`Delete star "${props.star.name}" and all associated title data?\n(Cache files will be preserved)`)) {
     return
   }
   deleting.value = true
@@ -222,7 +222,7 @@ async function onDelete() {
     await deleteStar(props.star.code)
     emit('deleted', props.star.code)
   } catch (e: any) {
-    alert(e?.message || '删除失败')
+    alert(e?.message || 'Delete failed')
   } finally {
     deleting.value = false
   }
@@ -302,7 +302,7 @@ const thumbStyle = computed(() => {
   const h = heroSize.value.height > 0
     ? (heroSize.value.height - gap * (thumbCount - 1)) / thumbCount
     : 160
-  // SSR 阶段 hero 尺寸未知时给默认宽度，避免 w-auto 塌陷为 0 导致 lazy load 不触发
+  // Default width during SSR when hero size is unknown to prevent w-auto collapsing to 0
   const w = heroSize.value.height > 0 ? 'auto' : `${Math.round(h * 2 / 3)}px`
   return { width: w, height: `${h}px`, minWidth: `${Math.round(h * 2 / 3)}px` }
 })

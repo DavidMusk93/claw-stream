@@ -4,7 +4,7 @@
     <button
       class="w-12 h-12 rounded-full bg-[#1c1c1e] border border-white/[0.08] text-white flex items-center justify-center shadow-lg transition-all duration-200 active:scale-95 relative hover:border-white/20"
       @click="isOpen = !isOpen"
-      title="缓存管理"
+      title="Cache Manager"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -22,7 +22,7 @@
       >
         <!-- Header -->
         <div class="p-4 border-b border-white/[0.06] flex items-center justify-between">
-          <h3 class="font-semibold text-sm text-white">缓存管理</h3>
+          <h3 class="font-semibold text-sm text-white">Cache Manager</h3>
           <div class="text-xs text-[#8e8e93] font-mono tabular-nums">
             {{ metrics?.used_human ?? '0 B' }} / {{ metrics?.max_human ?? '0 B' }}
           </div>
@@ -30,24 +30,24 @@
 
         <!-- Summary bar -->
         <div class="px-4 py-2.5 bg-black/30 border-b border-white/[0.04] flex items-center gap-3 text-[11px] text-[#8e8e93]">
-          <span>共 {{ items.length }} 个</span>
-          <span v-if="activeCount > 0" class="text-emerald-400">活跃 {{ activeCount }} 个</span>
-          <span v-if="hdCount > 0" class="text-rose">高清 {{ hdCount }} 个</span>
-          <span v-if="sdCount > 0" class="text-amber">标清 {{ sdCount }} 个</span>
+          <span>{{ items.length }} total</span>
+          <span v-if="activeCount > 0" class="text-emerald-400">{{ activeCount }} active</span>
+          <span v-if="hdCount > 0" class="text-rose">{{ hdCount }} HD</span>
+          <span v-if="sdCount > 0" class="text-amber">{{ sdCount }} SD</span>
         </div>
 
         <!-- Lane legend -->
         <div class="px-4 py-1.5 bg-black/20 border-b border-white/[0.04] flex items-center gap-3 text-[10px] text-[#8e8e93]/60">
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#10b981]" />已缓存</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#f59e0b]" />下载中</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#ef4444]" />损坏</span>
-          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#1f2937]" />未下载</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#10b981]" />Cached</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#f59e0b]" />Downloading</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#ef4444]" />Corrupt</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#1f2937]" />Not downloaded</span>
         </div>
 
         <!-- List -->
         <div class="flex-1 overflow-y-auto p-2 space-y-1">
           <div v-if="enrichedItems.length === 0" class="text-center py-10 text-[#8e8e93] text-sm">
-            暂无缓存
+            No cache items
           </div>
 
           <div
@@ -55,38 +55,38 @@
             :key="item.hash"
             class="p-3 rounded-xl bg-black/20 hover:bg-black/30 transition-colors"
           >
-            <!-- 第一行：code + tags -->
+            <!-- Row 1: code + tags -->
             <div class="flex items-center gap-2 mb-2">
               <span v-if="item.number" class="text-[10px] text-[#8e8e93] font-mono">#{{ item.number }}</span>
               <p class="text-[13px] font-semibold text-white truncate flex-1 min-w-0">
                 {{ item.displayCode }}
               </p>
               <span
-                class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                class="shrink-0 text-[10px] px-2 py-0.5 rounded font-medium"
                 :class="qualityClass(item)"
               >
-                {{ item.quality === 'HD' ? '高清' : '标清' }}
+                {{ item.quality === 'HD' ? 'HD' : 'SD' }}
               </span>
               <span
-                class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                class="shrink-0 text-[10px] px-2 py-0.5 rounded font-medium"
                 :class="stateClass(item)"
               >
                 {{ stateLabel(item) }}
               </span>
             </div>
 
-            <!-- 第二行：tier + peers + speed -->
+            <!-- Row 2: tier + peers + speed -->
             <div class="flex items-center gap-2 mb-2 text-[10px] text-[#8e8e93]">
               <span class="px-1.5 py-0.5 rounded bg-white/[0.05] text-white/50">{{ tierLabel(item) }}</span>
               <span v-if="item.peers > 0">{{ item.peers }} peers</span>
               <span v-if="item.download_rate > 0" class="text-emerald-400">↓ {{ formatSpeed(item.download_rate) }}</span>
               <span v-if="item.upload_rate > 0" class="text-sky-400">↑ {{ formatSpeed(item.upload_rate) }}</span>
               <span v-if="item.verified_pieces > 0 && item.state?.includes('checking')" class="text-amber">
-                已校验 {{ item.verified_pieces }} pcs
+                Verified {{ item.verified_pieces }} pcs
               </span>
             </div>
 
-            <!-- 泳道：磁盘切面展示 piece 状态 -->
+            <!-- Lane: disk slice showing piece state -->
             <div class="mb-2">
               <div class="flex h-2.5 rounded overflow-hidden">
                 <div
@@ -104,26 +104,26 @@
               </div>
             </div>
 
-            <!-- 大小行 -->
+            <!-- Size row -->
             <div class="flex items-center justify-between text-[10px] text-[#8e8e93]/60 mb-2">
               <span>{{ formatSize(item.local_size) }} / {{ formatSize(item.video_size) }}</span>
               <span class="font-mono">{{ item.hash.slice(0, 12) }}...</span>
             </div>
 
-            <!-- 操作按钮 -->
+            <!-- Action buttons -->
             <div class="flex gap-2">
               <button
                 v-if="!item.head_ready && item.progress < 99.9"
                 class="flex-1 text-[11px] bg-white/[0.06] hover:bg-white/[0.1] text-white py-1.5 rounded-lg transition-colors"
                 @click="boostItem(item.hash)"
               >
-                加速
+                Boost
               </button>
               <button
                 class="text-[11px] text-[#ff453a] hover:text-[#ff6961] px-3 py-1.5 rounded-lg bg-[#ff453a]/10 hover:bg-[#ff453a]/15 transition-colors"
                 @click="removeItem(item.hash)"
               >
-                删除
+                Remove
               </button>
             </div>
           </div>
@@ -140,13 +140,13 @@
               <polyline points="1 20 1 14 7 14"/>
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
-            同步列表
+            Refresh List
           </button>
           <button
             class="flex-1 text-xs bg-[#ff453a]/10 hover:bg-[#ff453a]/15 text-[#ff453a] py-2.5 rounded-xl transition-colors font-medium"
             @click="clearAll"
           >
-            清空全部
+            Clear All
           </button>
         </div>
       </div>
@@ -207,7 +207,7 @@ const enrichedItems = computed(() => {
       displayCode: code || item.name || item.hash.slice(0, 12),
     }
   })
-  // 按 #id 排序，无编号放最后
+  // Sort by #id, items without number go last
   return list.sort((a, b) => {
     if (a.number && b.number) return a.number - b.number
     if (a.number) return -1
@@ -246,15 +246,15 @@ function stateClass(item: any): string {
 
 function stateLabel(item: any): string {
   const map: Record<string, string> = {
-    checking_files: '校验中',
-    checking_resume_data: '校验中',
-    downloading_metadata: '获取元数据',
-    downloading: '下载中',
-    finished: '已完成',
-    seeding: '做种中',
-    allocating: '分配中',
+    checking_files: 'Verifying',
+    checking_resume_data: 'Verifying',
+    downloading_metadata: 'Metadata',
+    downloading: 'Downloading',
+    finished: 'Finished',
+    seeding: 'Seeding',
+    allocating: 'Allocating',
   }
-  return map[item.state] || item.state || '等待中'
+  return map[item.state] || item.state || 'Waiting'
 }
 
 function qualityClass(item: any): string {
@@ -265,10 +265,10 @@ function qualityClass(item: any): string {
 
 function tierLabel(item: any): string {
   const map: Record<string, string> = {
-    hot: 'L1 热',
-    warm: 'L2 温',
-    seed: 'L3 冷',
-    fragment: 'L4 碎',
+    hot: 'L1 Hot',
+    warm: 'L2 Warm',
+    seed: 'L3 Cold',
+    fragment: 'L4 Fragment',
   }
   return map[item.tier] || item.tier || '-'
 }
@@ -285,12 +285,12 @@ function laneColor(state: number): string {
 
 function laneLabel(state: number): string {
   const labels: Record<number, string> = {
-    0: '未下载',
-    1: '下载中',
-    2: '已缓存',
-    3: '损坏',
+    0: 'Not downloaded',
+    1: 'Downloading',
+    2: 'Cached',
+    3: 'Corrupt',
   }
-  return labels[state] || '未知'
+  return labels[state] || 'Unknown'
 }
 
 async function refresh() {
@@ -323,7 +323,7 @@ async function boostItem(hash: string) {
 }
 
 async function clearAll() {
-  if (!confirm('确定清空全部缓存？')) return
+  if (!confirm('Clear all cache items?')) return
   for (const item of items.value) {
     try {
       await deleteCache(item.hash)

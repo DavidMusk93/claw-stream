@@ -1,10 +1,10 @@
 /**
- * useLogger — 前端日志与 Trace ID 管理
+ * useLogger — Frontend logging and Trace ID management
  *
- * Trace ID 规则：
- *   1. 优先从 localStorage 复用
- *   2. 首次生成 12 位随机 ID
- *   3. 后端响应返回 x-trace-id 时同步更新
+ * Trace ID rules:
+ *   1. Reuse from localStorage if available
+ *   2. Generate 12-char random ID on first use
+ *   3. Sync when backend response returns x-trace-id
  */
 
 let _traceId = ''
@@ -43,7 +43,7 @@ export function makeLogHeaders(): Record<string, string> {
   return { 'x-trace-id': getTraceId() }
 }
 
-/** 读取响应头中的 trace_id 并同步 */
+/** Read trace_id from response headers and sync */
 export function syncTraceIdFromResponse(response: Response | undefined) {
   const tid = response?.headers?.get('x-trace-id')
   if (tid) setTraceId(tid)
@@ -72,7 +72,7 @@ export function logWarn(tag: string, msg: string, data?: any) {
   else console.warn(prefix, msg)
 }
 
-/** 上报错误日志到后端（fire-and-forget，不阻塞 UI） */
+/** Report error logs to backend (fire-and-forget, non-blocking) */
 async function _report(level: string, tag: string, msg: string, data?: any) {
   try {
     await fetch('/api/log', {
@@ -88,6 +88,6 @@ async function _report(level: string, tag: string, msg: string, data?: any) {
       }),
     })
   } catch {
-    // 上报失败不抛异常
+    // Report failure should not throw
   }
 }

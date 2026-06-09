@@ -44,8 +44,8 @@
             >
               <path d="M21 12a9 9 0 1 1-6.22-8.56" />
             </svg>
-            <span v-if="syncRunning" class="hidden sm:inline">同步中 {{ syncElapsed }}s</span>
-            <span v-else class="hidden sm:inline">刷新</span>
+            <span v-if="syncRunning" class="hidden sm:inline">Syncing {{ syncElapsed }}s</span>
+            <span v-else class="hidden sm:inline">Refresh</span>
           </button>
         </div>
       </div>
@@ -62,8 +62,8 @@
         <!-- Add Star Panel -->
         <div class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-white">添加女优</h2>
-            <span class="text-[12px] text-[#8e8e93]">ijavtorrent actress 页面</span>
+            <h2 class="text-[15px] font-semibold text-white">Add Star</h2>
+            <span class="text-[12px] text-[#8e8e93]">ijavtorrent actress page</span>
           </div>
           <div class="flex items-center gap-3">
             <input
@@ -82,9 +82,9 @@
                 <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M21 12a9 9 0 1 1-6.22-8.56" />
                 </svg>
-                添加中
+                Adding...
               </span>
-              <span v-else>添加</span>
+              <span v-else>Add</span>
             </button>
           </div>
           <p v-if="addError" class="mt-2.5 text-[13px] text-[#ff453a]">{{ addError }}</p>
@@ -94,9 +94,9 @@
         <!-- Recently Added Panel -->
         <div v-if="recentStars.length" class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-white">最近添加</h2>
+            <h2 class="text-[15px] font-semibold text-white">Recently Added</h2>
             <button class="text-[12px] text-[#8e8e93] hover:text-white transition-colors" @click="clearRecent">
-              清空
+              Clear
             </button>
           </div>
           <div class="flex flex-wrap gap-2">
@@ -220,7 +220,7 @@ async function addStar() {
       body: { star_page_url: url },
     }) as any
 
-    addSuccess.value = `已添加 ${res.name} (${res.code})，发现 ${res.titles_found} 部作品，后台同步中...`
+    addSuccess.value = `Added ${res.name} (${res.code}), ${res.titles_found} titles found, syncing in background...`
     newStarUrl.value = ''
 
     // Push to recent
@@ -235,7 +235,7 @@ async function addStar() {
     // Refresh stars list
     await refreshNuxtData('stars')
   } catch (e: any) {
-    const msg = e?.data?.detail || e?.message || '添加失败'
+    const msg = e?.data?.detail || e?.message || 'Failed to add'
     addError.value = msg
   } finally {
     addingStar.value = false
@@ -277,13 +277,13 @@ async function startSync() {
       beginPolling()
     }
   } catch (e: any) {
-    syncError.value = e?.message || '启动同步失败'
+    syncError.value = e?.message || 'Failed to start sync'
   }
 }
 
 async function clearStarsServiceWorkerCache() {
-  // 同步完成后必须清除 Service Worker 中 /api/stars 的旧缓存，
-  // 否则刷新网页会拿到 StaleWhileRevalidate/NetworkFirst 缓存的旧数据。
+  // After sync completes, must clear the Service Worker cache for /api/stars
+  // otherwise refreshing the page will return stale cached data.
   if (typeof window !== 'undefined' && 'caches' in window) {
     try {
       await caches.delete('stars-cache')
