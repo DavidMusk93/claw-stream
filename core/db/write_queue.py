@@ -7,6 +7,7 @@ contention from multiple coroutines opening write connections simultaneously wit
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from typing import Any, Callable
 
@@ -60,7 +61,11 @@ class DuckDBWriteQueue:
             func, args, kwargs, future = item
             start = time.perf_counter()
             try:
-                result = await loop.run_in_executor(None, func, *args, **kwargs)
+                if kwargs:
+                    bound_func = functools.partial(func, **kwargs)
+                    result = await loop.run_in_executor(None, bound_func, *args)
+                else:
+                    result = await loop.run_in_executor(None, func, *args)
                 elapsed = (time.perf_counter() - start) * 1000
                 log.debug(f"{func.__name__} -> ok ({elapsed:.1f}ms)")
                 future.set_result(result)
