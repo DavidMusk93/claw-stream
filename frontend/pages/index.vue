@@ -241,12 +241,23 @@ function onStarDeleted(code: string) {
   saveRecent()
 }
 
+// Poll for newly-added star titles
+let addStarPollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopAddStarPoll() {
+  if (addStarPollTimer) {
+    clearInterval(addStarPollTimer)
+    addStarPollTimer = null
+  }
+}
+
 async function addStar() {
   const url = newStarUrl.value.trim()
   if (!url) return
   addError.value = ''
   addSuccess.value = ''
   addingStar.value = true
+  stopAddStarPoll()
 
   try {
     const res = await $fetch('/api/stars/add', {
@@ -255,20 +266,46 @@ async function addStar() {
       body: { star_page_url: url },
     }) as any
 
-    addSuccess.value = `Added ${res.name} (${res.code}), ${res.titles_found} titles found, syncing in background...`
+    const addedCode = res.code as string
+    const addedName = res.name as string
+    const titlesFound = res.titles_found as number
+
+    addSuccess.value = `Added ${addedName} (${addedCode}), ${titlesFound} titles found, syncing in background...`
     newStarUrl.value = ''
 
     // Push to recent
     recentStars.value.unshift({
-      name: res.name,
-      code: res.code,
+      name: addedName,
+      code: addedCode,
       url: res.star_page_url,
       addedAt: Date.now(),
     })
     saveRecent()
 
-    // Refresh stars list
+    // Refresh stars list (may show 0 titles if bg sync hasn't finished)
     await refreshNuxtData('stars')
+
+    // Poll every 3s until the new star has titles
+    let pollCount = 0
+    const maxPolls = 20 // ~60s timeout
+    addStarPollTimer = setInterval(async () => {
+      pollCount++
+      await refreshNuxtData('stars')
+
+      const star = stars.value?.find((s: any) => s.code === addedCode)
+      const hasTitles = star && star.titles && star.titles.length > 0
+
+      if (hasTitles) {
+        addSuccess.value = `Added ${addedName} (${addedCode}), ${star!.titles.length} titles ready`
+        stopAddStarPoll()
+        return
+      }
+
+      if (pollCount >= maxPolls) {
+        addSuccess.value = `Added ${addedName} (${addedCode}), sync timed out — titles may appear after refresh`
+        stopAddStarPoll()
+      }
+    }, 3000)
   } catch (e: any) {
     const msg = e?.data?.detail || e?.message || 'Failed to add'
     addError.value = msg
@@ -411,6 +448,7 @@ function beginPolling() {
 onUnmounted(() => {
   if (syncTimer) clearInterval(syncTimer)
   if (toastTimer) clearTimeout(toastTimer)
+  stopAddStarPoll()
 })
 
 watch(() => stars.value, (val) => {

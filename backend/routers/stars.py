@@ -258,6 +258,8 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
                 sem = asyncio.Semaphore(1)
                 result = await sync_star(pf, star_cfg, sem)
                 log.info(f"bg sync done: {name}: {result['count']} titles")
+                # Titles now written to DB — invalidate cache so next read is fresh
+                invalidate_stars_cache()
         except Exception as exc:
             log.error(f"bg sync failed: {name}: {exc}")
 
