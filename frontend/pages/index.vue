@@ -30,21 +30,13 @@
               <polyline points="23 4 23 10 17 10" />
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
             </svg>
-            <svg
-              v-else
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="animate-spin"
-            >
-              <path d="M21 12a9 9 0 1 1-6.22-8.56" />
-            </svg>
-            <span v-if="syncRunning" class="hidden sm:inline">Syncing {{ syncElapsed }}s</span>
+            <template v-else>
+              <span class="relative flex h-[13px] w-[13px]">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
+                <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-white/90" />
+              </span>
+            </template>
+            <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
             <span v-else class="hidden sm:inline">Refresh</span>
           </button>
         </div>
@@ -140,6 +132,49 @@
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
     <CachePanel :stars="displayStars" />
+
+    <!-- Sync result toast -->
+    <Transition
+      enter-active-class="transition duration-300 ease-out"
+      enter-from-class="translate-y-4 opacity-0"
+      enter-to-class="translate-y-0 opacity-100"
+      leave-active-class="transition duration-200 ease-in"
+      leave-from-class="translate-y-0 opacity-100"
+      leave-to-class="translate-y-4 opacity-0"
+    >
+      <div
+        v-if="toastVisible"
+        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 px-4 py-3 rounded-2xl shadow-2xl max-w-sm w-[90vw]"
+        :class="toastType === 'success'
+          ? 'bg-[#1c1c1e] border border-white/[0.06]'
+          : 'bg-[#1c1c1e] border border-[#ff453a]/30'"
+        @click="dismissToast"
+      >
+        <span
+          class="w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+          :class="toastType === 'success' ? 'bg-[#30d158]/15 text-[#30d158]' : 'bg-[#ff453a]/15 text-[#ff453a]'"
+        >
+          <svg v-if="toastType === 'success'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </span>
+        <div class="flex-1 min-w-0">
+          <p class="text-[13px] font-semibold text-white leading-snug">{{ toastMessage }}</p>
+          <p v-if="toastDetail" class="text-[12px] text-[#8e8e93] mt-0.5 leading-snug">{{ toastDetail }}</p>
+        </div>
+        <button class="text-[#8e8e93]/60 hover:text-white transition-colors shrink-0 mt-0.5">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -257,6 +292,27 @@ const syncError = ref('')
 let syncTimer: ReturnType<typeof setInterval> | null = null
 let syncStartTime = 0
 
+// Toast notification for sync completion
+const toastVisible = ref(false)
+const toastMessage = ref('')
+const toastDetail = ref('')
+const toastType = ref<'success' | 'error'>('success')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(message: string, detail: string = '', type: 'success' | 'error' = 'success') {
+  toastMessage.value = message
+  toastDetail.value = detail
+  toastType.value = type
+  toastVisible.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
+}
+
+function dismissToast() {
+  toastVisible.value = false
+  if (toastTimer) clearTimeout(toastTimer)
+}
+
 async function startSync() {
   if (syncRunning.value) return
   syncError.value = ''
@@ -293,6 +349,19 @@ async function clearStarsServiceWorkerCache() {
   }
 }
 
+function parseSyncResult(logLines: string[]): { totalNew: number; totalStars: number } {
+  let totalNew = 0
+  let totalStars = 0
+  for (const line of logLines) {
+    const match = line.match(/:\s*(\d+)\s*titles?/)
+    if (match) {
+      totalNew += parseInt(match[1], 10)
+      totalStars++
+    }
+  }
+  return { totalNew, totalStars }
+}
+
 function beginPolling() {
   if (syncTimer) clearInterval(syncTimer)
   syncTimer = setInterval(async () => {
@@ -309,8 +378,26 @@ function beginPolling() {
           clearInterval(syncTimer)
           syncTimer = null
         }
+        const elapsedSec = ((Date.now() - syncStartTime) / 1000).toFixed(1)
+
         if (status.last_error) {
           syncError.value = status.last_error.slice(0, 200)
+          showToast('Sync failed', status.last_error.slice(0, 120), 'error')
+        } else {
+          const { totalNew, totalStars } = parseSyncResult(status.log_lines || [])
+          if (totalNew > 0) {
+            showToast(
+              `${totalNew} new title${totalNew > 1 ? 's' : ''} added`,
+              `Synced ${totalStars} star${totalStars > 1 ? 's' : ''} in ${elapsedSec}s`,
+              'success'
+            )
+          } else {
+            showToast(
+              'All caught up',
+              `Checked ${totalStars} star${totalStars > 1 ? 's' : ''} in ${elapsedSec}s — no new releases`,
+              'success'
+            )
+          }
         }
         await clearStarsServiceWorkerCache()
         await refreshNuxtData('stars')
@@ -323,6 +410,7 @@ function beginPolling() {
 
 onUnmounted(() => {
   if (syncTimer) clearInterval(syncTimer)
+  if (toastTimer) clearTimeout(toastTimer)
 })
 
 watch(() => stars.value, (val) => {
