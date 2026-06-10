@@ -8,6 +8,8 @@ export function useVideoPlayer() {
   const error = ref('')
   const canplayFired = ref(false)
   let pollTimer: ReturnType<typeof setInterval> | null = null
+  let _unsubEvent: (() => void) | null = null
+  let _currentHash = ''
 
   async function checkHeadReady(hash: string): Promise<boolean> {
     const t0 = performance.now()
@@ -45,14 +47,36 @@ export function useVideoPlayer() {
 
   function startPolling(hash: string) {
     stopPolling()
+    _currentHash = hash
     logInfo('player', `startPolling ${hash.slice(0, 12)}`)
+
+    // SSE: instant push when torrent state changes
+    const { onServerEvent } = useEventSource()
+    _unsubEvent = onServerEvent('torrent.head_ready', (data: any) => {
+      if (data.hash === hash) {
+        logInfo('player', `SSE head_ready ${hash.slice(0, 12)}`)
+        pollStatus(hash).catch(() => {})
+      }
+    })
+    // Also listen on general status changes
+    const unsubStatus = onServerEvent('torrent.status', (data: any) => {
+      if (data.hash === hash) {
+        pollStatus(hash).catch(() => {})
+      }
+    })
+    _unsubEvent = () => {
+      _unsubEvent?.()
+      unsubStatus()
+    }
+
+    // Fallback polling every 5s (SSE covers instant changes)
     pollTimer = setInterval(async () => {
       try {
         await pollStatus(hash)
       } catch {
         // ignore polling errors, already logged
       }
-    }, 2000)
+    }, 5000)
   }
 
   function stopPolling() {
@@ -61,6 +85,11 @@ export function useVideoPlayer() {
       clearInterval(pollTimer)
       pollTimer = null
     }
+    if (_unsubEvent) {
+      _unsubEvent()
+      _unsubEvent = null
+    }
+    _currentHash = ''
   }
 
   async function waitForHeadReady(hash: string, timeoutSec = 180): Promise<boolean> {

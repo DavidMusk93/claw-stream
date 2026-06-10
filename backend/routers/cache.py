@@ -8,6 +8,7 @@ import os
 
 from backend.models import CacheMetrics
 from backend.services.torrent_engine import format_size
+from core.events import publish_event
 
 router = APIRouter(prefix="/api/cache", tags=["cache"])
 
@@ -34,6 +35,7 @@ async def get_cache(engine: Any = Depends(get_engine)):
 async def delete_cache(hash_str: str, engine: Any = Depends(get_engine)):
     """Remove a torrent from cache."""
     success = await asyncio.to_thread(engine.remove_torrent, hash_str)
+    await publish_event("cache.update", {"action": "delete", "hash": hash_str})
     return {"deleted": success}
 
 
@@ -43,6 +45,7 @@ async def gc_orphans(engine: Any = Depends(get_engine)):
     script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     db_path = os.path.join(script_dir, "data", "claw.duckdb")
     removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
+    await publish_event("cache.update", {"action": "gc", "removed": removed})
     return {"removed": removed}
 
 

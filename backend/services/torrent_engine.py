@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import re
@@ -12,6 +13,7 @@ import duckdb
 import libtorrent as lt
 
 from core import get_logger
+from core.events import publish_event
 from .piece_tracker import PieceStateTracker
 
 log = get_logger("torrent-engine")
@@ -329,6 +331,20 @@ class TorrentEngine:
         # libtorrent to initialize / check files.
         self._preload_thread = threading.Thread(target=self._preload_cached_torrents, daemon=True)
         self._preload_thread.start()
+
+        # Capture main event loop for cross-thread SSE publishing
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._main_loop = None
+
+    def _emit_event(self, event: str, data: dict[str, Any]) -> None:
+        """Publish an SSE event from the alert thread (cross-thread safe)."""
+        if self._main_loop:
+            try:
+                asyncio.run_coroutine_threadsafe(publish_event(event, data), self._main_loop)
+            except Exception:
+                pass
 
     def _preload_cached_torrents(self) -> None:
         """Scan cache directory and auto-load all cached .torrent files."""
@@ -678,6 +694,7 @@ class TorrentEngine:
         if params.ti is not None:
             self._on_metadata(handle)
 
+        self._emit_event("cache.update", {"action": "add", "hash": hash_str})
         return info
 
     def _extract_hash(self, magnet: str) -> str | None:
@@ -697,11 +714,6 @@ class TorrentEngine:
         if isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
-            # After file verification, re-bootstrap from disk (ground truth).
-            # Do NOT trust libtorrent's have_piece() — recheck may have read
-            # stale page-cache zeros and falsely marked pieces complete.
-            # Do NOT call _apply_play_priority here — preload or checked alert
-            # must not trigger downloads. Only /torrent/resume and /stream/ do.
             h = alert.handle
             hash_str = str(h.info_hash())
             with self.lock:
@@ -709,6 +721,7 @@ class TorrentEngine:
                     info = self.torrents[hash_str]
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
+            self._emit_event("torrent.status", {"hash": hash_str, "state": "checked"})
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -720,7 +733,6 @@ class TorrentEngine:
                     f"torrent not in engine (stale alert)"
                 )
                 return
-            # Validate alert handle matches current handle to detect stale alerts
             current_handle = info["handle"]
             if h.status().num_pieces != current_handle.status().num_pieces:
                 log.debug(
@@ -729,11 +741,10 @@ class TorrentEngine:
                 )
                 return
             tracker = info.get("tracker")
-            # finished state does NOT mean data is actually on disk.
-            # Re-scan with SEEK_HOLE (ground truth) before trusting it.
             if tracker:
                 tracker._bootstrap_from_filesystem()
-            if tracker and tracker.head_ready():
+            ready = tracker and tracker.head_ready()
+            if ready:
                 with self.lock:
                     if hash_str in self.torrents:
                         self.torrents[hash_str]["ready"] = True
@@ -742,6 +753,7 @@ class TorrentEngine:
                     f"finished but head not ready: {hash_str[:12]}... "
                     f"disk scan shows holes, will readd on next stream request"
                 )
+            self._emit_event("torrent.status", {"hash": hash_str, "state": "finished", "ready": ready})
         elif isinstance(alert, lt.piece_finished_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -749,13 +761,21 @@ class TorrentEngine:
                 if hash_str in self.torrents:
                     tracker = self.torrents[hash_str].get("tracker")
                     if tracker:
+                        was_ready = tracker.head_ready()
                         tracker.on_piece_finished(alert.piece_index)
+                        now_ready = tracker.head_ready()
                         if tracker.start_piece <= alert.piece_index <= tracker.end_piece:
                             log.info(
                                 f"piece finished: {hash_str[:12]}... piece={alert.piece_index} "
                                 f"verified={tracker.verified_count()}/{tracker.end_piece - tracker.start_piece + 1} "
-                                f"head_ready={tracker.head_ready()}"
+                                f"head_ready={now_ready}"
                             )
+                        # Broadcast when head_ready flips from false to true
+                        if not was_ready and now_ready:
+                            with self.lock:
+                                if hash_str in self.torrents:
+                                    self.torrents[hash_str]["ready"] = True
+                            self._emit_event("torrent.head_ready", {"hash": hash_str})
         elif isinstance(alert, lt.hash_failed_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
@@ -1421,6 +1441,7 @@ class TorrentEngine:
                     log.error(f"remove final error for {hash_str[:12]}: {e}")
                     # On last attempt ignore errors, at least clean up files that can be deleted
                     shutil.rmtree(save_path, ignore_errors=True)
+        self._emit_event("cache.update", {"action": "remove", "hash": hash_str})
         return True
 
     def gc_orphaned_torrents(self, db_path: str) -> int:
@@ -1504,6 +1525,8 @@ class TorrentEngine:
                 self._cleanup_orphaned()
             except Exception as e:
                 log.error(f"periodic orphaned cleanup error: {e}")
+
+            self._emit_event("cache.update", {"action": "periodic_clean"})
 
     def _cleanup_orphaned(self) -> None:
         """Clean up orphaned cache directories not in engine management list.

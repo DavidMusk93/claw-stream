@@ -338,13 +338,25 @@ watch(isOpen, (open) => {
   if (open) refresh()
 })
 
-let timer: ReturnType<typeof setInterval> | null = null
+// SSE: refresh instantly on cache changes
+let unsubCache: (() => void) | null = null
 watch(isOpen, (open) => {
   if (open) {
-    timer = setInterval(refresh, 5000)
-  } else if (timer) {
-    clearInterval(timer)
-    timer = null
+    const { onServerEvent } = useEventSource()
+    unsubCache = onServerEvent('cache.update', () => {
+      refresh()
+    })
+    // Fallback polling every 10s (SSE covers instant changes)
+    timer = setInterval(refresh, 10000)
+  } else {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    if (unsubCache) {
+      unsubCache()
+      unsubCache = null
+    }
   }
 })
 </script>
