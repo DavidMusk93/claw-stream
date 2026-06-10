@@ -314,6 +314,11 @@ class TorrentEngine:
         self.torrents: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
+        # Status cache: avoid repeated disk I/O on get_status / get_all_status
+        self._status_cache: dict[str, tuple[dict[str, Any], float]] = {}
+        self._status_cache_ttl = 2.0  # seconds
+        self._status_cache_lock = threading.Lock()
+
         # user-liked hashes: protected from eviction
         self.liked_hashes: set[str] = set()
 
@@ -721,6 +726,7 @@ class TorrentEngine:
                     info = self.torrents[hash_str]
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
+            self._invalidate_status_cache(hash_str)
             self._emit_event("torrent.status", {"hash": hash_str, "state": "checked"})
         elif isinstance(alert, lt.torrent_finished_alert):
             h = alert.handle
@@ -753,6 +759,7 @@ class TorrentEngine:
                     f"finished but head not ready: {hash_str[:12]}... "
                     f"disk scan shows holes, will readd on next stream request"
                 )
+            self._invalidate_status_cache(hash_str)
             self._emit_event("torrent.status", {"hash": hash_str, "state": "finished", "ready": ready})
         elif isinstance(alert, lt.piece_finished_alert):
             h = alert.handle
@@ -770,11 +777,11 @@ class TorrentEngine:
                                 f"verified={tracker.verified_count()}/{tracker.end_piece - tracker.start_piece + 1} "
                                 f"head_ready={now_ready}"
                             )
-                        # Broadcast when head_ready flips from false to true
                         if not was_ready and now_ready:
                             with self.lock:
                                 if hash_str in self.torrents:
                                     self.torrents[hash_str]["ready"] = True
+                            self._invalidate_status_cache(hash_str)
                             self._emit_event("torrent.head_ready", {"hash": hash_str})
         elif isinstance(alert, lt.hash_failed_alert):
             h = alert.handle
@@ -784,6 +791,7 @@ class TorrentEngine:
                     tracker = self.torrents[hash_str].get("tracker")
                     if tracker:
                         tracker.on_hash_failed(alert.piece_index)
+                        self._invalidate_status_cache(hash_str)
 
     def _on_metadata(self, handle: lt.torrent_handle) -> None:
         """When torrent metadata download completes, select video file and set priorities."""
@@ -1166,8 +1174,26 @@ class TorrentEngine:
             info["last_access"] = time.time()
         return result
 
+    def _invalidate_status_cache(self, hash_str: str) -> None:
+        """Clear cached status for a torrent (call on state changes)."""
+        with self._status_cache_lock:
+            self._status_cache.pop(hash_str, None)
+
     def get_status(self, hash_str: str) -> dict[str, Any] | None:
-        """Get playback and download status for specified torrent."""
+        """Get playback and download status for specified torrent.
+
+        Results are cached for 2 seconds to avoid repeated disk I/O
+        (lseek/SEEK_HOLE, os.walk, MP4 moov scans) on every poll.
+        Cache is invalidated automatically on piece/state changes.
+        """
+        # Check cache first
+        with self._status_cache_lock:
+            cached = self._status_cache.get(hash_str)
+        if cached:
+            data, ts = cached
+            if time.time() - ts < self._status_cache_ttl:
+                return data
+
         with self.lock:
             info = self.torrents.get(hash_str)
         if not info:
@@ -1189,7 +1215,6 @@ class TorrentEngine:
             local_path, local_size, head_ready_fs, mime = find_video_state(hash_str)
 
         # Use tracker head_ready if available (O(1) POPCNT, no disk read).
-        # _on_metadata caches moov into info; if missing fall back to fs scan.
         tracker = info.get("tracker")
         if tracker and local_path:
             if tracker._moov_pc > 0:
@@ -1214,10 +1239,7 @@ class TorrentEngine:
         else:
             head_ready = head_ready_fs
 
-        # Progress = real verified data ratio.  In finished/seeding libtorrent
-        # reports 100% and local_size counts allocated blocks, both lying.
-        # Use piece-level verified count (SEEK_HOLE ground truth) as the
-        # single source of truth.
+        # Progress = real verified data ratio.
         progress = s.progress * 100
         if tracker:
             total_video_pieces = tracker.end_piece - tracker.start_piece + 1
@@ -1227,11 +1249,10 @@ class TorrentEngine:
         # Persist progress for tiered cache scoring
         info["progress"] = progress
 
-        # Should not consider ready during checking; prevents frontend from stalling after starting playback during recheck
         checking_states = (lt.torrent_status.checking_files, lt.torrent_status.checking_resume_data)
         is_ready = info["ready"] and s.has_metadata and s.state not in checking_states
 
-        return {
+        result = {
             "hash": hash_str,
             "name": s.name,
             "work_code": info.get("work_code") or _extract_work_code(s.name) or "",
@@ -1249,9 +1270,13 @@ class TorrentEngine:
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
             "quality": info.get("quality", "SD"),
-            "piece_segments": tracker.get_lane_segments(30) if tracker else [],
+            "piece_segments": tracker.get_lane_segments(10) if tracker else [],
             "tier": self._get_tier(info),
         }
+
+        with self._status_cache_lock:
+            self._status_cache[hash_str] = (result, time.time())
+        return result
 
     def touch(self, hash_str: str) -> None:
         """Update last_access to prevent GC eviction.
