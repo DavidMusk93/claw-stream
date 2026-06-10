@@ -19,6 +19,7 @@ from typing import Any
 import duckdb
 
 from core import get_logger
+from core.events import publish_event
 
 log = get_logger("stars-router")
 router = APIRouter(prefix="/api/stars", tags=["stars"])
@@ -260,6 +261,12 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
                 log.info(f"bg sync done: {name}: {result['count']} titles")
                 # Titles now written to DB — invalidate cache so next read is fresh
                 invalidate_stars_cache()
+                # Notify all connected clients
+                await publish_event("star.ready", {
+                    "code": code,
+                    "name": name,
+                    "titles_count": result.get("count", 0),
+                })
         except Exception as exc:
             log.error(f"bg sync failed: {name}: {exc}")
 

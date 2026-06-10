@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from backend.routers.stars import invalidate_stars_cache, CONFIG_PATH
 from core import get_logger
+from core.events import publish_event
 
 router = APIRouter(prefix="/api/stars", tags=["sync"])
 log = get_logger("sync")
@@ -33,6 +34,7 @@ async def _run_sync_bg() -> None:
     global _sync_state
     _sync_state["log_lines"] = []
     _sync_state["last_error"] = None
+    started_at = _sync_state["started_at"]
 
     try:
         from scrapers.v2.tasks.sync_titles import run as run_sync_titles
@@ -42,9 +44,21 @@ async def _run_sync_bg() -> None:
         _sync_state["log_lines"] = log_lines[-30:]
         log.info("sync completed", extra={"lines": len(log_lines)})
         invalidate_stars_cache()
+
+        # Broadcast completion via SSE
+        total_new = sum(r.get("count", 0) for r in results)
+        await publish_event("sync.completed", {
+            "log_lines": _sync_state["log_lines"][-10:],
+            "total_new": total_new,
+            "elapsed": round(time.time() - started_at, 1) if started_at else 0,
+        })
     except Exception as e:
         _sync_state["last_error"] = str(e)
         log.error(f"sync exception: {e}", exc_info=True)
+        await publish_event("sync.error", {
+            "error": str(e)[:200],
+            "elapsed": round(time.time() - started_at, 1) if started_at else 0,
+        })
     finally:
         _sync_state["running"] = False
 
@@ -62,6 +76,7 @@ async def start_sync() -> dict[str, Any]:
         _sync_state["running"] = True
         _sync_state["started_at"] = time.time()
         asyncio.create_task(_run_sync_bg())
+        await publish_event("sync.started", {"started_at": _sync_state["started_at"]})
         return {"status": "started"}
 
 

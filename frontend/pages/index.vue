@@ -257,7 +257,6 @@ async function addStar() {
   addError.value = ''
   addSuccess.value = ''
   addingStar.value = true
-  stopAddStarPoll()
 
   try {
     const res = await $fetch('/api/stars/add', {
@@ -284,28 +283,6 @@ async function addStar() {
 
     // Refresh stars list (may show 0 titles if bg sync hasn't finished)
     await refreshNuxtData('stars')
-
-    // Poll every 3s until the new star has titles
-    let pollCount = 0
-    const maxPolls = 20 // ~60s timeout
-    addStarPollTimer = setInterval(async () => {
-      pollCount++
-      await refreshNuxtData('stars')
-
-      const star = stars.value?.find((s: any) => s.code === addedCode)
-      const hasTitles = star && star.titles && star.titles.length > 0
-
-      if (hasTitles) {
-        addSuccess.value = `Added ${addedName} (${addedCode}), ${star!.titles.length} titles ready`
-        stopAddStarPoll()
-        return
-      }
-
-      if (pollCount >= maxPolls) {
-        addSuccess.value = `Added ${addedName} (${addedCode}), sync timed out — titles may appear after refresh`
-        stopAddStarPoll()
-      }
-    }, 3000)
   } catch (e: any) {
     const msg = e?.data?.detail || e?.message || 'Failed to add'
     addError.value = msg
@@ -324,9 +301,7 @@ function openVideo(magnet: string) {
 
 // Sync state
 const syncRunning = ref(false)
-const syncElapsed = ref(0)
 const syncError = ref('')
-let syncTimer: ReturnType<typeof setInterval> | null = null
 let syncStartTime = 0
 
 // Toast notification for sync completion
@@ -363,11 +338,9 @@ async function startSync() {
     if (res.status === 'started') {
       syncRunning.value = true
       syncStartTime = Date.now()
-      beginPolling()
     } else if (res.status === 'running') {
       syncRunning.value = true
       syncStartTime = Date.now() - (res.elapsed || 0) * 1000
-      beginPolling()
     }
   } catch (e: any) {
     syncError.value = e?.message || 'Failed to start sync'
@@ -375,8 +348,6 @@ async function startSync() {
 }
 
 async function clearStarsServiceWorkerCache() {
-  // After sync completes, must clear the Service Worker cache for /api/stars
-  // otherwise refreshing the page will return stale cached data.
   if (typeof window !== 'undefined' && 'caches' in window) {
     try {
       await caches.delete('stars-cache')
@@ -386,69 +357,52 @@ async function clearStarsServiceWorkerCache() {
   }
 }
 
-function parseSyncResult(logLines: string[]): { totalNew: number; totalStars: number } {
-  let totalNew = 0
-  let totalStars = 0
-  for (const line of logLines) {
-    const match = line.match(/:\s*(\d+)\s*titles?/)
-    if (match) {
-      totalNew += parseInt(match[1], 10)
-      totalStars++
-    }
+function handleSyncCompleted(data: any) {
+  syncRunning.value = false
+  const totalNew = data.total_new ?? 0
+  const elapsed = data.elapsed ?? 0
+  if (totalNew > 0) {
+    showToast(
+      `${totalNew} new title${totalNew > 1 ? 's' : ''} added`,
+      `Synced in ${elapsed}s`,
+      'success'
+    )
+  } else {
+    showToast('All caught up', `Checked in ${elapsed}s — no new releases`, 'success')
   }
-  return { totalNew, totalStars }
+  clearStarsServiceWorkerCache()
+  refreshNuxtData('stars')
 }
 
-function beginPolling() {
-  if (syncTimer) clearInterval(syncTimer)
-  syncTimer = setInterval(async () => {
-    syncElapsed.value = Math.floor((Date.now() - syncStartTime) / 1000)
-
-    try {
-      const status = await $fetch('/api/stars/sync', {
-        baseURL: config.public.apiBase,
-      }) as any
-
-      if (!status.running) {
-        syncRunning.value = false
-        if (syncTimer) {
-          clearInterval(syncTimer)
-          syncTimer = null
-        }
-        const elapsedSec = ((Date.now() - syncStartTime) / 1000).toFixed(1)
-
-        if (status.last_error) {
-          syncError.value = status.last_error.slice(0, 200)
-          showToast('Sync failed', status.last_error.slice(0, 120), 'error')
-        } else {
-          const { totalNew, totalStars } = parseSyncResult(status.log_lines || [])
-          if (totalNew > 0) {
-            showToast(
-              `${totalNew} new title${totalNew > 1 ? 's' : ''} added`,
-              `Synced ${totalStars} star${totalStars > 1 ? 's' : ''} in ${elapsedSec}s`,
-              'success'
-            )
-          } else {
-            showToast(
-              'All caught up',
-              `Checked ${totalStars} star${totalStars > 1 ? 's' : ''} in ${elapsedSec}s — no new releases`,
-              'success'
-            )
-          }
-        }
-        await clearStarsServiceWorkerCache()
-        await refreshNuxtData('stars')
-      }
-    } catch {
-      // ignore
-    }
-  }, 2000)
+function handleSyncError(data: any) {
+  syncRunning.value = false
+  syncError.value = data.error || 'Sync failed'
+  showToast('Sync failed', data.error || '', 'error')
 }
 
-onUnmounted(() => {
-  if (syncTimer) clearInterval(syncTimer)
-  if (toastTimer) clearTimeout(toastTimer)
-  stopAddStarPoll()
+function handleStarReady(data: any) {
+  addSuccess.value = `Added ${data.name} (${data.code}), ${data.titles_count} titles ready`
+  refreshNuxtData('stars')
+}
+
+// Subscribe to SSE events on mount
+onMounted(() => {
+  const { onServerEvent } = useEventSource()
+  const unsubs: (() => void)[] = []
+
+  unsubs.push(onServerEvent('sync.started', () => {
+    syncRunning.value = true
+    syncStartTime = Date.now()
+  }))
+
+  unsubs.push(onServerEvent('sync.completed', handleSyncCompleted))
+  unsubs.push(onServerEvent('sync.error', handleSyncError))
+  unsubs.push(onServerEvent('star.ready', handleStarReady))
+
+  onUnmounted(() => {
+    unsubs.forEach((fn) => fn())
+    if (toastTimer) clearTimeout(toastTimer)
+  })
 })
 
 watch(() => stars.value, (val) => {
