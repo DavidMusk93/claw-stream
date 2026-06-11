@@ -1,9 +1,9 @@
 <template>
-  <div class="min-h-screen bg-black">
+  <div class="min-h-screen bg-void">
     <!-- Top bar -->
-    <header class="fixed top-0 left-0 right-0 z-40 bg-black/90 backdrop-blur-xl">
+    <header class="fixed top-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 h-12 flex items-center justify-between">
-        <h1 class="text-[17px] font-semibold text-white tracking-tight">
+        <h1 class="text-[17px] font-semibold text-foreground tracking-tight">
           Star Archive
         </h1>
         <div class="flex items-center gap-4">
@@ -12,7 +12,7 @@
             :class="health?.status === 'ok' ? 'bg-[#30d158]' : 'bg-[#ff453a]'"
           />
           <button
-            class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#1c1c1e] text-[13px] text-white transition-colors duration-200 hover:bg-[#2c2c2e] active:bg-[#3a3a3c] disabled:opacity-40 disabled:cursor-not-allowed"
+            class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-[13px] text-foreground transition-colors duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm"
             :disabled="syncRunning"
             @click="startSync"
           >
@@ -32,8 +32,8 @@
             </svg>
             <template v-else>
               <span class="relative flex h-[13px] w-[13px]">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
-                <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-white/90" />
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-foreground opacity-75" />
+                <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-foreground/90" />
               </span>
             </template>
             <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
@@ -44,7 +44,7 @@
     </header>
 
     <!-- Star navigation pills -->
-    <div class="fixed top-12 left-0 right-0 z-30 bg-black/90 backdrop-blur-xl">
+    <div class="fixed top-12 left-0 right-0 z-30 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
       <StarNav :stars="displayStars" />
     </div>
 
@@ -52,17 +52,17 @@
     <main class="pt-[100px] pb-24">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 space-y-8">
         <!-- Add Star Panel -->
-        <div class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
+        <div class="p-4 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-white">Add Star</h2>
-            <span class="text-[12px] text-[#8e8e93]">ijavtorrent actress page</span>
+            <h2 class="text-[15px] font-semibold text-foreground">Add Star</h2>
+            <span class="text-[12px] text-foreground-muted">ijavtorrent actress page</span>
           </div>
           <div class="flex items-center gap-3">
             <input
               v-model="newStarUrl"
               type="text"
               placeholder="https://ijavtorrent.com/actress/xxx-xxx-12345"
-              class="flex-1 h-11 px-4 rounded-xl bg-black text-[14px] text-white placeholder:text-[#8e8e93]/50 outline-none border border-white/[0.06] focus:border-[#ff375f]/40 transition-colors"
+              class="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-[14px] text-foreground placeholder:text-foreground-muted/50 outline-none border border-black/[0.06] focus:border-[#ff375f]/40 transition-colors"
               @keydown.enter="addStar"
             />
             <button
@@ -84,10 +84,10 @@
         </div>
 
         <!-- Recently Added Panel -->
-        <div v-if="recentStars.length" class="p-4 rounded-2xl bg-[#1c1c1e] border border-white/[0.06]">
+        <div v-if="recentStars.length" class="p-4 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-white">Recently Added</h2>
-            <button class="text-[12px] text-[#8e8e93] hover:text-white transition-colors" @click="clearRecent">
+            <h2 class="text-[15px] font-semibold text-foreground">Recently Added</h2>
+            <button class="text-[12px] text-foreground-muted hover:text-foreground transition-colors" @click="clearRecent">
               Clear
             </button>
           </div>
@@ -95,19 +95,19 @@
             <div
               v-for="s in recentStars"
               :key="s.code"
-              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#2c2c2e] text-[13px] text-white hover:bg-[#3a3a3c] transition-colors cursor-pointer"
+              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F2F2F7] text-[13px] text-foreground hover:bg-[#E5E5EA] transition-colors cursor-pointer"
               @click="scrollToStar(s.code)"
             >
               <span class="w-1.5 h-1.5 rounded-full bg-[#ff375f]" />
               {{ s.name }}
-              <span class="text-[#8e8e93]">{{ s.code }}</span>
+              <span class="text-foreground-muted">{{ s.code }}</span>
             </div>
           </div>
         </div>
 
         <!-- Loading / Error -->
-        <div v-if="pending" class="flex items-center justify-center py-40 gap-3 text-[#8e8e93]">
-          <div class="w-5 h-5 rounded-full border-2 border-[#2c2c2e] border-t-white animate-spin" />
+        <div v-if="pending" class="flex items-center justify-center py-40 gap-3 text-foreground-muted">
+          <div class="w-5 h-5 rounded-full border-2 border-[#E5E5EA] border-t-foreground animate-spin" />
           <span class="text-[15px]">Loading...</span>
         </div>
 
@@ -117,15 +117,22 @@
 
         <!-- Star Cards -->
         <div v-else class="space-y-14 md:space-y-20">
-          <StarCard
+          <div
             v-for="(star, index) in displayStars"
             :id="`star-${star.code.toLowerCase()}`"
             :key="star.code"
-            :star="star"
-            :index="index"
-            @play="openVideo"
-            @deleted="onStarDeleted"
-          />
+            ref="starRefs"
+            :data-code="star.code"
+            class="min-h-[600px]"
+          >
+            <StarCard
+              v-if="visibleCodes.has(star.code)"
+              :star="star"
+              :index="index"
+              @play="openVideo"
+              @deleted="onStarDeleted"
+            />
+          </div>
         </div>
       </div>
     </main>
@@ -146,8 +153,8 @@
         v-if="toastVisible"
         class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 px-4 py-3 rounded-2xl shadow-2xl max-w-sm w-[90vw]"
         :class="toastType === 'success'
-          ? 'bg-[#1c1c1e] border border-white/[0.06]'
-          : 'bg-[#1c1c1e] border border-[#ff453a]/30'"
+          ? 'bg-white border border-black/[0.06]'
+          : 'bg-white border border-[#ff453a]/30'"
         @click="dismissToast"
       >
         <span
@@ -164,10 +171,10 @@
           </svg>
         </span>
         <div class="flex-1 min-w-0">
-          <p class="text-[13px] font-semibold text-white leading-snug">{{ toastMessage }}</p>
-          <p v-if="toastDetail" class="text-[12px] text-[#8e8e93] mt-0.5 leading-snug">{{ toastDetail }}</p>
+          <p class="text-[13px] font-semibold text-foreground leading-snug">{{ toastMessage }}</p>
+          <p v-if="toastDetail" class="text-[12px] text-foreground-muted mt-0.5 leading-snug">{{ toastDetail }}</p>
         </div>
-        <button class="text-[#8e8e93]/60 hover:text-white transition-colors shrink-0 mt-0.5">
+        <button class="text-foreground-muted/60 hover:text-foreground transition-colors shrink-0 mt-0.5">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -199,6 +206,12 @@ const { preheat } = useCachePreheat()
 
 const deletedCodes = ref<Set<string>>(new Set())
 const displayStars = computed(() => stars.value?.filter(s => !deletedCodes.value.has(s.code)) ?? [])
+
+// Virtual rendering: only render StarCards near the viewport.
+// This limits the number of concurrent cover image requests over the slow
+// trans-Pacific link to the user's device.
+const visibleCodes = ref<Set<string>>(new Set())
+const starRefs = ref<HTMLElement[]>([])
 
 const modalOpen = ref(false)
 const activeHash = ref('')
@@ -403,6 +416,30 @@ onMounted(() => {
     unsubs.forEach((fn) => fn())
     if (toastTimer) clearTimeout(toastTimer)
   })
+})
+
+// Virtual rendering: only mount StarCards when they approach the viewport.
+// This prevents 100+ concurrent cover requests over the slow international link.
+onMounted(() => {
+  if (!import.meta.client) return
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const code = entry.target.getAttribute('data-code')
+      if (code && entry.isIntersecting && !visibleCodes.value.has(code)) {
+        visibleCodes.value.add(code)
+      }
+    })
+  }, {
+    rootMargin: '800px',
+    threshold: 0,
+  })
+
+  nextTick(() => {
+    starRefs.value.forEach((el) => observer.observe(el))
+  })
+
+  onUnmounted(() => observer.disconnect())
 })
 
 watch(() => stars.value, (val) => {
