@@ -8,6 +8,14 @@
 #   /cache/*   → FastAPI backend (localhost:8765)
 #   /*         → Nuxt frontend (localhost:3000)
 
+# Disable HTTP/3: mobile networks (especially in China) often throttle or
+# drop QUIC/UDP traffic, causing cover images to take 50-80s.
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
 cc.guohuasun.com {
     # Static cover images → served directly from disk (bypass Nuxt/FastAPI)
     # Requires: mount --bind /root/claw-stream/images /var/lib/caddy/claw-images
