@@ -26,6 +26,7 @@ Post-mortems, performance analysis, and debugging case studies.
 | Document | Content |
 |----------|---------|
 | [safari-code4.md](analysis/safari-code4.md) | Safari code=4 playback failure root cause analysis |
+| [finished-deadlock-allzero-false-positive.md](analysis/finished-deadlock-allzero-false-positive.md) | Finished-state deadlock caused by all-zero false positive in hole detection |
 | [timeout-debug.md](analysis/timeout-debug.md) | Caddy 502 upstream timeout troubleshooting case |
 | [piece-tracker-optimization.md](analysis/piece-tracker-optimization.md) | Bitwise optimization records & benchmarks |
 
