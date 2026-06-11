@@ -297,7 +297,10 @@ class TorrentEngine:
         )
         settings["connections_limit"] = 200
         settings["download_rate_limit"] = 0
-        settings["upload_rate_limit"] = 0
+        # Reserve upstream bandwidth for HTTP responses (covers, stream chunks).
+        # Without a cap, libtorrent seeding can saturate the link and make the
+        # web UI appear broken on the client side.
+        settings["upload_rate_limit"] = 2 * 1024 * 1024  # 2 MB/s
         settings["checking_mem_usage"] = 1024  # 1GB RAM for faster hash checking
         settings["alert_queue_size"] = 10000  # prevent alert drop under load
         # CRITICAL: disable mmap storage to avoid finished-state deadlock.
