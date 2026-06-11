@@ -962,13 +962,15 @@ class TorrentEngine:
         status = h.status()
         if status.state == lt.torrent_status.finished:
             tracker = info.get("tracker")
-            if tracker and tracker.verified_count() == 0:
-                log.warning(
-                    f"finished false-positive: {info['hash'][:12]}... "
-                    f"triggering readd to clear stale state"
-                )
-                self._readd_torrent(info["hash"])
-                return False
+            if tracker:
+                if tracker.verified_count() == 0 or not tracker.head_ready():
+                    log.warning(
+                        f"finished false-positive: {info['hash'][:12]}... "
+                        f"verified={tracker.verified_count()}, head_ready={tracker.head_ready()}, "
+                        f"triggering readd to clear stale state"
+                    )
+                    self._readd_torrent(info["hash"])
+                    return False
 
         if not status.has_metadata:
             return False
@@ -1270,7 +1272,7 @@ class TorrentEngine:
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
             "quality": info.get("quality", "SD"),
-            "piece_segments": tracker.get_lane_segments(10) if tracker else [],
+            "piece_segments": tracker.get_lane_segments(10) if tracker and hasattr(tracker, "get_lane_segments") else [],
             "tier": self._get_tier(info),
         }
 

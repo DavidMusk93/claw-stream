@@ -9,6 +9,14 @@
 #   /*         → Nuxt frontend (localhost:3000)
 
 cc.guohuasun.com {
+    # Static cover images → served directly from disk (bypass Nuxt/FastAPI)
+    # Requires: mount --bind /root/claw-stream/images /var/lib/caddy/claw-images
+    handle /images/* {
+        root * /var/lib/caddy/claw-images
+        uri strip_prefix /images
+        file_server
+    }
+
     # API / stream / torrent → FastAPI backend
     handle /api/* {
         reverse_proxy localhost:8765

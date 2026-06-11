@@ -4,6 +4,7 @@ import asyncio
 import os
 import signal
 import sys
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -194,13 +195,49 @@ async def health():
 
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
-# In-memory cache: avoid repeatedly querying DuckDB (covers don't change)
-_cover_cache: dict[str, tuple[bytes, str]] = {}
+# In-memory LRU cache: avoid repeatedly reading the same cover from disk.
+# Covers are immutable, so a modest cache dramatically reduces disk I/O.
+_cover_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+_COVER_CACHE_MAX = 1000
+
+
+def _cover_disk_path(code_upper: str) -> str:
+    """Return the canonical on-disk JPEG path for a title code."""
+    code_lower = code_upper.lower()
+    return os.path.join(IMAGES_DIR, "titles", code_lower, f"{code_lower}.jpg")
+
+
+def _read_cover_from_disk(code_upper: str) -> tuple[bytes, str] | None:
+    """Read cover from the canonical disk path."""
+    file_path = _cover_disk_path(code_upper)
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                return f.read(), "image/jpeg"
+    except Exception:
+        pass
+    return None
+
+
+def _write_cover_to_disk(code_upper: str, image_bytes: bytes) -> None:
+    """Persist decoded cover bytes to the canonical disk path."""
+    file_path = _cover_disk_path(code_upper)
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
+    except Exception:
+        pass
 
 
 def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
-    """Synchronous function: read cover from DuckDB or filesystem, return (image_bytes, media_type)."""
-    # 1. Prefer reading from DuckDB
+    """Synchronous function: read cover from disk first, then DuckDB, and backfill disk."""
+    # 1. Prefer disk: covers exported by scripts/export_covers.py live here.
+    disk_result = _read_cover_from_disk(code_upper)
+    if disk_result:
+        return disk_result
+
+    # 2. Fallback to DuckDB base64 blob.
     try:
         conn = duckdb.connect(DB_PATH)
         try:
@@ -215,6 +252,8 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
                 try:
                     image_bytes = base64.b64decode(b64_data)
                     media_type = _guess_image_mime(image_bytes)
+                    # Backfill disk so subsequent requests avoid DuckDB entirely.
+                    _write_cover_to_disk(code_upper, image_bytes)
                     return image_bytes, media_type
                 except Exception:
                     pass
@@ -223,35 +262,39 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
     except Exception:
         pass
 
-    # 2. Fallback to filesystem images/titles/{code}/{code}.jpg
-    code_lower = code_upper.lower()
-    cover_dir = os.path.join(IMAGES_DIR, "titles", code_lower)
-    if os.path.isdir(cover_dir):
-        for ext in (".jpg", ".jpeg", ".png", ".webp"):
-            file_path = os.path.join(cover_dir, f"{code_lower}{ext}")
-            if os.path.exists(file_path):
-                media_type = {
-                    ".jpg": "image/jpeg",
-                    ".jpeg": "image/jpeg",
-                    ".png": "image/png",
-                    ".webp": "image/webp",
-                }.get(ext, "image/jpeg")
-                with open(file_path, "rb") as f:
-                    return f.read(), media_type
     return None
+
+
+def _get_cached_cover(code_upper: str) -> tuple[bytes, str] | None:
+    """LRU cache lookup: move hit to the end (most recently used)."""
+    if code_upper in _cover_cache:
+        value = _cover_cache.pop(code_upper)
+        _cover_cache[code_upper] = value
+        return value
+    return None
+
+
+def _set_cached_cover(code_upper: str, value: tuple[bytes, str]) -> None:
+    """LRU cache insert: evict oldest entry when over capacity."""
+    if code_upper in _cover_cache:
+        _cover_cache.move_to_end(code_upper)
+        return
+    if len(_cover_cache) >= _COVER_CACHE_MAX:
+        _cover_cache.popitem(last=False)
+    _cover_cache[code_upper] = value
 
 
 @app.get("/api/cover/{code}")
 async def cover_image(code: str):
-    """Read cover from DuckDB cover_b64 field, or fallback to images/titles/{code}/ filesystem.
-    
-    Use thread pool for synchronous I/O to avoid blocking the event loop. When there are many concurrent cover requests,
-    it won't serially block other APIs.
+    """Read cover from disk cache, in-memory LRU cache, or DuckDB (backfilling disk).
+
+    Kept as a fallback/legacy endpoint; new clients should request the static
+    file path `/images/titles/{code}/{code}.jpg` directly.
     """
     code_upper = code.upper()
 
-    # In-memory cache hit returns directly (no thread switch needed)
-    cached = _cover_cache.get(code_upper)
+    # In-memory cache hit returns directly (no thread switch needed).
+    cached = _get_cached_cover(code_upper)
     if cached:
         image_bytes, media_type = cached
         return Response(
@@ -262,11 +305,8 @@ async def cover_image(code: str):
 
     result = await asyncio.to_thread(_read_cover_from_db, code_upper)
     if result:
+        _set_cached_cover(code_upper, result)
         image_bytes, media_type = result
-        # Limit cache size to prevent unbounded memory growth (simple LRU: clear when exceeding 1000)
-        if len(_cover_cache) > 1000:
-            _cover_cache.clear()
-        _cover_cache[code_upper] = result
         return Response(
             content=image_bytes,
             media_type=media_type,

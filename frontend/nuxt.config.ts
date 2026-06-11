@@ -114,11 +114,16 @@ export default defineNuxtConfig({
         target: 'http://localhost:8765',
         changeOrigin: true,
       },
+      '/images': {
+        target: 'http://localhost:8765',
+        changeOrigin: true,
+      },
     },
     routeRules: {
       '/api/**': { proxy: 'http://127.0.0.1:8765/api/**' },
       '/stream/**': { proxy: 'http://127.0.0.1:8765/stream/**' },
       '/torrent/**': { proxy: 'http://127.0.0.1:8765/torrent/**' },
+      '/images/**': { proxy: 'http://127.0.0.1:8765/images/**' },
     },
   },
 })

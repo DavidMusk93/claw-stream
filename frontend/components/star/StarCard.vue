@@ -2,12 +2,12 @@
   <section :id="id" class="scroll-mt-40">
     <!-- Section header -->
     <div class="flex items-baseline justify-between mb-5 px-1">
-      <h2 class="text-[26px] font-bold text-white tracking-tight">
+      <h2 class="text-[26px] font-bold text-foreground tracking-tight">
         {{ star.name }}
       </h2>
       <div class="flex items-center gap-3">
         <button
-          class="text-[#8e8e93] hover:text-[#ff453a] transition-colors"
+          class="text-foreground-muted hover:text-[#ff453a] transition-colors"
           title="Delete Star"
           @click="onDelete"
         >
@@ -18,7 +18,7 @@
             <line x1="14" y1="11" x2="14" y2="17" />
           </svg>
         </button>
-        <span class="text-[13px] text-[#8e8e93]">
+        <span class="text-[13px] text-foreground-muted">
           {{ star.titles?.length ?? 0 }}
         </span>
       </div>
@@ -36,12 +36,13 @@
             :alt="activeTitle.code"
             class="w-full h-auto block"
             loading="lazy"
+            decoding="async"
             @load="onHeroLoad"
             @error="heroError = true"
           />
           <div
             v-if="!activeTitle?.cover_url || heroError"
-            class="w-full aspect-[2/3] flex items-center justify-center text-[#333] text-sm font-medium"
+            class="w-full aspect-[2/3] flex items-center justify-center text-[#999] text-sm font-medium"
           >
             {{ activeTitle?.code || star.code }}
           </div>
@@ -51,7 +52,7 @@
         <div class="flex items-center gap-3 mt-4 px-1">
           <button
             :disabled="!activeTitle?.magnet"
-            class="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-black text-[14px] font-medium transition-opacity hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
+            class="flex items-center gap-2 px-5 py-2.5 rounded-full bg-foreground text-white text-[14px] font-medium transition-opacity hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed"
             @click="activeTitle?.magnet && $emit('play', activeTitle.magnet)"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -65,7 +66,7 @@
             class="flex items-center gap-2 px-6 py-2.5 rounded-full text-[14px] font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
             :class="copied
               ? 'bg-[#30d158] text-black'
-              : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
+              : 'bg-[#F2F2F7] text-foreground hover:bg-[#E5E5EA]'"
             @click="copyMagnet"
           >
             <svg v-if="!copied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -82,7 +83,7 @@
             class="flex items-center gap-2 px-5 py-2.5 rounded-full text-[14px] font-medium transition-all"
             :class="localLiked
               ? 'bg-[#ff375f]/20 text-[#ff375f]'
-              : 'bg-[#1c1c1e] text-white hover:bg-[#2c2c2e]'"
+              : 'bg-[#F2F2F7] text-foreground hover:bg-[#E5E5EA]'"
             :disabled="liking"
             @click="toggleLike"
           >
@@ -95,10 +96,10 @@
 
         <!-- Title info -->
         <div class="mt-4 px-1">
-          <h3 class="text-[17px] font-semibold text-white leading-tight">
+          <h3 class="text-[17px] font-semibold text-foreground leading-tight">
             {{ activeTitle?.code }}
           </h3>
-          <p class="mt-1 text-[14px] text-[#8e8e93] line-clamp-2 leading-snug">
+          <p class="mt-1 text-[14px] text-foreground-muted line-clamp-2 leading-snug">
             {{ activeTitle?.title }}
           </p>
         </div>
@@ -119,7 +120,7 @@
           v-for="(title, idx) in star.titles"
           :key="title.code"
           class="relative rounded-lg overflow-hidden bg-black transition-all duration-200 snap-start shrink-0"
-          :class="activeIndex === idx ? 'ring-2 ring-white opacity-100' : 'opacity-40 hover:opacity-70'"
+          :class="activeIndex === idx ? 'ring-2 ring-foreground opacity-100' : 'opacity-40 hover:opacity-70'"
           :style="thumbStyle"
           @click="activeIndex = idx"
         >
@@ -130,6 +131,7 @@
             :class="isMobile ? 'w-full h-auto' : 'h-full w-auto min-w-[1px]'"
             class="block"
             loading="lazy"
+            decoding="async"
             @error="thumbErrors[title.code] = true"
           />
           <!-- Number + Date badge -->
@@ -236,6 +238,12 @@ const dockRef = ref<HTMLElement>()
 const heroSize = ref({ width: 0, height: 0 })
 const isMobile = ref(false)
 
+// Infer mobile from user-agent during SSR to reduce hydration mismatch
+if (import.meta.server) {
+  const ua = useRequestHeader('user-agent') || ''
+  isMobile.value = /Mobile|Android|iPhone|iPad|iPod/i.test(ua)
+}
+
 function updateHeroSize() {
   const img = heroImg.value
   if (img && img.complete && img.naturalWidth > 0) {
@@ -281,18 +289,25 @@ watch(() => activeTitle.value?.cover_url, () => {
 
 const gap = 8 // tailwind gap-2 = 0.5rem = 8px
 
+const SSR_DEFAULT_HERO_HEIGHT = 480
+
 const dockStyle = computed(() => {
+  if (!import.meta.client && !isMobile.value) {
+    return { height: `${SSR_DEFAULT_HERO_HEIGHT}px` }
+  }
   if (isMobile.value) {
-    // Mobile: dock total width = hero image width
     return { width: `${heroSize.value.width}px` }
   }
-  // Desktop: dock total height = hero image height
   return { height: `${heroSize.value.height}px` }
 })
 
 const thumbCount = 3 // Number of thumbs aligned with the hero
 
 const thumbStyle = computed(() => {
+  if (!import.meta.client) {
+    const h = (SSR_DEFAULT_HERO_HEIGHT - gap * (thumbCount - 1)) / thumbCount
+    return { width: 'auto', height: `${h}px`, minWidth: `${Math.round(h * 2 / 3)}px` }
+  }
   if (isMobile.value) {
     const w = heroSize.value.width > 0
       ? (heroSize.value.width - gap * (thumbCount - 1)) / thumbCount
@@ -302,7 +317,6 @@ const thumbStyle = computed(() => {
   const h = heroSize.value.height > 0
     ? (heroSize.value.height - gap * (thumbCount - 1)) / thumbCount
     : 160
-  // Default width during SSR when hero size is unknown to prevent w-auto collapsing to 0
   const w = heroSize.value.height > 0 ? 'auto' : `${Math.round(h * 2 / 3)}px`
   return { width: w, height: `${h}px`, minWidth: `${Math.round(h * 2 / 3)}px` }
 })
