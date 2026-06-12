@@ -36,25 +36,27 @@ export default defineNuxtConfig({
     },
     workbox: {
       navigateFallback: '/',
-      globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
+      // Do NOT precache HTML: Nuxt SSR pages are dynamic and must always be
+      // fetched fresh. Precaching HTML caused old app shells to be served after
+      // deploy, making "refresh" show stale or empty pages.
+      globPatterns: ['**/*.{js,css,png,svg,ico,woff,woff2,json}'],
       cleanupOutdatedCaches: true,
       clientsClaim: true,
       skipWaiting: true,
       runtimeCaching: [
         {
-          // After sync completes, must see latest data immediately.
-          // Use NetworkFirst to avoid StaleWhileRevalidate.
-          // Only fallback to cache when offline or network fails, and cache only keeps 10 seconds.
+          // Stars list must be fresh after every sync/add/delete. Keep cache
+          // lifetime extremely short so a refresh always sees the latest data.
           urlPattern: /^\/api\/stars/,
           handler: 'NetworkFirst',
           options: {
             cacheName: 'stars-cache',
-            expiration: { maxEntries: 5, maxAgeSeconds: 10 },
+            expiration: { maxEntries: 5, maxAgeSeconds: 1 },
           },
         },
         {
           urlPattern: /^\/api\/(health|cover)/,
-          handler: 'CacheFirst',
+          handler: 'StaleWhileRevalidate',
           options: {
             cacheName: 'static-api-cache',
             expiration: { maxEntries: 200, maxAgeSeconds: 2592000 },
@@ -65,12 +67,15 @@ export default defineNuxtConfig({
           handler: 'NetworkFirst',
           options: {
             cacheName: 'api-cache',
-            expiration: { maxEntries: 50, maxAgeSeconds: 300 },
+            expiration: { maxEntries: 50, maxAgeSeconds: 60 },
           },
         },
         {
+          // Covers are immutable once written, but a new cover for the same
+          // code should be visible quickly. SWR serves cached versions while
+          // revalidating in the background.
           urlPattern: /^\/(images|api\/cover)\/.*/,
-          handler: 'CacheFirst',
+          handler: 'StaleWhileRevalidate',
           options: {
             cacheName: 'image-cache',
             expiration: { maxEntries: 500, maxAgeSeconds: 2592000 },
