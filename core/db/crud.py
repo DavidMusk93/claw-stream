@@ -8,10 +8,59 @@ After wide-table simplification:
 
 from __future__ import annotations
 
+import base64
+import io
 import json
+import os
 import re
+from pathlib import Path
+
+from PIL import Image
+
 from .connection import _conn, _date_to_sort
 from .ops_log import trace_db
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
+IMAGES_DIR = SCRIPT_DIR / "images" / "titles"
+JPEG_QUALITY = 90
+
+
+def _normalize_b64_to_jpeg(b64_data: str) -> bytes | None:
+    """Decode base64 cover and normalize to JPEG bytes."""
+    if not b64_data:
+        return None
+    if b64_data.startswith("data:image/"):
+        b64_data = b64_data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(b64_data)
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
+def _write_cover_to_disk(code: str, cover_b64: str | None) -> None:
+    """Persist cover_b64 to images/titles/{code}/{code}.jpg for static serving."""
+    if not cover_b64:
+        return
+    code_lower = code.lower()
+    out_dir = IMAGES_DIR / code_lower
+    out_path = out_dir / f"{code_lower}.jpg"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return
+    jpeg_bytes = _normalize_b64_to_jpeg(cover_b64)
+    if not jpeg_bytes:
+        return
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(jpeg_bytes)
+    except Exception:
+        pass
 
 
 def _extract_hash(magnet):
@@ -172,6 +221,8 @@ def upsert_title(
             result = row[0]
         if should_close:
             managed.commit()
+        # Keep disk cache in sync so new/edited covers are served immediately.
+        _write_cover_to_disk(code, cover_b64)
         return result
     finally:
         if should_close:
