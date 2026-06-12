@@ -11,7 +11,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
@@ -286,14 +286,28 @@ def _set_cached_cover(code_upper: str, value: tuple[bytes, str]) -> None:
 
 @app.get("/api/cover/{code}")
 async def cover_image(code: str):
-    """Read cover from disk cache, in-memory LRU cache, or DuckDB (backfilling disk).
+    """Canonical cover endpoint: redirect to static file when cached, else serve from DB.
 
-    Kept as a fallback/legacy endpoint; new clients should request the static
-    file path `/images/titles/{code}/{code}.jpg` directly.
+    This is the single source of truth for cover URLs. If the normalized JPEG
+    already exists on disk, redirect to `/images/titles/{code}/{code}.jpg` so
+    Caddy can serve it directly. Otherwise fall back to DuckDB, backfill disk,
+    and stream the bytes. New titles therefore never 404 even if the disk sync
+    lagged or failed.
     """
     code_upper = code.upper()
+    code_lower = code_upper.lower()
 
-    # In-memory cache hit returns directly (no thread switch needed).
+    # 1. Static file cache hit: let Caddy serve directly on the next request.
+    static_path = f"/images/titles/{code_lower}/{code_lower}.jpg"
+    disk_file = _cover_disk_path(code_upper)
+    if os.path.exists(disk_file):
+        return RedirectResponse(
+            url=static_path,
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
+
+    # 2. In-memory LRU cache hit.
     cached = _get_cached_cover(code_upper)
     if cached:
         image_bytes, media_type = cached
@@ -303,6 +317,7 @@ async def cover_image(code: str):
             headers={"Cache-Control": "public, max-age=604800"},
         )
 
+    # 3. Fall back to DB and backfill disk for future requests.
     result = await asyncio.to_thread(_read_cover_from_db, code_upper)
     if result:
         _set_cached_cover(code_upper, result)

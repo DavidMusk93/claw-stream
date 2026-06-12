@@ -101,8 +101,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
             titles = data.get("titles", [])
             for t in titles:
-                code_lower = t["code"].lower()
-                t["cover_url"] = f"/images/titles/{code_lower}/{code_lower}.jpg"
+                t["cover_url"] = f"/api/cover/{t['code']}"
                 t["user_liked"] = bool(t.get("user_liked", 0))
 
             result.append({
