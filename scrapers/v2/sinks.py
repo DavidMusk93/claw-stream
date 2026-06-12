@@ -125,6 +125,8 @@ class TitleSyncSink:
                     )
                     VALUES {placeholders}
                     ON CONFLICT (star_id, code) DO UPDATE SET
+                        star_code = EXCLUDED.star_code,
+                        star_name = EXCLUDED.star_name,
                         title = EXCLUDED.title,
                         release_date = EXCLUDED.release_date,
                         release_date_sort = EXCLUDED.release_date_sort,
@@ -132,6 +134,7 @@ class TitleSyncSink:
                         likes = EXCLUDED.likes,
                         resolution = EXCLUDED.resolution,
                         cover_url = EXCLUDED.cover_url,
+                        cover_b64 = EXCLUDED.cover_b64,
                         magnet = EXCLUDED.magnet,
                         magnet_hash = EXCLUDED.magnet_hash,
                         all_magnets = EXCLUDED.all_magnets,

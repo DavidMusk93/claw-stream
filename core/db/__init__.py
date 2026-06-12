@@ -10,6 +10,7 @@ from .crud import (
     upsert_star,
     title_exists,
     load_all_title_codes,
+    load_title_codes_missing_metadata,
     upsert_title,
     delete_star_by_code,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "upsert_star",
     "title_exists",
     "load_all_title_codes",
+    "load_title_codes_missing_metadata",
     "upsert_title",
     "delete_star_by_code",
     "get_all_titles_json",

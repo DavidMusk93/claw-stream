@@ -94,11 +94,12 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     t1 = time.perf_counter()
     log.info(f"[timing] upsert stars: {(t1 - t0) * 1000:.1f}ms")
 
-    # 2. Preload all existing title codes into memory set
+    # 2. Preload existing title codes and missing-metadata codes into memory sets
     t0 = time.perf_counter()
     existing_codes = await db_write(db.load_all_title_codes)
+    missing_codes = await db_write(db.load_title_codes_missing_metadata)
     t1 = time.perf_counter()
-    log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)}")
+    log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
     # 3. Concurrently fetch all star pages (pure HTTP, no browser overhead)
     t0 = time.perf_counter()
@@ -111,9 +112,9 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     t1 = time.perf_counter()
     log.info(f"[timing] fetch star pages: {(t1 - t0) * 1000:.1f}ms")
 
-    # 4. Diff: keep only new works, skip existing ones
+    # 4. Diff: new works + existing works with missing metadata
     sync_batches: list[tuple[int, str, list[VideoItem]]] = []
-    all_new_items: list[VideoItem] = []
+    all_sync_items: list[VideoItem] = []
 
     for star, page_result in zip(stars, page_results):
         if isinstance(page_result, Exception):
@@ -128,37 +129,45 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
             log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
             new_items = new_items[:MAX_NEW_TITLES]
 
-        if new_items:
-            sync_batches.append((star_id, star.name, new_items))
-            all_new_items.extend(new_items)
-            log.info(f"{star.name}: {len(new_items)} new titles to sync")
+        backfill_items = [
+            it for it in items
+            if (star_id, it.code) in missing_codes and (star_id, it.code) in existing_codes
+        ]
+
+        sync_items = new_items + backfill_items
+        if sync_items:
+            sync_batches.append((star_id, star.name, sync_items, new_items))
+            all_sync_items.extend(sync_items)
+            log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill")
         else:
             log.info(f"{star.name}: no new titles")
 
-    # 5. Incremental cover download: only download covers for new works
+    # 5. Incremental cover download: only download covers for works we will write
     cover_map: dict[str, str] = {}
-    if all_new_items:
+    if all_sync_items:
         t0 = time.perf_counter()
-        cover_items = [(it.code, it.cover_url or "") for it in all_new_items]
-        log.info(f"downloading {len(cover_items)} new covers in batch...")
+        cover_items = [(it.code, it.cover_url or "") for it in all_sync_items]
+        log.info(f"downloading {len(cover_items)} covers in batch...")
         cover_map = await download_covers_batch(cover_items, concurrency=8)
         t1 = time.perf_counter()
         log.info(f"[timing] download covers: {(t1 - t0) * 1000:.1f}ms | downloaded={len(cover_map)}")
 
-    # 6. Incremental database write: only INSERT new works
+    # 6. Incremental database write: INSERT new + UPDATE missing metadata
     t0 = time.perf_counter()
     total_new = 0
+    total_updated = 0
     clean: list[dict] = []
 
-    for star_id, name, new_items in sync_batches:
+    for star_id, name, sync_items, new_items in sync_batches:
         star_cfg = next(s for s in stars if star_id_map[s.code] == star_id)
         sink = TitleSyncSink(star_id=star_id, star_code=star_cfg.code, star_name=name)
         new_codes = {it.code for it in new_items}
-        batch_result = await sink.write_batch(new_items, new_codes, cover_map)
+        batch_result = await sink.write_batch(sync_items, new_codes, cover_map)
 
         total_new += batch_result["new"]
-        log.info(f"done: {name}: {batch_result['new']} new")
-        clean.append({"name": name, "titles": new_items, "count": batch_result["new"]})
+        total_updated += batch_result["updated"]
+        log.info(f"done: {name}: {batch_result['new']} new, {batch_result['updated']} backfill")
+        clean.append({"name": name, "titles": sync_items, "count": batch_result["new"]})
     t1 = time.perf_counter()
     log.info(f"[timing] batch write all stars: {(t1 - t0) * 1000:.1f}ms")
 
@@ -172,7 +181,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     for _, name, count in rows:
         log.info(f"{name}: {count} titles")
         total += count
-    log.info(f"sync complete: {total_new} new, {total} total titles | total elapsed={(time.perf_counter() - t_total) * 1000:.1f}ms")
+    log.info(f"sync complete: {total_new} new, {total_updated} backfill, {total} total titles | total elapsed={(time.perf_counter() - t_total) * 1000:.1f}ms")
 
     return clean
 

@@ -140,6 +140,26 @@ def load_all_title_codes(conn=None) -> set[tuple[int, str]]:
 
 
 @trace_db
+def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
+    """Load (star_id, code) for titles missing critical metadata fields."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            """
+            SELECT star_id, code FROM titles
+            WHERE title IS NULL OR title = ''
+               OR release_date IS NULL OR release_date = ''
+               OR star_code IS NULL OR star_code = ''
+               OR star_name IS NULL OR star_name = ''
+            """
+        ).fetchall()
+        return set(rows)
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
 def upsert_title(
     star_id,
     code,
