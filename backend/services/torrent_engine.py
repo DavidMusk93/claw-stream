@@ -22,7 +22,10 @@ log = get_logger("torrent-engine")
 _SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(_SCRIPT_DIR, "cache", "torrent")
 
-MAX_CACHE_SIZE_GB = 0   # 0 means auto-calculate as 60% of disk capacity
+MAX_CACHE_SIZE_GB = int(os.environ.get("CACHE_MAX_SIZE_GB", "0"))   # 0 = auto
+# Safety buffer: always leave this much free space for the OS / other services.
+# Auto mode uses min(50 GB, 10% of total disk) as the preserved reserve.
+MIN_FREE_SPACE_GB = int(os.environ.get("CACHE_MIN_FREE_GB", "50"))
 PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
 CACHE_CLEAN_INTERVAL_SEC = 60  # Background cleanup interval
@@ -278,17 +281,47 @@ def _get_disk_total_bytes(path: str) -> int:
         return 0
 
 
+def _get_disk_available_bytes(path: str) -> int:
+    """Get available space (bytes) for non-superuser on the partition containing path."""
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize
+    except Exception:
+        return 0
+
+
+def _compute_auto_cache_limit(total: int, available: int, min_free_gb: int) -> int:
+    """Compute a safe auto cache limit from disk total / available bytes.
+
+    Rules:
+    - Never exceed 60% of total disk capacity.
+    - Always leave at least min(min_free_gb, 10% of total) bytes free.
+    - If the disk is already fuller than that, the limit is reduced toward 0.
+    """
+    max_by_total = int(total * 0.6)
+    min_free = min(min_free_gb * 1024 * 1024 * 1024, int(total * 0.1))
+    usable = max(0, available - min_free)
+    return min(max_by_total, usable)
+
+
 class TorrentEngine:
     """BitTorrent download engine; manages cache, priorities, and playback state."""
 
     def __init__(self, cache_dir: str, max_size_gb: int) -> None:
         self.cache_dir = cache_dir
+        self.min_free_bytes = min(MIN_FREE_SPACE_GB * 1024 * 1024 * 1024, int(_get_disk_total_bytes(cache_dir) * 0.1))
         if max_size_gb <= 0:
             disk_total = _get_disk_total_bytes(cache_dir)
-            self.max_size_bytes = int(disk_total * 0.6)
-            log.info(f"cache limit auto: {format_size(self.max_size_bytes)} (60% of {format_size(disk_total)})")
+            disk_avail = _get_disk_available_bytes(cache_dir)
+            self.max_size_bytes = _compute_auto_cache_limit(disk_total, disk_avail, MIN_FREE_SPACE_GB)
+            log.info(
+                f"cache limit auto: {format_size(self.max_size_bytes)} "
+                f"(total={format_size(disk_total)}, available={format_size(disk_avail)}, "
+                f"reserve={format_size(self.min_free_bytes)})"
+            )
         else:
             self.max_size_bytes = max_size_gb * 1024 * 1024 * 1024
+            log.info(f"cache limit manual: {format_size(self.max_size_bytes)}")
         self.session = lt.session()
 
         settings = self.session.get_settings()
@@ -537,23 +570,38 @@ class TorrentEngine:
         iteratively until below threshold. L1 (hot) torrents are protected at
         soft limit.
 
-        Hard limit: 120% of max. When exceeded, force-evict even L1 (hot)
-        torrents to prevent disk exhaustion. Hard limit overrides tier protection.
+        Hard limit: 100% of max. The cache is never allowed to grow beyond the
+        configured upper bound. When exceeded, force-evict even L1 (hot)
+        torrents to enforce the upper limit.
+
+        Emergency free-space guard: if the partition's available space drops
+        below the configured reserve, enter emergency eviction regardless of
+        tier or like status. This protects the OS from disk exhaustion even
+        when max_size_bytes has not been reached.
+
         L3 torrents are downgraded to L4 (punch hole) before full eviction.
         """
         total = self._get_cache_size()
         soft_threshold = int(self.max_size_bytes * 0.95)
-        hard_threshold = int(self.max_size_bytes * 1.20)
+        hard_threshold = self.max_size_bytes
+        available = _get_disk_available_bytes(self.cache_dir)
+        emergency = available < self.min_free_bytes
 
-        if total <= soft_threshold:
+        if not emergency and total <= soft_threshold:
             return
 
-        log.warning(
-            f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}"
-        )
+        if emergency:
+            log.error(
+                f"cache EMERGENCY: available disk {format_size(available)} < "
+                f"reserve {format_size(self.min_free_bytes)}. Force-evicting all tiers."
+            )
+        else:
+            log.warning(
+                f"cache eviction triggered: {format_size(total)} / {format_size(self.max_size_bytes)}"
+            )
 
-        force_evict_hot = total > hard_threshold
-        if force_evict_hot:
+        force_evict_hot = total > hard_threshold or emergency
+        if total > hard_threshold and not emergency:
             log.error(
                 f"cache HARD LIMIT exceeded: {format_size(total)} / {format_size(hard_threshold)}. "
                 f"Force-evicting including hot torrents."
@@ -562,17 +610,24 @@ class TorrentEngine:
         evicted = 0
         while True:
             total = self._get_cache_size()
-            if total <= soft_threshold:
+            available = _get_disk_available_bytes(self.cache_dir)
+            emergency = available < self.min_free_bytes
+            # Normal exit: below soft threshold and no emergency.
+            if total <= soft_threshold and not emergency:
+                break
+            # Safety break: nothing left to evict.
+            if not self.torrents:
+                log.error("cache eviction: no candidates available")
                 break
 
             with self.lock:
                 candidates = [
                     (h, i) for h, i in self.torrents.items()
-                    if force_evict_hot or self._get_tier(i) != "hot"
+                    if force_evict_hot or emergency or self._get_tier(i) != "hot"
                 ]
 
             if not candidates:
-                log.error("cache eviction: no candidates available even under hard limit")
+                log.error("cache eviction: no candidates available even under hard/emergency limit")
                 break
 
             # Sort by score ascending (least valuable first)
@@ -602,8 +657,10 @@ class TorrentEngine:
             evicted += 1
 
         new_size = self._get_cache_size()
+        new_available = _get_disk_available_bytes(self.cache_dir)
         log.info(
-            f"cache eviction done: evicted={evicted}, current {format_size(new_size)}"
+            f"cache eviction done: evicted={evicted}, current {format_size(new_size)}, "
+            f"available={format_size(new_available)}"
         )
 
     def add_torrent(self, magnet: str, prefetch: bool = False) -> dict[str, Any] | None:

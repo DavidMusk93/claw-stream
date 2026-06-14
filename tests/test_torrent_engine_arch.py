@@ -768,5 +768,142 @@ class TestCheckingFilesDoesNotBlockPlayback(unittest.TestCase):
         self.assertEqual(status["state"], "checking_files")
 
 
+class TestCacheUpperLimit(unittest.TestCase):
+    """Cache must never exceed max_size_bytes and must protect free space."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _inject_torrent(self, hash_str: str, size: int, last_play: float = 0) -> dict[str, Any]:
+        handle = MockTorrentHandle(state=lt.torrent_status.downloading)
+        handle._hash = hash_str
+        video_dir = os.path.join(self.temp_dir, hash_str)
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, "video.mp4")
+        _make_minimal_mp4(video_path)
+        handle._save_path = video_dir
+
+        info: dict[str, Any] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": video_path,
+            "video_size": size,
+            "ready": True,
+            "prefetch": False,
+            "_play_count": 1 if last_play else 0,
+            "_last_play_time": last_play,
+            "progress": 50.0,
+        }
+        self.engine.torrents[hash_str] = info
+        return info
+
+    def test_hard_limit_evicts_when_usage_exceeds_max(self) -> None:
+        """Usage > max_size_bytes must trigger eviction, including hot torrents."""
+        hash_str = "h" * 40
+        self._inject_torrent(hash_str, 2 * 1024 ** 3, last_play=time.time())
+
+        # Simulate cache usage above the configured upper limit.
+        self.engine._get_cache_size = lambda: 2 * 1024 ** 3  # type: ignore[method-assign]
+        removed: list[str] = []
+
+        def fake_remove(h: str) -> bool:
+            removed.append(h)
+            self.engine.torrents.pop(h, None)
+            return True
+
+        self.engine.remove_torrent = fake_remove  # type: ignore[method-assign]
+
+        self.engine._enforce_cache_limit()
+
+        self.assertIn(hash_str, removed, "must evict torrent when usage exceeds hard limit")
+
+    def test_soft_limit_protects_hot_torrent(self) -> None:
+        """Usage between soft and hard limit must NOT evict hot torrents."""
+        hash_str = "i" * 40
+        self._inject_torrent(hash_str, 2 * 1024 ** 3, last_play=time.time())
+
+        # Simulate usage between soft (95%) and hard (100%) limits.
+        self.engine._get_cache_size = lambda: int(0.97 * self.engine.max_size_bytes)  # type: ignore[method-assign]
+        removed: list[str] = []
+
+        def fake_remove(h: str) -> bool:
+            removed.append(h)
+            return True
+
+        self.engine.remove_torrent = fake_remove  # type: ignore[method-assign]
+
+        self.engine._enforce_cache_limit()
+
+        self.assertNotIn(hash_str, removed, "hot torrent must be protected below hard limit")
+
+    def test_emergency_eviction_ignores_hot_tier(self) -> None:
+        """Critical low free space must evict even hot / liked torrents."""
+        hash_str = "j" * 40
+        self._inject_torrent(hash_str, 2 * 1024 ** 3, last_play=time.time())
+        self.engine.set_liked(hash_str, True)
+
+        # Use a controlled reserve so the test is deterministic regardless of
+        # the host partition size.
+        self.engine.min_free_bytes = 100 * 1024 * 1024
+
+        self.engine._get_cache_size = lambda: 100 * 1024 ** 2  # type: ignore[method-assign]
+        removed: list[str] = []
+
+        def fake_remove(h: str) -> bool:
+            removed.append(h)
+            self.engine.torrents.pop(h, None)
+            return True
+
+        self.engine.remove_torrent = fake_remove  # type: ignore[method-assign]
+
+        from services import torrent_engine as te
+        with patch.object(te, "_get_disk_available_bytes", return_value=1 * 1024 ** 3):
+            # 1GB available is above the 100MB reserve.
+            self.engine._enforce_cache_limit()
+
+        self.assertNotIn(
+            hash_str, removed,
+            "liked hot torrent must not be evicted when free space is safe"
+        )
+
+        removed.clear()
+        with patch.object(te, "_get_disk_available_bytes", return_value=1 * 1024 ** 2):
+            # 1MB available is below the 100MB reserve.
+            self.engine._enforce_cache_limit()
+
+        self.assertIn(
+            hash_str, removed,
+            "emergency low free space must evict even liked hot torrents"
+        )
+
+    def test_auto_limit_does_not_exceed_available_space(self) -> None:
+        """Auto mode must compute a limit that fits within current free space."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            engine = TorrentEngine(temp_dir, max_size_gb=0)
+            engine.shutdown()
+            from services import torrent_engine as te
+            available = te._get_disk_available_bytes(temp_dir)
+            total = te._get_disk_total_bytes(temp_dir)
+            # Limit must not exceed 60% of total or available minus reserve.
+            self.assertLessEqual(engine.max_size_bytes, int(total * 0.6))
+            self.assertLessEqual(
+                engine.max_size_bytes + engine.min_free_bytes, available
+            )
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

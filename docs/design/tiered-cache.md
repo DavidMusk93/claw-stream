@@ -1,7 +1,7 @@
 # Tiered Cache
 
 > Applies to: `backend/services/torrent_engine.py` — `_enforce_cache_limit()`  
-> Goal: Replace pure time-based eviction with data-value scoring, improving cache utilization from 80% → 95%.
+> Goal: Replace pure time-based eviction with data-value scoring, improving cache utilization from 80% → 95%, while guaranteeing the cache never exceeds its configured upper bound.
 
 ---
 
@@ -75,21 +75,25 @@ def _cache_score(info) -> float:
 def _enforce_cache_limit(self):
     total = self._get_cache_size()
     soft_threshold = int(self.max_size_bytes * 0.95)
-    hard_threshold = int(self.max_size_bytes * 1.20)
+    hard_threshold = self.max_size_bytes          # 100%: true upper limit
+    available = _get_disk_available_bytes(self.cache_dir)
+    emergency = available < self.min_free_bytes   # OS free-space guard
 
-    if total <= soft_threshold:
+    if not emergency and total <= soft_threshold:
         return
 
-    force_evict_hot = total > hard_threshold
+    force_evict_hot = total > hard_threshold or emergency
 
     while True:
         total = self._get_cache_size()
-        if total <= soft_threshold:
+        available = _get_disk_available_bytes(self.cache_dir)
+        emergency = available < self.min_free_bytes
+        if total <= soft_threshold and not emergency:
             break
 
         candidates = [
             (h, i) for h, i in self.torrents.items()
-            if force_evict_hot or self._get_tier(i) != "hot"
+            if force_evict_hot or emergency or self._get_tier(i) != "hot"
         ]
         candidates.sort(key=lambda x: self._cache_score(x[1]))
         hash_str, info = candidates[0]
@@ -106,6 +110,10 @@ def _enforce_cache_limit(self):
 ```
 
 **Progressive**: Processes one torrent per iteration, avoiding IO spikes. The loop continues until usage drops below the soft threshold.
+
+**True upper limit**: The hard threshold is exactly `max_size_bytes` (100%). Cache usage is never allowed to exceed the configured limit.
+
+**Emergency free-space guard**: Even when cache usage is below `max_size_bytes`, if the partition's available space drops below the configured reserve (`min_free_bytes`), eviction runs in emergency mode and ignores tier / like protection to prevent disk exhaustion.
 
 ---
 
@@ -146,9 +154,11 @@ def _punch_hole_middle_pieces(self, hash_str):
 
 | Aspect | Legacy LRU | Tiered Cache |
 |--------|------------|--------------|
-| Threshold | 80% | 95% |
+| Threshold | 80% | 95% soft / 100% hard |
 | Decision basis | `last_access` timestamp | Play history + completion + heat + value density |
 | Eviction granularity | Whole torrent | Whole torrent or punch hole (L3→L4) |
 | Playback protection | 5-minute `last_access` | L1 (24h) + `touch()` real-time update |
 | Large-file penalty | None | `value_per_gb` lowers score of large incomplete files |
 | Like protection | None | +5000 / –2000 scoring modifier |
+| Free-space guard | None | Emergency eviction when available disk < reserve |
+| Hard upper limit | 120% of max | 100% of max (never exceed) |

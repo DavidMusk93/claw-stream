@@ -157,8 +157,8 @@ See [architecture.md](architecture.md) §4.2 for the read flow.
 
 ```
 1. add_torrent triggers _enforce_cache_limit
-2. If used > soft_limit (95%)
-   → Build candidate list (exclude hot + liked)
+2. If used > soft_limit (95%) OR available disk < reserve
+   → Build candidate list (exclude hot + liked unless hard/emergency)
    → Sort by _cache_score (lowest first)
    → L3 → punch hole (keep head+tail)
    → L2/L4 → remove_torrent (delete files)
@@ -194,6 +194,18 @@ See [architecture.md](architecture.md) §4.2 for the read flow.
 **Symptom**: Torrents played within 24h but not liked could be evicted at soft limit.
 
 **Fix**: Soft limit protects all hot torrents (regardless of like). Like only affects warm/seed scoring.
+
+### Bug 5: Cache could exceed configured upper limit
+
+**Symptom**: Cache usage grew to >120% of `max_size_bytes` before aggressive eviction kicked in; UI showed usage over 100%.
+
+**Fix**: Hard limit reduced from 120% to 100% of `max_size_bytes`. Cache usage is never allowed to exceed the configured upper bound.
+
+### Bug 6: Auto cache limit ignored existing disk usage
+
+**Symptom**: With `max_size_gb=0`, the limit was 60% of total disk capacity. On a partition already partially filled, this could exceed actual free space and fill the disk.
+
+**Fix**: Auto mode now computes `max_size_bytes` from both total capacity and current available space, always preserving a minimum free reserve (`CACHE_MIN_FREE_GB`, default 50 GB capped at 10% of total disk).
 
 ---
 
