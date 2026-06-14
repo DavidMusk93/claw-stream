@@ -117,6 +117,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         log.warning(f"Failed to load liked torrents: {e}")
 
+    # After preload finishes, resume all liked torrents so they start
+    # downloading instead of staying paused until the user clicks play.
+    async def _resume_liked_after_preload() -> None:
+        try:
+            await asyncio.to_thread(engine._preload_thread.join)
+            await asyncio.sleep(1)
+            await asyncio.to_thread(engine.resume_liked_torrents)
+        except Exception as e:
+            log.warning(f"Failed to resume liked torrents: {e}")
+
+    asyncio.create_task(_resume_liked_after_preload())
+
     # Clean up orphan torrents on startup (caused by historical bugs or interrupted deletion flows)
     try:
         db_path = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")

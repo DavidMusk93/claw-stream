@@ -351,13 +351,13 @@ class TorrentEngine:
         self.torrents: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
+        # user-liked hashes: protected from cache eviction
+        self.liked_hashes: set[str] = set()
+
         # Status cache: avoid repeated disk I/O on get_status / get_all_status
         self._status_cache: dict[str, tuple[dict[str, Any], float]] = {}
         self._status_cache_ttl = 2.0  # seconds
         self._status_cache_lock = threading.Lock()
-
-        # user-liked hashes: protected from eviction
-        self.liked_hashes: set[str] = set()
 
         self._stop = False
         self._alert_thread = threading.Thread(target=self._process_alerts, daemon=True)
@@ -481,6 +481,28 @@ class TorrentEngine:
                 self.liked_hashes.add(hash_str)
             else:
                 self.liked_hashes.discard(hash_str)
+            info = self.torrents.get(hash_str)
+            if info:
+                info["keep_cache"] = liked
+
+    def resume_liked_torrents(self) -> None:
+        """Resume all currently-liked torrents after startup.
+
+        Preloaded torrents are added paused so the UI stays lazy; this call
+        kicks off head+moov downloads for titles the user has already liked.
+        """
+        with self.lock:
+            liked = list(self.liked_hashes)
+        resumed = 0
+        for hash_str in liked:
+            with self.lock:
+                info = self.torrents.get(hash_str)
+                if info:
+                    info["keep_cache"] = True
+            if self.resume_download(hash_str, 0.0, 0.0):
+                resumed += 1
+                log.info(f"startup resume liked: {hash_str[:12]}...")
+        log.info(f"startup resume liked done: {resumed}/{len(liked)}")
 
     def _cache_score(self, info: dict[str, Any]) -> float:
         """Higher score = more valuable, less evictable.
@@ -752,6 +774,10 @@ class TorrentEngine:
             "_play_count": 0,
             "progress": 0.0,
         }
+        # Liked titles should always keep their cache.
+        if hash_str in self.liked_hashes:
+            info["keep_cache"] = True
+
         with self.lock:
             self.torrents[hash_str] = info
 
@@ -858,6 +884,9 @@ class TorrentEngine:
 
     def _on_metadata(self, handle: lt.torrent_handle) -> None:
         """When torrent metadata download completes, select video file and set priorities."""
+        if not handle.is_valid():
+            log.warning("_on_metadata: invalid handle, skipping")
+            return
         hash_str = str(handle.info_hash())
         with self.lock:
             if hash_str not in self.torrents:
@@ -1529,8 +1558,9 @@ class TorrentEngine:
         with self.lock:
             self.torrents[hash_str] = new_info
 
-        # If metadata was loaded, run _on_metadata immediately
-        if params.ti is not None:
+        # If metadata was loaded, run _on_metadata immediately.
+        # Guard against transient invalid handles after session.add_torrent.
+        if params.ti is not None and new_handle.is_valid():
             self._on_metadata(new_handle)
 
         new_info.update(saved)
