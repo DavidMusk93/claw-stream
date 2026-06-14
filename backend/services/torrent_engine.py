@@ -1017,9 +1017,9 @@ class TorrentEngine:
 
         # ── Architecture: bootstrap-first verification ─────────────────
         # For finished torrents, use SEEK_HOLE bootstrap (seconds) to verify
-        # disk state. NEVER call force_recheck() — recheck reads page cache
-        # and produces false positives, leading to finished-state deadlock
-        # where libtorrent refuses to re-download holes.
+        # disk state. If holes exist, force a recheck so libtorrent re-verifies
+        # against hashes instead of trusting the finished flag. Recheck is safe
+        # now that mmap storage is disabled (mmap_file_size_cutoff=0).
         if not info.get("_recheck_done"):
             status = handle.status()
             if status.state == lt.torrent_status.finished:
@@ -1036,9 +1036,9 @@ class TorrentEngine:
                     else:
                         log.warning(
                             f"finished with holes: {hash_str[:12]}... "
-                            f"disk scan shows missing data, triggering readd"
+                            f"disk scan shows missing data, forcing recheck"
                         )
-                        self._readd_torrent(hash_str)
+                        self._force_recheck(hash_str, info)
                         return
                 else:
                     # No tracker yet — cannot verify disk state.
@@ -1062,13 +1062,11 @@ class TorrentEngine:
         severely hurting experience. Instead retain downloaded pieces (priority=1), only set
         undownloaded pieces outside window to 0.
         """
-        # CRITICAL: libtorrent 2.0 mmap storage creates a sparse file of full
-        # torrent size on add_torrent, then reports finished even though no
-        # data was actually written. In finished state libtorrent ignores
+        # CRITICAL: libtorrent 2.0 may report finished for sparse files even
+        # when data is missing. In finished state libtorrent ignores
         # piece_priority / set_piece_deadline, causing playback deadlock.
-        # force_recheck() is INEFFECTIVE for mmap storage — recheck reads
-        # page-cache zeros and falsely marks pieces complete. The only reliable
-        # fix is to remove the torrent + delete the sparse file, then re-add.
+        # With mmap disabled, force_recheck() re-verifies pieces against hashes
+        # and preserves existing downloaded data.
         status = h.status()
         if status.state == lt.torrent_status.finished:
             tracker = info.get("tracker")
@@ -1077,9 +1075,9 @@ class TorrentEngine:
                     log.warning(
                         f"finished false-positive: {info['hash'][:12]}... "
                         f"verified={tracker.verified_count()}, head_ready={tracker.head_ready()}, "
-                        f"triggering readd to clear stale state"
+                        f"forcing recheck to preserve cache"
                     )
-                    self._readd_torrent(info["hash"])
+                    self._force_recheck(info["hash"], info)
                     return False
 
         if not status.has_metadata:
@@ -1436,6 +1434,25 @@ class TorrentEngine:
         with self.lock:
             hashes = list(self.torrents.keys())
         return [self.get_status(h) for h in hashes]
+
+    def _force_recheck(self, hash_str: str, info: dict[str, Any]) -> None:
+        """Trigger a hash recheck when libtorrent falsely reports finished.
+
+        With mmap storage disabled, force_recheck reads the actual file and
+        invalidates missing pieces instead of trusting the stale finished flag.
+        This preserves downloaded data, unlike _readd_torrent which removes the
+        torrent and deletes cache files.
+        """
+        h = info.get("handle")
+        if not h or not h.is_valid():
+            log.warning(f"force_recheck: invalid handle {hash_str[:12]}...")
+            return
+        try:
+            h.force_recheck()
+            info["_recheck_done"] = True
+            log.info(f"force_recheck: {hash_str[:12]}... preserving cache")
+        except Exception as e:
+            log.warning(f"force_recheck failed: {hash_str[:12]}... {e}")
 
     def _readd_torrent(self, hash_str: str) -> dict[str, Any] | None:
         """Remove and re-add a torrent to clear libtorrent's stale finished state.
