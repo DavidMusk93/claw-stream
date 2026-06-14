@@ -22,9 +22,14 @@ def get_engine(request: Request) -> Any:
 
 @router.get("")
 async def get_cache(engine: Any = Depends(get_engine)):
-    """Get all cache items with actual data (local_size > 0)."""
+    """Get all cache items known to the engine.
+
+    Previously filtered by local_size > 0, which hid newly-added or paused
+    torrents that had metadata but no downloaded data yet. Show everything
+    with a known video file so the manager is useful immediately.
+    """
     all_items = await asyncio.to_thread(engine.get_all_status)
-    items = [i for i in all_items if i and i.get("local_size", 0) > 0]
+    items = [i for i in all_items if i and i.get("video_size", 0) > 0]
     total_disk = await asyncio.to_thread(engine._get_cache_size)
     return {
         "totalSize": total_disk,
@@ -59,9 +64,9 @@ async def gc_orphans(engine: Any = Depends(get_engine)):
 
 @router.get("/metrics", response_model=CacheMetrics)
 async def get_metrics(engine: Any = Depends(get_engine)):
-    """Get cache metrics summary (only items with actual data)."""
+    """Get cache metrics summary."""
     all_items = await asyncio.to_thread(engine.get_all_status)
-    items = [i for i in all_items if i and i.get("local_size", 0) > 0]
+    items = [i for i in all_items if i and i.get("video_size", 0) > 0]
     total_disk = await asyncio.to_thread(engine._get_cache_size)
     completed = sum(1 for i in items if i.get("progress", 0) >= 99.9)
     return CacheMetrics(
