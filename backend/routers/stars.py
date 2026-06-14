@@ -391,8 +391,13 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
         resolved = _resolve_magnet(magnet)
         info = await asyncio.to_thread(engine.add_torrent, resolved, prefetch=False)
         if info:
+            hash_str = info["hash"]
+            # Start downloading head+moov immediately for liked titles.
+            # add_torrent now adds paused; set_full_priority resumes and sets
+            # playback priorities so the title is ready when the user wants it.
+            await asyncio.to_thread(engine.set_full_priority, hash_str)
             downloaded = True
-            log.info(f"like_title: auto-download {code} -> {info['hash'][:12]}...")
+            log.info(f"like_title: auto-download {code} -> {hash_str[:12]}...")
         else:
             log.warning(f"like_title: auto-download failed for {code}")
 
