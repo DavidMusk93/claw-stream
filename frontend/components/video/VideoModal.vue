@@ -765,8 +765,9 @@ function togglePlay() {
   const v = videoRef.value
   if (!v) return
   if (v.paused) {
+    // Update UI immediately so the button feels synchronous.
+    isPlaying.value = true
     v.play().then(() => {
-      isPlaying.value = true
       logInfo('player', 'toggle play success')
     }).catch((err: any) => {
       isPlaying.value = false
@@ -799,7 +800,7 @@ function toggleMute() {
   logInfo('player', `toggleMute muted=${v.muted}`)
 }
 
-function enterFullscreen(el: HTMLElement) {
+function tryContainerFullscreen(el: HTMLElement): boolean {
   const methods = [
     el.requestFullscreen,
     (el as any).webkitRequestFullscreen,
@@ -807,9 +808,43 @@ function enterFullscreen(el: HTMLElement) {
   ]
   for (const m of methods) {
     if (m) {
-      m.call(el).then(() => { isFullscreen.value = true }).catch(() => {})
-      return
+      m.call(el)
+        .then(() => { isFullscreen.value = true })
+        .catch((err: any) => {
+          logError('player', `container fullscreen failed: ${err?.message || err}`)
+          tryVideoFullscreen()
+        })
+      return true
     }
+  }
+  return false
+}
+
+function tryVideoFullscreen(): boolean {
+  const v = videoRef.value as any
+  if (!v) return false
+  const methods = [
+    v.requestFullscreen,
+    v.webkitRequestFullscreen,
+    v.webkitEnterFullScreen,
+    v.msRequestFullscreen,
+  ]
+  for (const m of methods) {
+    if (m) {
+      m.call(v)
+        .then(() => { isFullscreen.value = true })
+        .catch((err: any) => {
+          logError('player', `video fullscreen failed: ${err?.message || err}`)
+        })
+      return true
+    }
+  }
+  return false
+}
+
+function enterFullscreen(el: HTMLElement) {
+  if (!tryContainerFullscreen(el)) {
+    tryVideoFullscreen()
   }
 }
 
@@ -818,11 +853,16 @@ function exitFullscreen() {
   const methods = [
     document.exitFullscreen,
     doc.webkitExitFullscreen,
+    doc.webkitCancelFullScreen,
     doc.msExitFullscreen,
   ]
   for (const m of methods) {
     if (m) {
-      m.call(document).then(() => { isFullscreen.value = false }).catch(() => {})
+      m.call(document)
+        .then(() => { isFullscreen.value = false })
+        .catch((err: any) => {
+          logError('player', `exit fullscreen failed: ${err?.message || err}`)
+        })
       return
     }
   }
@@ -834,9 +874,23 @@ onMounted(() => {
   }
   document.addEventListener('fullscreenchange', handler)
   document.addEventListener('webkitfullscreenchange', handler)
+
+  // iPhone uses video-element fullscreen, not the Fullscreen API.
+  const v = videoRef.value as any
+  const onWebkitEnter = () => { isFullscreen.value = true }
+  const onWebkitExit = () => { isFullscreen.value = false }
+  if (v) {
+    v.addEventListener('webkitbeginfullscreen', onWebkitEnter)
+    v.addEventListener('webkitendfullscreen', onWebkitExit)
+  }
+
   onUnmounted(() => {
     document.removeEventListener('fullscreenchange', handler)
     document.removeEventListener('webkitfullscreenchange', handler)
+    if (v) {
+      v.removeEventListener('webkitbeginfullscreen', onWebkitEnter)
+      v.removeEventListener('webkitendfullscreen', onWebkitExit)
+    }
     clearAllTimers()
   })
 })
