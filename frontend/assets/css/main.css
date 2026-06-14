@@ -3,19 +3,19 @@
 @tailwind utilities;
 
 /* =============================================
-   Apple Design System — Star Archive
+   Apple Design System — Star Archive (Light)
    ============================================= */
 
 html {
   scroll-behavior: smooth;
-  background: #000000;
+  background: #F5F5F7;
 }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
                'Helvetica Neue', 'Segoe UI', 'Inter', sans-serif;
-  background: #000000;
-  color: #ffffff;
+  background: #F5F5F7;
+  color: #1D1D1F;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
@@ -34,7 +34,7 @@ body {
 }
 
 /* =============================================
-   NEW: Apple-style components
+   Apple-style components (Light theme)
    ============================================= */
 
 @layer components {
@@ -42,7 +42,7 @@ body {
   .system-glass {
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
-    background-color: rgba(0, 0, 0, 0.72);
+    background-color: rgba(255, 255, 255, 0.72);
   }
 
   /* Media card — Apple TV / App Store style */
@@ -50,14 +50,14 @@ body {
     position: relative;
     border-radius: 16px;
     overflow: hidden;
-    background: #1c1c1e;
+    background: #FFFFFF;
     transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
                 box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .media-card:hover {
     transform: scale(1.03);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
   }
 
   /* Minimal pill badge */
@@ -68,47 +68,46 @@ body {
     border-radius: 6px;
     font-size: 11px;
     font-weight: 600;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.06);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    color: #ffffff;
+    color: #1D1D1F;
     letter-spacing: 0.01em;
   }
 }
 
 /* =============================================
-   LEGACY: Keep old glass classes for
-   unmodified components (VideoModal, CachePanel, login)
+   Light glass classes
    ============================================= */
 
 @layer components {
   .glass {
-    background: rgba(255,255,255,0.03);
+    background: rgba(255,255,255,0.72);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid rgba(0,0,0,0.06);
   }
 
   .glass-strong {
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.85);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid rgba(0,0,0,0.08);
   }
 
   .glass-card {
-    background: rgba(255,255,255,0.03);
+    background: #FFFFFF;
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid rgba(0,0,0,0.06);
     border-radius: 1.25rem;
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .glass-card:hover {
-    background: rgba(255,255,255,0.06);
-    border-color: rgba(255,255,255,0.12);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    background: #FFFFFF;
+    border-color: rgba(0,0,0,0.12);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
   }
 
   .text-gradient-rose {

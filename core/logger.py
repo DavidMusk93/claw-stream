@@ -160,6 +160,7 @@ def get_logger(name, log_dir=None, json_format=None):
 
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
 
     # Clear old handlers (prevent duplicate adds in unit tests)
     if logger.handlers:

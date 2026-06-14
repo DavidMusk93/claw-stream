@@ -1,6 +1,6 @@
 <template>
   <div class="relative min-h-screen bg-void text-foreground overflow-x-hidden">
-    <!-- Ambient light blobs -->
+    <!-- Ambient light blobs — soft pastel for light theme -->
     <div class="fixed inset-0 pointer-events-none z-0 overflow-hidden" aria-hidden="true">
       <div
         class="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full opacity-[0.07] blur-[120px] animate-blob"

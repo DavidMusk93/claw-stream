@@ -32,7 +32,7 @@ export function useCachePreheat() {
         await $fetch('/torrent/add', {
           baseURL: config.public.apiBase,
           method: 'POST',
-          headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+          headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
           body: { magnet, prefetch: false },
         })
         logInfo('cache-preheat', `added ${code}`)

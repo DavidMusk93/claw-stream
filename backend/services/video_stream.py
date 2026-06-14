@@ -150,11 +150,14 @@ def _read_once(path: str, start: int, chunk_size: int) -> bytearray:
 def _detect_hole_offset(path: str, start: int, data: bytearray, engine: Any, hash_str: str) -> int:
     """Return byte offset of first hole in data, or -1 if no hole.
 
-    A 'hole' is any piece portion that reads as all zeros. We do NOT trust
-    filesystem allocation state — if mmap reads zeros, the player will stall.
+    FIRST PRINCIPLE: Tracker state is the single source of truth.
+    _bootstrap_from_filesystem() uses SEEK_HOLE + fsync — the ground truth
+    for disk allocation. Video data can legitimately contain all-zero bytes
+    (padding, empty frames, alignment). Using all-zero as hole detection
+    causes false positives that are unrecoverable in finished state.
 
-    If tracker thinks the piece is VERIFIED but we read zeros, mark it corrupt
-    and trigger re-download so the hole gets filled.
+    For verified pieces: trust tracker, never treat as hole.
+    For unverified pieces: use SEEK_HOLE to detect actual filesystem holes.
     """
     if len(data) == 0:
         return 0
@@ -162,20 +165,23 @@ def _detect_hole_offset(path: str, start: int, data: bytearray, engine: Any, has
     with engine.lock:
         info = engine.torrents.get(hash_str)
     if not info or not info.get("tracker"):
-        # No tracker: fallback to chunk-level check
-        if not any(data):
+        # No tracker: use SEEK_HOLE instead of all-zero check
+        try:
+            fd = os.open(path, os.O_RDONLY)
             try:
-                if not _is_data_at_offset(path, start):
+                hole = os.lseek(fd, start, os.SEEK_HOLE)
+                if hole == start:
                     return 0
-            except OSError:
-                return 0
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
         return -1
 
     tracker = info["tracker"]
     piece_length = tracker.piece_length
     file_offset = tracker.file_offset
     video_size = tracker.video_size
-    h = info.get("handle")
 
     chunk_start = start
     chunk_end = start + len(data)
@@ -190,23 +196,29 @@ def _detect_hole_offset(path: str, start: int, data: bytearray, engine: Any, has
         overlap_end = min(chunk_end, piece_end_in_file)
 
         data_start = overlap_start - chunk_start
-        data_end = overlap_end - chunk_start
-        overlap_data = data[data_start:data_end]
 
-        if not any(overlap_data):
-            # Zero data in this piece portion — treat as hole.
-            # If tracker mistakenly thinks this piece is verified, correct it.
-            if tracker.is_verified(piece):
-                tracker._set_corrupt(piece)
-                log.warning(
-                    "verified piece returned zeros — marked corrupt",
-                    extra={"hash": hash_str[:12], "piece": piece},
-                )
-                # Trigger re-download via libtorrent
-                if h and h.status().has_metadata:
-                    h.set_piece_deadline(piece, 0)
-                    h.piece_priority(piece, 7)
-            return data_start
+        # Trust tracker state. _bootstrap_from_filesystem uses SEEK_HOLE + fsync.
+        if tracker.is_verified(piece):
+            current = piece_end_in_file
+            continue
+
+        # Piece not verified: use SEEK_HOLE to detect actual filesystem holes.
+        # Avoids all-zero false positives from legitimate video padding.
+        try:
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+                hole = os.lseek(fd, overlap_start, os.SEEK_HOLE)
+                if hole < overlap_end:
+                    return data_start
+            finally:
+                os.close(fd)
+        except OSError:
+            # SEEK_HOLE not available, fallback to all-zero check
+            data_end = overlap_end - chunk_start
+            overlap_data = data[data_start:data_end]
+            if not any(overlap_data):
+                return data_start
 
         current = piece_end_in_file
 
@@ -326,12 +338,13 @@ async def read_video_range(hash_str: str, start: int, end: int, engine: Any) -> 
                         "read_video_range: finished-state deadlock, readding torrent",
                         extra={"hash": hash_str[:12]},
                     )
-                    await asyncio.to_thread(engine._readd_torrent, hash_str)
-                    # Reset timer and give re-added torrent time to download
-                    elapsed = 0.0
-                    attempt = 0
-                    await asyncio.sleep(0.5)
-                    continue
+                    readd_info = await asyncio.to_thread(engine._readd_torrent, hash_str)
+                    if readd_info is not None:
+                        # Reset timer and give re-added torrent time to download
+                        elapsed = 0.0
+                        attempt = 0
+                        await asyncio.sleep(0.5)
+                        continue
 
             log.warning(
                 "read_video_range hole timeout",

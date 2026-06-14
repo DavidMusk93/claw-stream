@@ -74,6 +74,7 @@ export function logWarn(tag: string, msg: string, data?: any) {
 
 /** Report error logs to backend (fire-and-forget, non-blocking) */
 async function _report(level: string, tag: string, msg: string, data?: any) {
+  if (!import.meta.client) return
   try {
     await fetch('/api/log', {
       method: 'POST',

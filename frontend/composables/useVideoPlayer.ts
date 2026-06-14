@@ -1,4 +1,5 @@
 import type { TorrentStatus } from '~/types/api'
+import { onScopeDispose } from 'vue'
 import { logInfo, logError } from './useLogger'
 
 export function useVideoPlayer() {
@@ -16,7 +17,7 @@ export function useVideoPlayer() {
     try {
       const res = await $fetch(`/api/check/${hash}`, {
         baseURL: config.public.apiBase,
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
       }) as any
       const ok = res.head_ready === true
       logInfo('player', `checkHeadReady ${hash.slice(0, 12)} -> ${ok} (${(performance.now() - t0).toFixed(0)}ms)`)
@@ -31,7 +32,7 @@ export function useVideoPlayer() {
     try {
       const res = await $fetch(`/torrent/status/${hash}`, {
         baseURL: config.public.apiBase,
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
       }) as TorrentStatus
       const prev = status.value
       status.value = res
@@ -52,7 +53,7 @@ export function useVideoPlayer() {
 
     // SSE: instant push when torrent state changes
     const { onServerEvent } = useEventSource()
-    _unsubEvent = onServerEvent('torrent.head_ready', (data: any) => {
+    const unsubHead = onServerEvent('torrent.head_ready', (data: any) => {
       if (data.hash === hash) {
         logInfo('player', `SSE head_ready ${hash.slice(0, 12)}`)
         pollStatus(hash).catch(() => {})
@@ -65,7 +66,7 @@ export function useVideoPlayer() {
       }
     })
     _unsubEvent = () => {
-      _unsubEvent?.()
+      unsubHead()
       unsubStatus()
     }
 
@@ -77,6 +78,9 @@ export function useVideoPlayer() {
         // ignore polling errors, already logged
       }
     }, 5000)
+
+    // Ensure cleanup if the calling component is unmounted
+    onScopeDispose(stopPolling)
   }
 
   function stopPolling() {
@@ -104,7 +108,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/add', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { magnet: `magnet:?xt=urn:btih:${hash}` },
       })
     } catch {
@@ -116,7 +120,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/resume', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { hash, time: 0, duration: 0 },
       })
     } catch {
@@ -145,7 +149,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/seek', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { hash, time, duration },
       })
     } catch (e: any) {
@@ -160,7 +164,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/progress', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { hash, time, duration },
       })
     } catch (e: any) {
@@ -175,7 +179,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/pause', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { hash, time: 0, duration: 0 },
       })
     } catch (e: any) {
@@ -190,7 +194,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/resume', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': localStorage.getItem('claw_trace_id') || '' },
+        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
         body: { hash, time, duration },
       })
     } catch (e: any) {

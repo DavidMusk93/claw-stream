@@ -37,7 +37,7 @@
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
             placeholder="🔑 Passcode"
-            class="w-full h-[50px] px-12 rounded-[14px] bg-white/[0.04] border border-white/[0.08] text-foreground text-[17px] text-center placeholder:text-foreground-muted/40 outline-none transition-all duration-200 focus:bg-white/[0.07] focus:border-rose/40 focus:shadow-[0_0_0_4px_rgba(225,29,72,0.1)]"
+            class="w-full h-[50px] px-12 rounded-[14px] bg-black/[0.04] border border-black/[0.08] text-foreground text-[17px] text-center placeholder:text-foreground-muted/40 outline-none transition-all duration-200 focus:bg-black/[0.07] focus:border-rose/40 focus:shadow-[0_0_0_4px_rgba(225,29,72,0.1)]"
             :class="{ 'border-rose/40 shadow-[0_0_0_4px_rgba(225,29,72,0.1)]': error }"
             @keydown.enter="submit"
           />

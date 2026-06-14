@@ -12,7 +12,7 @@ export function useApi() {
       baseURL: config.public.apiBase,
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -21,7 +21,7 @@ export function useApi() {
       baseURL: config.public.apiBase,
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -32,7 +32,7 @@ export function useApi() {
       headers: _headers(),
       body: { magnet },
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -41,7 +41,7 @@ export function useApi() {
       baseURL: config.public.apiBase,
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -50,7 +50,7 @@ export function useApi() {
       baseURL: config.public.apiBase,
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -60,7 +60,7 @@ export function useApi() {
       method: 'DELETE',
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -70,7 +70,7 @@ export function useApi() {
       method: 'DELETE',
       headers: _headers(),
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
   }
 
@@ -81,8 +81,17 @@ export function useApi() {
       headers: _headers(),
       body: { code, liked },
     })
-    syncTraceIdFromResponse(res.response)
+    syncTraceIdFromResponse(res)
     return res._data
+  }
+
+  async function getSyncStatus() {
+    const res = await $fetch.raw('/api/stars/sync', {
+      baseURL: config.public.apiBase,
+      headers: _headers(),
+    })
+    syncTraceIdFromResponse(res)
+    return res._data as { running: boolean; elapsed?: number; last_error?: string | null }
   }
 
   return {
@@ -94,5 +103,6 @@ export function useApi() {
     deleteCache,
     deleteStar,
     likeTitle,
+    getSyncStatus,
   }
 }

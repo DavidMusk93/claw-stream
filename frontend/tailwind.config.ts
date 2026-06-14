@@ -11,11 +11,11 @@ export default {
   theme: {
     extend: {
       colors: {
-        void: '#000000',
-        surface: 'rgba(255,255,255,0.03)',
-        'surface-elevated': 'rgba(255,255,255,0.06)',
-        foreground: '#F8FAFC',
-        'foreground-muted': '#8A8F98',
+        void: '#F5F5F7',
+        surface: 'rgba(0,0,0,0.03)',
+        'surface-elevated': 'rgba(0,0,0,0.06)',
+        foreground: '#1D1D1F',
+        'foreground-muted': '#86868B',
         rose: {
           DEFAULT: '#E11D48',
           dark: '#BE123C',

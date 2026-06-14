@@ -11,18 +11,21 @@ import os
 import re
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Any
 
 import duckdb
 
+from backend.routers.auth import require_auth
 from core import get_logger
 from core.events import publish_event
 
 log = get_logger("stars-router")
-router = APIRouter(prefix="/api/stars", tags=["stars"])
+router = APIRouter(prefix="/api/stars", tags=["stars"], dependencies=[Depends(require_auth)])
+
+CODE_PATTERN = r"^[A-Za-z0-9_-]+$"
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
@@ -284,7 +287,10 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
 # ── Delete Star ─────────────────────────────────────────────────────
 
 @router.delete("/{code}")
-async def delete_star(code: str, request: Request) -> dict[str, Any]:
+async def delete_star(
+    request: Request,
+    code: str = Path(..., pattern=CODE_PATTERN),
+) -> dict[str, Any]:
     """Delete an actor: remove from config.json and DB, clear all title caches for this actor."""
     config = _load_config()
     stars = config.get("stars", [])
@@ -334,7 +340,7 @@ async def delete_star(code: str, request: Request) -> dict[str, Any]:
 # ── Like Title ──────────────────────────────────────────────────────
 
 class LikeRequest(BaseModel):
-    code: str = Field(..., min_length=1)
+    code: str = Field(..., min_length=1, max_length=32, pattern=CODE_PATTERN)
     liked: bool = True
 
 

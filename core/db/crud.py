@@ -17,8 +17,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from core.logger import get_logger
 from .connection import _conn, _date_to_sort
 from .ops_log import trace_db
+
+log = get_logger("db-crud")
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -44,11 +47,25 @@ def _normalize_b64_to_jpeg(b64_data: str) -> bytes | None:
         return None
 
 
+def _safe_code(code: str) -> str:
+    """Normalize and validate a title code for filesystem use."""
+    if not code:
+        raise ValueError("empty code")
+    code_lower = code.lower()
+    if not re.fullmatch(r"[a-z0-9_-]+", code_lower):
+        raise ValueError(f"invalid code for filesystem: {code}")
+    return code_lower
+
+
 def _write_cover_to_disk(code: str, cover_b64: str | None) -> None:
     """Persist cover_b64 to images/titles/{code}/{code}.jpg for static serving."""
     if not cover_b64:
         return
-    code_lower = code.lower()
+    try:
+        code_lower = _safe_code(code)
+    except ValueError as exc:
+        log.warning(f"cover write skipped: {exc}")
+        return
     out_dir = IMAGES_DIR / code_lower
     out_path = out_dir / f"{code_lower}.jpg"
     if out_path.exists() and out_path.stat().st_size > 0:
@@ -60,10 +77,12 @@ def _write_cover_to_disk(code: str, cover_b64: str | None) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(jpeg_bytes)
     except Exception:
-        pass
+        log.warning(f"cover write failed for {code}", exc_info=True)
 
 
-def _extract_hash(magnet):
+def _extract_hash(magnet: str | None) -> str | None:
+    if not magnet:
+        return None
     m = re.search(r"xt=urn:btih:([a-f0-9]{40})", magnet, re.I)
     return m.group(1).lower() if m else None
 
@@ -232,7 +251,7 @@ def upsert_title(
                 star_id, code, title, release_date, release_date_sort, views, likes,
                 resolution, download_url, cover_url, cover_b64, cover_path,
                 star_code, star_name, magnet, magnet_hash,
-                json.dumps(all_magnets) if all_magnets else None,
+                json.dumps(all_magnets) if all_magnets is not None else None,
             ))
             row = managed.execute(
                 "SELECT id FROM titles WHERE star_id = ? AND code = ?",

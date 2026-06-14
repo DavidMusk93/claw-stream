@@ -18,6 +18,7 @@ const listeners = new Map<string, Set<EventHandler>>()
 let es: EventSource | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
+let manuallyClosed = false
 const MAX_RECONNECT_DELAY = 30000
 
 function getListeners(event: string): Set<EventHandler> {
@@ -27,14 +28,22 @@ function getListeners(event: string): Set<EventHandler> {
   return listeners.get(event)!
 }
 
+function hasAnyListeners(): boolean {
+  for (const set of listeners.values()) {
+    if (set.size > 0) return true
+  }
+  return false
+}
+
 function connect() {
   if (typeof window === 'undefined') return
   if (es?.readyState === EventSource.OPEN || es?.readyState === EventSource.CONNECTING) return
+  if (manuallyClosed) return
 
   const url = '/api/events'
   logInfo('sse', `connecting to ${url}`)
 
-  es = new EventSource(url)
+  es = new EventSource(url, { withCredentials: true })
 
   es.onopen = () => {
     logInfo('sse', 'connected')
@@ -55,6 +64,7 @@ function connect() {
   }
 
   es.onerror = () => {
+    if (manuallyClosed) return
     logError('sse', `connection error, reconnecting in ${reconnectDelay}ms`)
     es?.close()
     es = null
@@ -68,14 +78,25 @@ function connect() {
 
 export function onServerEvent(event: string, handler: EventHandler): () => void {
   getListeners(event).add(handler)
+  manuallyClosed = false
   connect()
   return () => {
     getListeners(event).delete(handler)
+    if (!hasAnyListeners()) {
+      closeEventSource()
+    }
   }
 }
 
 export function closeEventSource() {
+  manuallyClosed = true
   if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = null
   es?.close()
   es = null
+}
+
+/** Composable wrapper for auto-import compatibility */
+export function useEventSource() {
+  return { onServerEvent, closeEventSource }
 }

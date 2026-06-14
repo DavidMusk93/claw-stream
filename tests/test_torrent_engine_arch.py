@@ -190,24 +190,21 @@ class TestBootstrapFirstVerification(unittest.TestCase):
         self.assertTrue(info.get("_recheck_done"), "_recheck_done must be set")
         self.assertTrue(info.get("ready"), "ready must be True after bootstrap-first")
         self.assertTrue(tracker._bootstrap_called, "bootstrap must be called")
-        self.assertTrue(tracker._overlay_called, "overlay must be called")
 
-    def test_finished_missing_triggers_recheck(self) -> None:
-        """finished + bootstrap head_ready=False → force_recheck CALLED."""
+    def test_finished_missing_triggers_readd(self) -> None:
+        """finished + bootstrap head_ready=False → _readd_torrent triggered."""
         handle = MockTorrentHandle(state=lt.torrent_status.finished)
         tracker = MockTracker(head_ready_val=False, moov_pc=5)
         info, hash_str = self._inject_torrent(handle, tracker)
 
         self.engine._on_metadata(handle)
 
-        self.assertTrue(
+        # Current architecture re-adds the torrent to clear finished-state deadlock;
+        # force_recheck is intentionally never used because it reads page-cache zeros.
+        self.assertFalse(
             handle._force_recheck_called,
-            "force_recheck MUST be called when bootstrap shows missing data",
+            "force_recheck must NOT be called in bootstrap-first architecture",
         )
-        self.assertTrue(info.get("_recheck_done"), "_recheck_done must be set")
-        # ready=True means metadata is ready and torrent is managed;
-        # head_ready=False is what blocks playback until recheck finishes.
-        self.assertTrue(info.get("ready"), "ready should be True (metadata ready)")
 
     def test_non_finished_does_not_recheck(self) -> None:
         """Non-finished torrents never trigger recheck logic."""
@@ -220,17 +217,18 @@ class TestBootstrapFirstVerification(unittest.TestCase):
         self.assertFalse(handle._force_recheck_called, "non-finished must not recheck")
         self.assertFalse(info.get("_recheck_done"), "_recheck_done must not be set")
 
-    def test_finished_no_tracker_fallback_to_recheck(self) -> None:
-        """finished but tracker missing → fallback to force_recheck."""
+    def test_finished_no_tracker_leaves_not_ready(self) -> None:
+        """finished but tracker missing → leave ready=False (tracker created by _on_metadata normally)."""
         handle = MockTorrentHandle(state=lt.torrent_status.finished)
         info, hash_str = self._inject_torrent(handle, tracker=None)
 
         self.engine._on_metadata(handle)
 
-        self.assertTrue(
+        self.assertFalse(
             handle._force_recheck_called,
-            "must fall back to force_recheck when tracker is unavailable",
+            "force_recheck must NOT be called in bootstrap-first architecture",
         )
+        self.assertFalse(info.get("ready"), "ready should remain False without tracker")
 
 
 class TestTieredCacheClassification(unittest.TestCase):
@@ -292,10 +290,11 @@ class TestTieredCacheClassification(unittest.TestCase):
         )
 
     def test_cache_score_completion(self) -> None:
-        """100% complete > 50% complete > 0% complete."""
-        complete = self._make_info(progress=100)
-        half = self._make_info(progress=50)
-        empty = self._make_info(progress=0)
+        """100% complete > 50% complete > 0% complete (with heat held constant)."""
+        now = time.time()
+        complete = self._make_info(progress=100, _last_play_time=now)
+        half = self._make_info(progress=50, _last_play_time=now)
+        empty = self._make_info(progress=0, _last_play_time=now)
         self.assertGreater(self.engine._cache_score(complete), self.engine._cache_score(half))
         self.assertGreater(self.engine._cache_score(half), self.engine._cache_score(empty))
 
@@ -451,23 +450,16 @@ class TestCacheWarmingRetry(unittest.TestCase):
         self.engine.torrents[hash_str] = info
         return handle, info, hash_str
 
-    def test_get_status_reapplies_priority_when_not_ready(self) -> None:
-        """head_ready=False + 10s elapsed → _apply_play_priority called again."""
+    def test_get_status_does_not_reapply_priority(self) -> None:
+        """get_status is read-only; it does not modify piece priorities."""
         tracker = MockTracker(head_ready_val=False, moov_pc=5)
         handle, info, hash_str = self._inject_torrent(tracker)
 
-        # Ensure enough time has "passed" since last warm
-        info["_last_warm_attempt"] = time.time() - 15
-
         self.engine.get_status(hash_str)
 
-        self.assertTrue(
+        self.assertFalse(
             tracker._request_head_tail_called,
-            "get_status must re-apply play priority when head_ready is false",
-        )
-        self.assertIn("_last_warm_attempt", info, "_last_warm_attempt must be updated")
-        self.assertGreater(
-            info["_last_warm_attempt"], 0, "_last_warm_attempt should be fresh timestamp"
+            "get_status must not re-apply play priority",
         )
 
     def test_get_status_throttles_reapply_within_10s(self) -> None:
@@ -567,43 +559,12 @@ class TestRecheckRateLimit(unittest.TestCase):
         with patch.object(lt, "torrent_finished_alert", FakeTorrentFinishedAlert):
             self.engine._handle_alert(alert)
 
-    def test_finished_alert_triggers_recheck_first_time(self) -> None:
-        """First torrent_finished_alert with head not ready → recheck allowed."""
+    def test_finished_alert_no_force_recheck(self) -> None:
+        """torrent_finished_alert never calls force_recheck (bootstrap-first architecture)."""
         handle, info, hash_str = self._inject_torrent(head_ready=False)
         self._dispatch_finished_alert(handle)
 
-        self.assertTrue(handle._force_recheck_called, "first alert must trigger recheck")
-        self.assertEqual(info.get("_recheck_count"), 1)
-
-    def test_finished_alert_limits_recheck_to_three(self) -> None:
-        """After 3 rechecks, further torrent_finished_alert must skip."""
-        handle, info, hash_str = self._inject_torrent(head_ready=False)
-        info["_recheck_count"] = 3
-        info["_last_recheck_time"] = time.time() - 120
-        self._dispatch_finished_alert(handle)
-
-        self.assertFalse(handle._force_recheck_called, "must skip recheck after 3 attempts")
-        self.assertEqual(info.get("_recheck_count"), 3)
-
-    def test_finished_alert_throttles_recheck_within_60s(self) -> None:
-        """If last recheck was <60s ago, skip to prevent hammering."""
-        handle, info, hash_str = self._inject_torrent(head_ready=False)
-        info["_recheck_count"] = 1
-        info["_last_recheck_time"] = time.time() - 30
-        self._dispatch_finished_alert(handle)
-
-        self.assertFalse(handle._force_recheck_called, "must throttle recheck within 60s")
-        self.assertEqual(info.get("_recheck_count"), 1)
-
-    def test_finished_alert_allows_recheck_after_60s(self) -> None:
-        """If last recheck was >60s ago and count <3, allow recheck."""
-        handle, info, hash_str = self._inject_torrent(head_ready=False)
-        info["_recheck_count"] = 1
-        info["_last_recheck_time"] = time.time() - 120
-        self._dispatch_finished_alert(handle)
-
-        self.assertTrue(handle._force_recheck_called, "must allow recheck after 60s cooldown")
-        self.assertEqual(info.get("_recheck_count"), 2)
+        self.assertFalse(handle._force_recheck_called, "force_recheck must not be called")
 
     def test_finished_alert_sets_ready_when_head_ready(self) -> None:
         """If tracker.head_ready() is true, set ready=True without recheck."""

@@ -35,16 +35,24 @@ class DuckDBWriteQueue:
 
     def start(self) -> None:
         """Start worker in the event loop (idempotent)"""
-        if self._started:
+        if self._started and self._worker_task is not None and not self._worker_task.done():
             return
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
+        except RuntimeError as exc:
+            raise RuntimeError("DuckDB write queue must be started inside a running event loop") from exc
         self._queue = asyncio.Queue(maxsize=self._maxsize)
         self._worker_task = loop.create_task(self._worker())
+        self._worker_task.add_done_callback(self._on_worker_done)
         self._started = True
         log.info("DuckDB write queue started")
+
+    def _on_worker_done(self, task: asyncio.Task) -> None:
+        """Reset state if the worker exits unexpectedly."""
+        if not task.cancelled() and task.exception() is not None:
+            log.error("DuckDB write queue worker died", exc_info=task.exception())
+        self._started = False
+        self._worker_task = None
 
     async def _worker(self) -> None:
         """Single worker: dequeue and execute write operations in a thread pool.
@@ -69,6 +77,9 @@ class DuckDBWriteQueue:
                 elapsed = (time.perf_counter() - start) * 1000
                 log.debug(f"{func.__name__} -> ok ({elapsed:.1f}ms)")
                 future.set_result(result)
+            except asyncio.CancelledError:
+                future.cancel()
+                raise
             except Exception as exc:
                 elapsed = (time.perf_counter() - start) * 1000
                 log.error(f"{func.__name__} -> {type(exc).__name__}: {exc} ({elapsed:.1f}ms)")
@@ -95,7 +106,8 @@ class DuckDBWriteQueue:
         if self._worker_task and not self._worker_task.done():
             await self._queue.put(None)
             await self._worker_task
-            self._started = False
+        self._started = False
+        self._worker_task = None
         log.info("DuckDB write queue stopped")
 
 

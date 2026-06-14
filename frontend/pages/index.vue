@@ -3,43 +3,43 @@
     <!-- Top bar -->
     <header class="fixed top-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 h-12 flex items-center justify-between">
-        <h1 class="text-[17px] font-semibold text-foreground tracking-tight">
-          Star Archive
-        </h1>
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2.5">
+          <h1 class="text-[17px] font-semibold text-foreground tracking-tight">
+            Star Archive
+          </h1>
           <span
             class="w-2 h-2 rounded-full"
             :class="health?.status === 'ok' ? 'bg-[#30d158]' : 'bg-[#ff453a]'"
           />
-          <button
-            class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white text-[13px] text-foreground transition-colors duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm"
-            :disabled="syncRunning"
-            @click="startSync"
-          >
-            <svg
-              v-if="!syncRunning"
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="23 4 23 10 17 10" />
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-            </svg>
-            <template v-else>
-              <span class="relative flex h-[13px] w-[13px]">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-foreground opacity-75" />
-                <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-foreground/90" />
-              </span>
-            </template>
-            <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
-            <span v-else class="hidden sm:inline">Refresh</span>
-          </button>
         </div>
+        <button
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white text-[13px] text-foreground transition-colors duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm active:scale-95"
+          :disabled="syncRunning"
+          @click="startSync"
+        >
+          <svg
+            v-if="!syncRunning"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+          <template v-else>
+            <span class="relative flex h-[13px] w-[13px]">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-foreground opacity-75" />
+              <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-foreground/90" />
+            </span>
+          </template>
+          <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
+          <span v-else class="hidden sm:inline">Refresh</span>
+        </button>
       </div>
     </header>
 
@@ -95,7 +95,7 @@
             <div
               v-for="s in recentStars"
               :key="s.code"
-              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F2F2F7] text-[13px] text-foreground hover:bg-[#E5E5EA] transition-colors cursor-pointer"
+              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F2F2F7] text-[13px] text-foreground hover:bg-[#E5E5EA] transition-colors cursor-pointer active:scale-95"
               @click="scrollToStar(s.code)"
             >
               <span class="w-1.5 h-1.5 rounded-full bg-[#ff375f]" />
@@ -105,25 +105,71 @@
           </div>
         </div>
 
-        <!-- Loading / Error -->
-        <div v-if="pending" class="flex items-center justify-center py-40 gap-3 text-foreground-muted">
-          <div class="w-5 h-5 rounded-full border-2 border-[#E5E5EA] border-t-foreground animate-spin" />
-          <span class="text-[15px]">Loading...</span>
+        <!-- Loading skeletons -->
+        <div v-if="pending" class="space-y-10 md:space-y-14">
+          <div
+            v-for="n in 3"
+            :key="n"
+            class="space-y-3"
+          >
+            <Skeleton class="h-8 w-48 rounded-lg" />
+            <div class="flex flex-col sm:flex-row gap-5">
+              <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[2/3] rounded-xl" />
+              <div class="flex-1 space-y-3 py-4">
+                <Skeleton class="h-8 w-3/4 rounded-lg" />
+                <Skeleton class="h-4 w-full rounded" />
+                <Skeleton class="h-4 w-5/6 rounded" />
+                <Skeleton class="h-4 w-4/6 rounded" />
+                <div class="flex gap-3 pt-3">
+                  <Skeleton class="h-10 w-24 rounded-full" />
+                  <Skeleton class="h-10 w-28 rounded-full" />
+                  <Skeleton class="h-10 w-20 rounded-full" />
+                </div>
+              </div>
+            </div>
+            <div class="flex gap-3 overflow-hidden">
+              <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[2/3] rounded-lg" />
+            </div>
+          </div>
         </div>
 
+        <!-- Error -->
         <div v-else-if="error" class="text-center py-40">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-[#ff453a]/10 text-[#ff453a] mb-4">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
           <p class="text-[15px] text-[#ff453a]">Failed to load data</p>
+          <button
+            class="mt-4 px-4 py-2 rounded-full bg-black/[0.06] text-foreground text-[13px] font-medium hover:bg-black/[0.1] active:scale-95"
+            @click="refreshNuxtData('stars')"
+          >
+            Retry
+          </button>
+        </div>
+
+        <!-- Empty state -->
+        <div v-else-if="displayStars.length === 0" class="text-center py-32">
+          <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-black/[0.04] text-foreground-muted mb-4">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <p class="text-[15px] text-foreground-muted">No stars yet. Add one above.</p>
         </div>
 
         <!-- Star Cards -->
-        <div v-else class="space-y-14 md:space-y-20">
+        <div v-else class="space-y-10 md:space-y-14">
           <div
             v-for="(star, index) in displayStars"
             :id="`star-${star.code.toLowerCase()}`"
             :key="star.code"
             ref="starRefs"
             :data-code="star.code"
-            class="min-h-[600px]"
           >
             <StarCard
               v-if="visibleCodes.has(star.code)"
@@ -132,6 +178,26 @@
               @play="openVideo"
               @deleted="onStarDeleted"
             />
+            <div v-else class="space-y-3">
+              <Skeleton class="h-8 w-40 rounded-lg" />
+              <div class="flex flex-col sm:flex-row gap-5">
+                <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[2/3] rounded-xl" />
+                <div class="flex-1 space-y-3 py-4">
+                  <Skeleton class="h-8 w-3/4 rounded-lg" />
+                  <Skeleton class="h-4 w-full rounded" />
+                  <Skeleton class="h-4 w-5/6 rounded" />
+                  <Skeleton class="h-4 w-4/6 rounded" />
+                  <div class="flex gap-3 pt-3">
+                    <Skeleton class="h-10 w-24 rounded-full" />
+                    <Skeleton class="h-10 w-28 rounded-full" />
+                    <Skeleton class="h-10 w-20 rounded-full" />
+                  </div>
+                </div>
+              </div>
+              <div class="flex gap-3 overflow-hidden">
+                <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[2/3] rounded-lg" />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -151,10 +217,8 @@
     >
       <div
         v-if="toastVisible"
-        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 px-4 py-3 rounded-2xl shadow-2xl max-w-sm w-[90vw]"
-        :class="toastType === 'success'
-          ? 'bg-white border border-black/[0.06]'
-          : 'bg-white border border-[#ff453a]/30'"
+        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 px-4 py-3 rounded-2xl shadow-2xl max-w-sm w-[90vw] bg-white border border-black/[0.06]"
+        :class="toastType === 'error' ? 'border-[#ff453a]/30' : ''"
         @click="dismissToast"
       >
         <span
@@ -186,8 +250,6 @@
 </template>
 
 <script setup lang="ts">
-import type { CacheMetrics } from '~/types/api'
-
 interface HealthResponse {
   status: string
 }
@@ -202,29 +264,22 @@ interface RecentStar {
 const config = useRuntimeConfig()
 const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase })
 const { stars, pending, error } = useStars()
-const { preheat } = useCachePreheat()
 
 const deletedCodes = ref<Set<string>>(new Set())
 const displayStars = computed(() => stars.value?.filter(s => !deletedCodes.value.has(s.code)) ?? [])
 
-// Virtual rendering: only render StarCards near the viewport.
-// This limits the number of concurrent cover image requests over the slow
-// trans-Pacific link to the user's device.
 const visibleCodes = ref<Set<string>>(new Set())
 const starRefs = ref<HTMLElement[]>([])
 
 const modalOpen = ref(false)
 const activeHash = ref('')
-const preheated = ref(false)
 
-// Add Star
 const newStarUrl = ref('')
 const addingStar = ref(false)
 const addError = ref('')
 const addSuccess = ref('')
 const recentStars = ref<RecentStar[]>([])
 
-// Load recent from localStorage
 onMounted(() => {
   try {
     const raw = localStorage.getItem('recentStars')
@@ -242,7 +297,7 @@ function clearRecent() {
 }
 
 function scrollToStar(code: string) {
-  const el = document.getElementById(`star-${code}`)
+  const el = document.getElementById(`star-${code.toLowerCase()}`)
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -252,16 +307,6 @@ function onStarDeleted(code: string) {
   deletedCodes.value.add(code)
   recentStars.value = recentStars.value.filter(s => s.code !== code)
   saveRecent()
-}
-
-// Poll for newly-added star titles
-let addStarPollTimer: ReturnType<typeof setInterval> | null = null
-
-function stopAddStarPoll() {
-  if (addStarPollTimer) {
-    clearInterval(addStarPollTimer)
-    addStarPollTimer = null
-  }
 }
 
 async function addStar() {
@@ -285,7 +330,6 @@ async function addStar() {
     addSuccess.value = `Added ${addedName} (${addedCode}), ${titlesFound} titles found, syncing in background...`
     newStarUrl.value = ''
 
-    // Push to recent
     recentStars.value.unshift({
       name: addedName,
       code: addedCode,
@@ -294,7 +338,6 @@ async function addStar() {
     })
     saveRecent()
 
-    // Refresh stars list (may show 0 titles if bg sync hasn't finished)
     await refreshNuxtData('stars')
   } catch (e: any) {
     const msg = e?.data?.detail || e?.message || 'Failed to add'
@@ -312,12 +355,40 @@ function openVideo(magnet: string) {
   }
 }
 
-// Sync state
 const syncRunning = ref(false)
 const syncError = ref('')
-let syncStartTime = 0
+let syncStatusTimer: ReturnType<typeof setInterval> | null = null
+const { getSyncStatus } = useApi()
 
-// Toast notification for sync completion
+async function fetchSyncStatus(silent = false) {
+  try {
+    const status = await getSyncStatus()
+    syncRunning.value = status.running
+    if (!silent && status.last_error) {
+      syncError.value = status.last_error
+    }
+  } catch (e: any) {
+    if (!silent) syncError.value = e?.message || 'Failed to check sync status'
+  }
+}
+
+function startSyncStatusPoll() {
+  if (syncStatusTimer) return
+  syncStatusTimer = setInterval(() => fetchSyncStatus(true), 5000)
+}
+
+function stopSyncStatusPoll() {
+  if (syncStatusTimer) {
+    clearInterval(syncStatusTimer)
+    syncStatusTimer = null
+  }
+}
+
+watch(syncRunning, (running) => {
+  if (running) startSyncStatusPoll()
+  else stopSyncStatusPoll()
+})
+
 const toastVisible = ref(false)
 const toastMessage = ref('')
 const toastDetail = ref('')
@@ -348,12 +419,8 @@ async function startSync() {
       method: 'POST',
     }) as any
 
-    if (res.status === 'started') {
+    if (res.status === 'started' || res.status === 'running') {
       syncRunning.value = true
-      syncStartTime = Date.now()
-    } else if (res.status === 'running') {
-      syncRunning.value = true
-      syncStartTime = Date.now() - (res.elapsed || 0) * 1000
     }
   } catch (e: any) {
     syncError.value = e?.message || 'Failed to start sync'
@@ -398,14 +465,15 @@ function handleStarReady(data: any) {
   refreshNuxtData('stars')
 }
 
-// Subscribe to SSE events on mount
+// SSE subscriptions
 onMounted(() => {
   const { onServerEvent } = useEventSource()
   const unsubs: (() => void)[] = []
 
+  fetchSyncStatus(true)
+
   unsubs.push(onServerEvent('sync.started', () => {
     syncRunning.value = true
-    syncStartTime = Date.now()
   }))
 
   unsubs.push(onServerEvent('sync.completed', handleSyncCompleted))
@@ -415,15 +483,17 @@ onMounted(() => {
   onUnmounted(() => {
     unsubs.forEach((fn) => fn())
     if (toastTimer) clearTimeout(toastTimer)
+    stopSyncStatusPoll()
   })
 })
 
-// Virtual rendering: only mount StarCards when they approach the viewport.
-// This prevents 100+ concurrent cover requests over the slow international link.
+// Virtual rendering with IntersectionObserver
+let observer: IntersectionObserver | null = null
+
 onMounted(() => {
   if (!import.meta.client) return
 
-  const observer = new IntersectionObserver((entries) => {
+  observer = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       const code = entry.target.getAttribute('data-code')
       if (code && entry.isIntersecting && !visibleCodes.value.has(code)) {
@@ -431,21 +501,23 @@ onMounted(() => {
       }
     })
   }, {
-    rootMargin: '800px',
+    rootMargin: '600px',
     threshold: 0,
   })
 
   nextTick(() => {
-    starRefs.value.forEach((el) => observer.observe(el))
+    starRefs.value.forEach((el) => observer?.observe(el))
   })
-
-  onUnmounted(() => observer.disconnect())
 })
 
-watch(() => stars.value, (val) => {
-  if (val && val.length > 0 && !preheated.value) {
-    preheated.value = true
-    preheat(val)
-  }
-}, { immediate: true })
+watch(() => displayStars.value, () => {
+  nextTick(() => {
+    starRefs.value.forEach((el) => observer?.observe(el))
+  })
+})
+
+onUnmounted(() => {
+  if (observer) observer.disconnect()
+})
+
 </script>

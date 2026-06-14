@@ -4,15 +4,21 @@
       <a
         v-for="star in stars"
         :key="star.code"
-        :href="`#${star.code.toLowerCase()}`"
-        class="shrink-0 px-4 py-1.5 rounded-full text-[13px] font-medium transition-colors duration-200"
+        :href="`#star-${star.code.toLowerCase()}`"
+        class="shrink-0 px-4 py-1.5 rounded-full text-[13px] font-medium transition-all duration-200 border border-transparent"
         :class="activeStar === star.code
-          ? 'bg-white text-black'
-          : 'text-[#8e8e93] hover:text-white'"
+          ? 'bg-foreground text-white shadow-sm'
+          : 'text-foreground-muted hover:text-foreground hover:bg-black/[0.04] border-black/[0.04]'"
         @click.prevent="scrollToStar(star.code)"
       >
         {{ star.name }}
-        <span v-if="star.number" class="ml-1 text-[10px] text-[#8e8e93]/60">#{{ star.number }}</span>
+        <span
+          v-if="star.number"
+          class="ml-1 text-[10px]"
+          :class="activeStar === star.code ? 'text-white/70' : 'text-foreground-muted/60'"
+        >
+          #{{ star.number }}
+        </span>
       </a>
     </div>
   </nav>
@@ -35,13 +41,13 @@ function scrollToStar(code: string) {
   }
 }
 
-// Update active star on scroll
+let observer: IntersectionObserver | null = null
+
 onMounted(() => {
-  const observer = new IntersectionObserver(
+  observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          // Extract code from id like "star-abf-338" -> "ABF-338"
           const idCode = entry.target.id.replace('star-', '').toUpperCase()
           activeStar.value = idCode
         }
@@ -52,9 +58,21 @@ onMounted(() => {
 
   props.stars.forEach((star) => {
     const el = document.getElementById(`star-${star.code.toLowerCase()}`)
-    if (el) observer.observe(el)
+    if (el) observer?.observe(el)
   })
+})
 
-  onUnmounted(() => observer.disconnect())
+onUnmounted(() => {
+  if (observer) observer.disconnect()
+})
+
+watch(() => props.stars, () => {
+  nextTick(() => {
+    if (!observer) return
+    props.stars.forEach((star) => {
+      const el = document.getElementById(`star-${star.code.toLowerCase()}`)
+      if (el) observer?.observe(el)
+    })
+  })
 })
 </script>

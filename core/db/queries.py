@@ -17,34 +17,36 @@ def get_all_titles_json():
     Returns: { "stars": [ { name, titles: [...] } ] }
     """
     conn = _conn()
-    rows = conn.execute("""
-        SELECT
-            a.name,
-            a.jp_name,
-            a.handle,
-            a.code,
-            a.type,
-            a.note,
-            COALESCE(array_agg(struct_pack(
-                code := w.code,
-                title := w.title,
-                date := IFNULL(w.release_date, ''),
-                views := IFNULL(CAST(w.views AS VARCHAR), ''),
-                likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
-                resolution := IFNULL(w.resolution, ''),
-                download_url := IFNULL(w.download_url, ''),
-                cover_url := IFNULL(w.cover_url, ''),
-                cover_b64 := IFNULL(w.cover_b64, ''),
-                cover_path := IFNULL(w.cover_path, ''),
-                magnet := IFNULL(w.magnet, '')
-            ) ORDER BY w.release_date_sort DESC NULLS LAST)
-            FILTER (WHERE w.code IS NOT NULL), []) AS titles
-        FROM stars a
-        LEFT JOIN titles w ON w.star_id = a.id
-        GROUP BY a.id, a.name, a.jp_name, a.handle, a.code, a.type, a.note
-        ORDER BY a.name
-    """).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("""
+            SELECT
+                a.name,
+                a.jp_name,
+                a.handle,
+                a.code,
+                a.type,
+                a.note,
+                COALESCE(array_agg(struct_pack(
+                    code := w.code,
+                    title := w.title,
+                    date := IFNULL(w.release_date, ''),
+                    views := IFNULL(CAST(w.views AS VARCHAR), ''),
+                    likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
+                    resolution := IFNULL(w.resolution, ''),
+                    download_url := IFNULL(w.download_url, ''),
+                    cover_url := IFNULL(w.cover_url, ''),
+                    cover_b64 := IFNULL(w.cover_b64, ''),
+                    cover_path := IFNULL(w.cover_path, ''),
+                    magnet := IFNULL(w.magnet, '')
+                ) ORDER BY w.release_date_sort DESC NULLS LAST)
+                FILTER (WHERE w.code IS NOT NULL), []) AS titles
+            FROM stars a
+            LEFT JOIN titles w ON w.star_id = a.id
+            GROUP BY a.id, a.name, a.jp_name, a.handle, a.code, a.type, a.note
+            ORDER BY a.name
+        """).fetchall()
+    finally:
+        conn.close()
 
     return {"stars": [
         {
@@ -67,29 +69,31 @@ def export_report_json():
     Format: { "<star_code>": { "name": "...", "titles": [...] } }
     """
     conn = _conn()
-    rows = conn.execute("""
-        SELECT
-            a.code,
-            a.name,
-            COALESCE(array_agg(struct_pack(
-                code := w.code,
-                title := w.title,
-                date := IFNULL(w.release_date, ''),
-                views := IFNULL(CAST(w.views AS VARCHAR), ''),
-                likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
-                resolution := IFNULL(w.resolution, ''),
-                download_url := IFNULL(w.download_url, ''),
-                cover_url := IFNULL(w.cover_url, ''),
-                cover_b64 := IFNULL(w.cover_b64, ''),
-                magnet := IFNULL(w.magnet, '')
-            ) ORDER BY w.release_date_sort DESC NULLS LAST)
-            FILTER (WHERE w.code IS NOT NULL), []) AS titles
-        FROM stars a
-        LEFT JOIN titles w ON w.star_id = a.id
-        GROUP BY a.id, a.code, a.name
-        ORDER BY a.name
-    """).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("""
+            SELECT
+                a.code,
+                a.name,
+                COALESCE(array_agg(struct_pack(
+                    code := w.code,
+                    title := w.title,
+                    date := IFNULL(w.release_date, ''),
+                    views := IFNULL(CAST(w.views AS VARCHAR), ''),
+                    likes := IFNULL(CAST(w.likes AS VARCHAR), ''),
+                    resolution := IFNULL(w.resolution, ''),
+                    download_url := IFNULL(w.download_url, ''),
+                    cover_url := IFNULL(w.cover_url, ''),
+                    cover_b64 := IFNULL(w.cover_b64, ''),
+                    magnet := IFNULL(w.magnet, '')
+                ) ORDER BY w.release_date_sort DESC NULLS LAST)
+                FILTER (WHERE w.code IS NOT NULL), []) AS titles
+            FROM stars a
+            LEFT JOIN titles w ON w.star_id = a.id
+            GROUP BY a.id, a.code, a.name
+            ORDER BY a.name
+        """).fetchall()
+    finally:
+        conn.close()
 
     data = {r[0]: {"name": r[1], "titles": r[2]} for r in rows}
     print(json.dumps(data, ensure_ascii=False))
@@ -99,18 +103,20 @@ def export_report_json():
 def get_stats() -> dict:
     """Aggregate statistics: total titles, titles per star"""
     conn = _conn()
-    total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
-    stars_count = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]
-    per_star = conn.execute("""
-        SELECT s.code, s.name, COUNT(t.id) as title_count,
-               MIN(t.release_date_sort) as earliest,
-               MAX(t.release_date_sort) as latest
-        FROM stars s
-        LEFT JOIN titles t ON t.star_id = s.id
-        GROUP BY s.id, s.code, s.name
-        ORDER BY title_count DESC
-    """).fetchall()
-    conn.close()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM titles").fetchone()[0]
+        stars_count = conn.execute("SELECT COUNT(*) FROM stars").fetchone()[0]
+        per_star = conn.execute("""
+            SELECT s.code, s.name, COUNT(t.id) as title_count,
+                   MIN(t.release_date_sort) as earliest,
+                   MAX(t.release_date_sort) as latest
+            FROM stars s
+            LEFT JOIN titles t ON t.star_id = s.id
+            GROUP BY s.id, s.code, s.name
+            ORDER BY title_count DESC
+        """).fetchall()
+    finally:
+        conn.close()
     return {
         "stars_count": stars_count,
         "titles_total": total,

@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from backend.routers.auth import require_auth
 from core.events import get_bus
 from core.logger import get_logger
 
-router = APIRouter(prefix="/api/events", tags=["events"])
+router = APIRouter(prefix="/api/events", tags=["events"], dependencies=[Depends(require_auth)])
 log = get_logger("events-router")
 
 
@@ -36,14 +37,22 @@ async def sse_stream() -> StreamingResponse:
                     yield f"data: {payload}\n\n"
                 except asyncio.TimeoutError:
                     yield ":heartbeat\n\n"
+                except Exception:
+                    log.exception("SSE event delivery error")
+                    break
         except asyncio.CancelledError:
             raise
+        except Exception:
+            log.exception("SSE generator error")
         finally:
-            await bus.unsubscribe(queue)
+            try:
+                await asyncio.shield(bus.unsubscribe(queue))
+            except Exception:
+                log.exception("SSE unsubscribe error")
 
     return StreamingResponse(
         event_generator(),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

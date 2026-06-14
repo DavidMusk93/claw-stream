@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Path
 from fastapi.responses import Response, JSONResponse
 from typing import Any
 
@@ -11,11 +11,14 @@ import libtorrent as lt
 from backend.services.torrent_engine import find_video_state
 from backend.services.video_stream import read_video_range
 from backend.models import StreamCheckResponse
+from backend.routers.auth import require_auth
 from core import get_logger
 
-stream_router = APIRouter(prefix="/stream", tags=["stream"])
-check_router = APIRouter(prefix="/api/check", tags=["stream"])
+stream_router = APIRouter(prefix="/stream", tags=["stream"], dependencies=[Depends(require_auth)])
+check_router = APIRouter(prefix="/api/check", tags=["stream"], dependencies=[Depends(require_auth)])
 log = get_logger("stream-router")
+
+HASH_PATTERN = r"^[a-fA-F0-9]{40}$"
 
 
 def get_engine(request: Request) -> Any:
@@ -30,8 +33,23 @@ def _parse_range(range_hdr: str, total_size: int) -> tuple[int, int]:
     if len(parts) != 2:
         raise ValueError("Invalid range format")
 
-    start = int(parts[0]) if parts[0] else 0
-    end = int(parts[1]) if parts[1] else total_size - 1
+    if parts[0] and parts[1]:
+        # Standard range: bytes=start-end
+        start = int(parts[0])
+        end = int(parts[1])
+    elif parts[0] and not parts[1]:
+        # Prefix range: bytes=start-
+        start = int(parts[0])
+        end = total_size - 1
+    elif not parts[0] and parts[1]:
+        # Suffix range: bytes=-suffix_len
+        suffix_len = int(parts[1])
+        if suffix_len <= 0 or suffix_len > total_size:
+            raise ValueError("Invalid suffix range")
+        start = total_size - suffix_len
+        end = total_size - 1
+    else:
+        raise ValueError("Invalid range format")
 
     if start < 0 or end >= total_size or start > end:
         raise ValueError("Invalid range values")
@@ -52,7 +70,11 @@ def _is_torrent_checking(engine: Any, hash_str: str) -> bool:
 
 
 @stream_router.get("/{hash_str}")
-async def stream_video(hash_str: str, request: Request, engine: Any = Depends(get_engine)):
+async def stream_video(
+    request: Request,
+    hash_str: str = Path(..., pattern=HASH_PATTERN),
+    engine: Any = Depends(get_engine),
+):
     """Serve video stream with Range support.
 
     Large-file streaming playback uses the thread pool for file I/O, avoiding blocking the FastAPI event loop.
@@ -62,6 +84,13 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     """
     import time as _time
     t0 = _time.perf_counter()
+
+    if _is_torrent_checking(engine, hash_str):
+        raise HTTPException(
+            status_code=503,
+            detail="Torrent is verifying files — retry shortly",
+        )
+
     # Prefer the target file already selected by _pick_video_file, to avoid accidentally selecting ad files during download
     preferred_path = None
     with engine.lock:
@@ -109,7 +138,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
                     engine._set_stream_window, handle, info, 0.0, 0.0, 30
                 )
 
-    total_size = os.path.getsize(path)
+    total_size = await asyncio.to_thread(os.path.getsize, path)
     range_hdr = request.headers.get("Range")
 
     # Default chunk for non-Range requests matches MAX_CHUNK in read_video_range
@@ -132,7 +161,6 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
     t5 = _time.perf_counter()
     actual_size = len(data)
 
-    is_hole = actual_size > 0 and not any(data)
     log.debug(
         "stream_video response",
         extra={
@@ -140,7 +168,6 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
             "range": f"{start}-{end}",
             "requested_size": end - start + 1,
             "actual_size": actual_size,
-            "hole": is_hole,
             "mime": mime,
             "timing_ms": {
                 "find_state": round((t1-t0)*1000, 2),
@@ -167,7 +194,7 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
         }
         return Response(content=data, status_code=206, headers=headers)
     else:
-        # Safari and other browsers may not send Range on the first request; return 200 + first 1MB to avoid 416 triggering code=4
+        # Safari and other browsers may not send Range on the first request; return 200 + first 8MB to avoid 416 triggering code=4
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(actual_size),
@@ -177,7 +204,10 @@ async def stream_video(hash_str: str, request: Request, engine: Any = Depends(ge
 
 
 @check_router.get("/{hash_str}", response_model=StreamCheckResponse)
-async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
+async def check_stream(
+    hash_str: str = Path(..., pattern=HASH_PATTERN),
+    engine: Any = Depends(get_engine),
+):
     """Check if video head is ready for playback."""
     local_path, local_size, head_ready_fs, mime = await asyncio.to_thread(find_video_state, hash_str)
 
@@ -187,16 +217,16 @@ async def check_stream(hash_str: str, engine: Any = Depends(get_engine)):
     # Allow playback if filesystem head is ready, even during recheck.
     # Recheck only re-validates hashes; already-downloaded head data is safe.
     # find_video_state already verifies data presence via SEEK_HOLE/SEEK_DATA.
-    head_ready = head_ready_fs
+    response = StreamCheckResponse(
+        hash=hash_str,
+        cached=local_size > 1024 * 1024,
+        head_ready=head_ready_fs,
+        path=local_path or "",
+        size=local_size,
+        mime=mime,
+    )
 
     return JSONResponse(
-        content=StreamCheckResponse(
-            hash=hash_str,
-            cached=local_size > 1024 * 1024,
-            head_ready=head_ready,
-            path=local_path or "",
-            size=local_size,
-            mime=mime,
-        ).model_dump(),
+        content=response.model_dump(),
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )

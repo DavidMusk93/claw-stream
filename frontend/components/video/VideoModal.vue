@@ -2,35 +2,45 @@
   <Teleport to="body">
     <div
       v-if="isOpen"
-      class="fixed inset-0 z-[100] flex items-center justify-center bg-void/95 backdrop-blur-md"
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/92 backdrop-blur-xl"
       @click.self="close"
     >
       <div
         ref="containerRef"
-        class="relative w-full h-full sm:w-[90vw] sm:max-w-5xl sm:h-auto sm:aspect-video bg-void sm:rounded-glass-lg overflow-hidden ring-1 ring-glass-border"
+        class="relative w-full h-full sm:w-[92vw] sm:max-w-6xl sm:h-auto sm:aspect-video bg-black sm:rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10"
         @dblclick="onDblClick"
         @touchstart="onTouchStart"
         @touchend="onTouchEnd"
         @touchmove="onTouchMove"
         @mousemove="showControls"
       >
-        <!-- Close button -->
-        <button
-          class="absolute top-3 right-3 z-20 w-12 h-12 rounded-full glass-strong active:bg-white/10 text-white flex items-center justify-center text-xl transition-colors touch-manipulation"
-          @click="close"
+        <!-- Top bar -->
+        <div
+          class="absolute top-0 inset-x-0 z-30 flex items-center justify-between p-3 sm:p-4 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300"
+          :class="{ 'opacity-0 pointer-events-none': controlsHidden }"
         >
-          ✕
-        </button>
+          <button
+            class="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
+            @click="toggleFullscreen"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path v-if="isFullscreen" d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3m13-3h-3a2 2 0 0 0-2 2v3"/>
+              <path v-else d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+            </svg>
+          </button>
 
-        <!-- Fullscreen toggle -->
-        <button
-          class="absolute top-3 left-3 z-20 w-12 h-12 rounded-full glass-strong active:bg-white/10 text-white flex items-center justify-center text-lg transition-colors touch-manipulation"
-          @click="toggleFullscreen"
-        >
-          {{ isFullscreen ? '⤓' : '⤢' }}
-        </button>
+          <button
+            class="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
+            @click="close"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
 
-        <!-- Video player -->
+        <!-- Video -->
         <video
           v-if="!loading && !errorMsg"
           ref="videoRef"
@@ -58,10 +68,10 @@
           @click="onVideoClick"
         />
 
-        <!-- Custom controls overlay -->
+        <!-- Custom controls -->
         <div
           v-show="!loading && !errorMsg"
-          class="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-4 pt-12 transition-opacity duration-500"
+          class="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-4 sm:px-5 pb-5 pt-14 transition-opacity duration-300"
           :class="{ 'opacity-0 pointer-events-none': controlsHidden }"
           @mousemove="showControls"
           @touchstart="showControls"
@@ -69,25 +79,22 @@
           <!-- Progress bar -->
           <div
             ref="progressBarRef"
-            class="relative h-1.5 bg-white/15 rounded-full cursor-pointer group"
+            class="relative h-1.5 sm:h-2 bg-white/15 rounded-full cursor-pointer group"
             @click="onProgressClick"
           >
-            <!-- Buffered segments -->
             <div
               v-for="(range, i) in bufferedRanges"
               :key="i"
-              class="absolute h-full bg-white/20 rounded-full"
+              class="absolute h-full bg-white/25 rounded-full"
               :style="{ left: range.start + '%', width: range.width + '%' }"
             />
-            <!-- Played -->
             <div
-              class="absolute h-full bg-gradient-to-r from-rose to-violet rounded-full"
+              class="absolute h-full bg-gradient-to-r from-[#ff375f] to-[#a855f7] rounded-full"
               :style="{ width: progressPercent + '%' }"
             />
-            <!-- Thumb -->
             <div
-              class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-              :style="{ left: 'calc(' + progressPercent + '% - 6px)' }"
+              class="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
+              :style="{ left: 'calc(' + progressPercent + '% - 7px)' }"
             />
           </div>
 
@@ -95,26 +102,47 @@
           <div class="flex items-center justify-between mt-3">
             <div class="flex items-center gap-3">
               <button
-                class="w-8 h-8 flex items-center justify-center text-white text-lg touch-manipulation hover:text-rose transition-colors"
+                class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
                 @click="togglePlay"
               >
-                {{ isPlaying ? '⏸' : '▶' }}
+                <svg v-if="!isPlaying" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+                <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16"/>
+                  <rect x="14" y="4" width="4" height="16"/>
+                </svg>
               </button>
+
               <button
-                class="w-8 h-8 flex items-center justify-center text-white text-sm touch-manipulation hover:text-rose transition-colors"
+                class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
                 @click="toggleMute"
               >
-                {{ isMuted ? '🔇' : '🔊' }}
+                <svg v-if="isMuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <line x1="23" y1="9" x2="17" y2="15"/>
+                  <line x1="17" y1="9" x2="23" y2="15"/>
+                </svg>
+                <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
               </button>
+
               <span class="text-xs text-white/90 font-mono tabular-nums">
                 {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
               </span>
             </div>
+
             <button
-              class="w-8 h-8 flex items-center justify-center text-white text-sm touch-manipulation"
+              class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
               @click="toggleFullscreen"
             >
-              {{ isFullscreen ? '⤓' : '⤢' }}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path v-if="isFullscreen" d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3m13-3h-3a2 2 0 0 0-2 2v3"/>
+                <path v-else d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
             </button>
           </div>
         </div>
@@ -122,19 +150,18 @@
         <!-- Loading overlay -->
         <div
           v-if="loading"
-          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-void/80 z-10"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-black/80 z-20"
         >
-          <div class="w-10 h-10 rounded-full border-4 border-white/10 border-t-rose animate-spin" />
+          <div class="w-12 h-12 rounded-full border-4 border-white/10 border-t-[#ff375f] animate-spin" />
 
-          <!-- Progress bar -->
-          <div class="w-72 max-w-[80vw]">
+          <div class="w-80 max-w-[85vw]">
             <div class="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
-                class="h-full bg-rose rounded-full transition-all duration-500"
+                class="h-full bg-gradient-to-r from-[#ff375f] to-[#a855f7] rounded-full transition-all duration-500"
                 :style="{ width: Math.min(status?.progress || 0, 100) + '%' }"
               />
             </div>
-            <div class="mt-1.5 flex justify-between text-xs text-white/50">
+            <div class="mt-2 flex justify-between text-xs text-white/60">
               <span>
                 {{ status?.state?.includes('checking') ? 'Verifying' : 'Downloading' }}
                 {{ (status?.progress || 0).toFixed(1) }}%
@@ -143,17 +170,12 @@
             </div>
           </div>
 
-          <!-- Main status -->
-          <p class="text-white text-base font-medium">
+          <p class="text-white text-lg font-semibold">
             {{ statusText }}
           </p>
-
-          <!-- Cache ratio (local_size / video_size) -->
-          <p class="text-white/60 text-xs">
+          <p class="text-white/60 text-sm">
             {{ cacheRatio }}
           </p>
-
-          <!-- Detail status -->
           <p class="text-white/40 text-xs">
             {{ detailStatus }}
           </p>
@@ -162,25 +184,40 @@
         <!-- Error overlay -->
         <div
           v-if="errorMsg"
-          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-void/80 z-10"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/85 z-20 px-6 text-center"
         >
-          <p class="text-red-400 text-sm">{{ errorMsg }}</p>
+          <div class="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center text-[#ff453a]">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </div>
+          <p class="text-white/90 text-base font-medium max-w-md">{{ errorMsg }}</p>
+          <button
+            v-if="retryCount < MAX_RETRIES"
+            class="px-5 py-2 rounded-full bg-white text-black text-sm font-semibold transition hover:bg-white/90 active:scale-95"
+            @click="doRetry"
+          >
+            Retry
+          </button>
         </div>
 
-        <!-- Buffer status overlay (small, bottom-left) -->
+        <!-- Buffer status overlay -->
         <div
           v-if="buffering && !loading"
-          class="absolute bottom-20 left-4 z-20 glass px-3 py-1.5 rounded-glass-sm text-xs text-foreground-muted"
+          class="absolute bottom-24 left-4 z-30 bg-black/50 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-full text-xs text-white/80 flex items-center gap-2"
         >
+          <div class="w-3 h-3 rounded-full border-2 border-white/20 border-t-white animate-spin" />
           {{ statusText }}
         </div>
 
-        <!-- Touch gesture hint (mobile only) -->
+        <!-- Gesture hint -->
         <div
           v-if="showGestureHint"
-          class="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"
+          class="absolute inset-0 flex items-center justify-center z-40 pointer-events-none"
         >
-          <div class="bg-black/50 text-white px-4 py-2 rounded-full text-sm animate-fade-out">
+          <div class="bg-black/60 text-white px-5 py-2 rounded-full text-sm font-medium animate-fade-out">
             {{ gestureHintText }}
           </div>
         </div>
@@ -208,16 +245,27 @@ const isMuted = ref(false)
 const retryCount = ref(0)
 const MAX_RETRIES = 3
 
-// Custom controls state
 const currentTime = ref(0)
 const duration = ref(0)
 const isPlaying = ref(false)
 const controlsHidden = ref(false)
 let controlsHideTimer: ReturnType<typeof setTimeout> | null = null
+const activeTimers = new Set<ReturnType<typeof setTimeout>>()
 
-// Seek state: track whether video was playing before seek started
-// so we can resume after seeked (instead of relying on isPlaying
-// which gets clobbered by the pause event).
+function safeSetTimeout(fn: () => void, delay: number) {
+  const id = setTimeout(() => {
+    activeTimers.delete(id)
+    fn()
+  }, delay)
+  activeTimers.add(id)
+  return id
+}
+
+function clearAllTimers() {
+  activeTimers.forEach(id => clearTimeout(id))
+  activeTimers.clear()
+}
+
 const wasPlayingBeforeSeek = ref(false)
 
 const progressPercent = computed(() => {
@@ -250,7 +298,7 @@ function formatTime(sec: number): string {
 function showControls() {
   controlsHidden.value = false
   if (controlsHideTimer) clearTimeout(controlsHideTimer)
-  controlsHideTimer = setTimeout(() => {
+  controlsHideTimer = safeSetTimeout(() => {
     if (isPlaying.value && !buffering.value) controlsHidden.value = true
   }, 3000)
 }
@@ -264,11 +312,9 @@ function onProgressClick(e: MouseEvent) {
   const newTime = v.duration * Math.max(0, Math.min(1, ratio))
   v.currentTime = newTime
   currentTime.value = newTime
-  // Force controls visible briefly so user sees the seek feedback
   showControls()
 }
 
-// Progress persistence
 const PROGRESS_KEY = 'claw_video_progress'
 const PROGRESS_SAVE_INTERVAL_MS = 5000
 const PROGRESS_REPORT_INTERVAL_MS = 10000
@@ -294,7 +340,7 @@ function saveProgressMap(map: Record<string, ProgressRecord>) {
   try {
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(map))
   } catch {
-    // storage full or private mode
+    // ignore
   }
 }
 
@@ -302,8 +348,8 @@ function saveProgress() {
   const v = videoRef.value
   const hash = props.hash
   if (!v || !hash || !v.duration || v.duration === Infinity) return
-  if (v.currentTime < 3) return // don't save very early progress
-  if (v.currentTime / v.duration > 0.95) return // nearly finished
+  if (v.currentTime < 3) return
+  if (v.currentTime / v.duration > 0.95) return
 
   const map = loadProgressMap()
   map[hash] = {
@@ -321,7 +367,6 @@ function restoreProgress() {
   const map = loadProgressMap()
   const rec = map[hash]
   if (!rec || !rec.duration) return
-  // Skip if already near the end or if duration changed significantly
   if (rec.currentTime / rec.duration > 0.95) {
     delete map[hash]
     saveProgressMap(map)
@@ -345,7 +390,7 @@ function clearProgress() {
 
 function cleanupOldProgress() {
   const map = loadProgressMap()
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000 // 30 days
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
   let changed = false
   for (const key of Object.keys(map)) {
     if (map[key].updatedAt < cutoff) {
@@ -356,7 +401,6 @@ function cleanupOldProgress() {
   if (changed) saveProgressMap(map)
 }
 
-// Touch gesture state
 const touchStartX = ref(0)
 const touchStartY = ref(0)
 const touchStartTime = ref(0)
@@ -382,7 +426,6 @@ const detailStatus = computed(() => {
   if (s.peers > 0) parts.push(`${s.peers} peers`)
   if (s.download_rate > 0) parts.push(formatSpeed(s.download_rate))
   if (s.verified_pieces > 0) parts.push(`Verified ${s.verified_pieces} pcs`)
-  // ETA for non-ready or buffering states
   if (!s.ready || !s.head_ready) {
     const eta = s.download_rate > 0 && s.video_size > s.local_size
       ? formatEta((s.video_size - s.local_size) / s.download_rate)
@@ -415,9 +458,6 @@ const statusText = computed(() => {
 
   const peers = s.peers > 0 ? `${s.peers} peers` : ''
   const speed = formatSpeed(s.download_rate)
-  const pct = s.progress.toFixed(1)
-  const buf = s.local_size ? (s.local_size / 1024 / 1024).toFixed(0) + 'MB' : ''
-  const total = s.video_size ? (s.video_size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : ''
   const verified = s.verified_pieces ? `${s.verified_pieces} pcs` : ''
 
   if (!s.ready) {
@@ -442,11 +482,10 @@ const statusText = computed(() => {
   if (s.download_rate > 0) {
     const parts = ['Playing']
     if (peers) parts.push(peers)
-    parts.push(formatSpeed(s.download_rate))
+    parts.push(speed)
     return parts.join(' | ')
   }
 
-  // finished/seeding but progress < 100% — disk has holes
   if (s.progress < 99.9 && (s.state === 'finished' || s.state === 'seeding')) {
     const vp = s.verified_pieces
     const parts = [`Progress ${s.progress.toFixed(1)}%`]
@@ -457,11 +496,8 @@ const statusText = computed(() => {
   return 'Ready | Waiting for data'
 })
 
-// Watch both hash and isOpen to avoid Vue reactivity timing issues
-// where missing one update when they don't change simultaneously
 watch([() => props.hash, isOpen], async ([hash, open]) => {
   if (!hash || !open) return
-  // Avoid reloading the same hash
   if (videoRef.value?.src && videoRef.value.src.includes(hash)) return
   errorMsg.value = ''
   canplayFired.value = false
@@ -476,10 +512,8 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
     return
   }
 
-  // iOS Safari: element must be fully mounted and visible before src is set.
-  // nextTick() alone is not enough; use setTimeout to defer past layout.
   await nextTick()
-  setTimeout(() => {
+  safeSetTimeout(() => {
     const v = videoRef.value
     if (v) {
       v.src = streamUrl.value
@@ -497,7 +531,7 @@ watch(isOpen, (open) => {
   if (!open) {
     saveProgress()
     stopPolling()
-    if (controlsHideTimer) clearTimeout(controlsHideTimer)
+    clearAllTimers()
     controlsHidden.value = false
     if (props.hash) {
       reportPause(props.hash)
@@ -524,6 +558,16 @@ function close() {
   isOpen.value = false
 }
 
+function doRetry() {
+  errorMsg.value = ''
+  retryCount.value = 0
+  const v = videoRef.value
+  if (v) {
+    v.src = streamUrl.value
+    v.load()
+  }
+}
+
 function onLoadedMetadata() {
   const v = videoRef.value
   if (v) {
@@ -542,8 +586,6 @@ function onCanplay() {
     currentTime: v?.currentTime ?? 0,
     bufferedRanges: v?.buffered?.length ?? 0,
   })
-  // Auto-play on first canplay, but do not race with a pending togglePlay().
-  // If the user already clicked play (isPlaying true or play pending), skip.
   if (!isPlaying.value && v?.paused) {
     v?.play().then(() => {
       isPlaying.value = true
@@ -602,9 +644,6 @@ function onPlaying() {
 function onSeeking() {
   buffering.value = true
   const v = videoRef.value
-  // Snapshot play state BEFORE browser pauses internally.
-  // Do NOT call pause() manually — it fires a 'pause' event that
-  // clobbers isPlaying and breaks the seeked-auto-resume logic.
   wasPlayingBeforeSeek.value = isPlaying.value
   logInfo('player', 'seeking', {
     currentTime: v?.currentTime ?? 0,
@@ -627,7 +666,6 @@ function onSeeked() {
   if (v && v.duration && isFinite(v.duration) && props.hash) {
     reportSeek(props.hash, v.currentTime, v.duration)
   }
-  // Resume playback only if we were actually playing before the seek.
   if (wasPlayingBeforeSeek.value) {
     v?.play().then(() => {
       isPlaying.value = true
@@ -647,8 +685,6 @@ function onPause() {
 }
 
 function onVideoClick() {
-  // Click anywhere on the video to bring back controls.
-  // If controls are already visible, this also resets the hide timer.
   showControls()
 }
 
@@ -687,14 +723,12 @@ function onError() {
     hash: props.hash?.slice(0, 12),
   })
 
-  // code=4 (MEDIA_ERR_SRC_NOT_SUPPORTED) — give it one retry before giving up.
-  // Safari may temporarily report code=4 during initial load; a reload often fixes it.
   if (code === 4 && retryCount.value < MAX_RETRIES) {
     retryCount.value++
     logInfo('player', `code=4 retry ${retryCount.value}/${MAX_RETRIES}`)
     errorMsg.value = `Loading (${retryCount.value}/${MAX_RETRIES})...`
     const src = streamUrl.value
-    setTimeout(() => {
+    safeSetTimeout(() => {
       if (videoRef.value) {
         videoRef.value.src = src
         videoRef.value.load()
@@ -714,7 +748,7 @@ function onError() {
     logInfo('player', `retry ${retryCount.value}/${MAX_RETRIES}`)
     errorMsg.value = `Loading (${retryCount.value}/${MAX_RETRIES})...`
     const src = v?.src || streamUrl.value
-    setTimeout(() => {
+    safeSetTimeout(() => {
       if (videoRef.value) {
         videoRef.value.src = src
         videoRef.value.load()
@@ -794,7 +828,6 @@ function exitFullscreen() {
   }
 }
 
-// Listen fullscreen change
 onMounted(() => {
   const handler = () => {
     isFullscreen.value = !!(document.fullscreenElement || (document as any).webkitFullscreenElement)
@@ -804,10 +837,10 @@ onMounted(() => {
   onUnmounted(() => {
     document.removeEventListener('fullscreenchange', handler)
     document.removeEventListener('webkitfullscreenchange', handler)
+    clearAllTimers()
   })
 })
 
-// Touch gestures
 function onTouchStart(e: TouchEvent) {
   const t = e.touches[0]
   touchStartX.value = t.clientX
@@ -817,8 +850,7 @@ function onTouchStart(e: TouchEvent) {
 
 function onTouchMove(e: TouchEvent) {
   if (e.touches.length !== 1) return
-  // Prevent page scroll when touching video
-  if (videoRef.value) {
+  if (!controlsHidden.value && videoRef.value) {
     e.preventDefault()
   }
 }
@@ -831,19 +863,16 @@ function onDblClick(e: MouseEvent) {
   const width = rect.width
 
   if (x < width / 3) {
-    // Left double-click: rewind 10s
     const prev = v.currentTime
     v.currentTime = Math.max(0, v.currentTime - 10)
     logInfo('player', `dblclick left seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     showHint('Rewind 10s')
   } else if (x > width * 2 / 3) {
-    // Right double-click: forward 10s
     const prev = v.currentTime
     v.currentTime = Math.min(v.duration || Infinity, v.currentTime + 10)
     logInfo('player', `dblclick right seek ${prev.toFixed(1)} -> ${v.currentTime.toFixed(1)}`)
     showHint('Forward 10s')
   } else {
-    // Center double-click: play/pause
     togglePlay()
   }
 }
@@ -856,13 +885,11 @@ function onTouchEnd(e: TouchEvent) {
   const v = videoRef.value
   if (!v) return
 
-  // Tap to toggle play (small movement, short time)
   if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
-    // Let doubleclick handle it, or toggle play if no dblclick
+    togglePlay()
     return
   }
 
-  // Horizontal swipe: seek proportional to swipe distance (3s per px)
   if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
     const SWIPE_PX_PER_SECOND = 3
     const seekSeconds = Math.round(dx * SWIPE_PX_PER_SECOND)
@@ -880,7 +907,6 @@ function onTouchEnd(e: TouchEvent) {
     return
   }
 
-  // Vertical swipe: volume (right side) or brightness hint (left side)
   if (Math.abs(dy) > 60) {
     if (touchStartX.value > window.innerWidth / 2) {
       const delta = dy < 0 ? 0.05 : -0.05
@@ -889,7 +915,6 @@ function onTouchEnd(e: TouchEvent) {
       logInfo('player', `swipe volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
       showHint(`Volume ${Math.round(v.volume * 100)}%`)
     } else {
-      // Left side vertical swipe: no system brightness API in browser, show hint only
       showHint(dy < 0 ? 'Brightness ↑ (not supported)' : 'Brightness ↓ (not supported)')
     }
   }
@@ -898,10 +923,9 @@ function onTouchEnd(e: TouchEvent) {
 function showHint(text: string) {
   gestureHintText.value = text
   showGestureHint.value = true
-  setTimeout(() => { showGestureHint.value = false }, 800)
+  safeSetTimeout(() => { showGestureHint.value = false }, 800)
 }
 
-// Keyboard shortcuts
 onMounted(() => {
   const handler = (e: KeyboardEvent) => {
     if (!isOpen.value) return
@@ -936,13 +960,7 @@ onMounted(() => {
       logInfo('player', `key ArrowDown volume ${prev.toFixed(2)} -> ${v.volume.toFixed(2)}`)
     } else if (e.key === ' ') {
       e.preventDefault()
-      if (v.paused) {
-        v.play()
-        logInfo('player', 'key Space play')
-      } else {
-        v.pause()
-        logInfo('player', 'key Space pause')
-      }
+      togglePlay()
     } else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault()
       logInfo('player', 'key F fullscreen')
@@ -971,29 +989,13 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.touch-manipulation {
-  touch-action: manipulation;
+.animate-fade-out {
+  animation: fade-out 0.8s ease-out forwards;
 }
 
 @keyframes fade-out {
   0% { opacity: 1; }
   70% { opacity: 1; }
   100% { opacity: 0; }
-}
-
-.animate-fade-out {
-  animation: fade-out 0.8s ease-out forwards;
-}
-
-/* Hide native controls on mobile until user interacts */
-video::-webkit-media-controls {
-  display: flex !important;
-}
-
-/* iOS safe area support */
-@supports (padding: max(0px)) {
-  .pb-safe {
-    padding-bottom: max(1rem, env(safe-area-inset-bottom));
-  }
 }
 </style>

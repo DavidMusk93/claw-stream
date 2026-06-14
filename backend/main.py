@@ -152,10 +152,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS: default to same-origin dev origins; production should set CORS_ORIGINS env var.
+# Using "*" with credentials is unsafe and is intentionally not supported.
+_cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] or ["http://localhost:3000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

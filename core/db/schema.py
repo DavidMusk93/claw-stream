@@ -104,16 +104,18 @@ def init_schema(conn=None):
 def backfill_release_date_sort():
     """Backfill release_date_sort column for existing data"""
     conn = _conn()
-    conn.execute("""
-        UPDATE titles
-        SET release_date_sort = CONCAT(
-            SPLIT_PART(release_date, '/', 3),
-            LPAD(SPLIT_PART(release_date, '/', 1), 2, '0'),
-            LPAD(SPLIT_PART(release_date, '/', 2), 2, '0')
-        )
-        WHERE release_date_sort IS NULL
-          AND release_date IS NOT NULL
-          AND release_date LIKE '%/%/%'
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("""
+            UPDATE titles
+            SET release_date_sort = CONCAT(
+                SPLIT_PART(release_date, '/', 3),
+                LPAD(SPLIT_PART(release_date, '/', 1), 2, '0'),
+                LPAD(SPLIT_PART(release_date, '/', 2), 2, '0')
+            )
+            WHERE release_date_sort IS NULL
+              AND release_date IS NOT NULL
+              AND release_date LIKE '%/%/%'
+        """)
+        conn.commit()
+    finally:
+        conn.close()
