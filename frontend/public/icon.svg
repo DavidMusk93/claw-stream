@@ -1,4 +1,46 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#0a0a0a"/>
-  <text x="256" y="320" font-size="280" text-anchor="middle" fill="#f97316" font-family="system-ui, sans-serif">★</text>
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5c7d"/>
+      <stop offset="1" stop-color="#ff375f"/>
+    </linearGradient>
+    <linearGradient id="horn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e0345c"/>
+      <stop offset="1" stop-color="#c22447"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="#ffffff"/>
+
+  <g transform="translate(31 31) scale(0.8789)">
+    <!-- devil horns tucked behind the star's top point -->
+    <path d="M198 172 Q172 106 206 78 Q226 120 228 162 Z" fill="url(#horn)"/>
+    <path d="M314 172 Q340 106 306 78 Q286 120 284 162 Z" fill="url(#horn)"/>
+
+    <!-- star body (rounded via thick same-color stroke) -->
+    <path
+      d="M256 116 L301.4 221.8 L413.4 229.6 L325.4 303.9 L354.1 413.5 L256 354.5 L157.9 413.5 L186.6 303.9 L98.6 229.6 L210.6 221.8 Z"
+      fill="url(#body)"
+      stroke="#ff456c"
+      stroke-width="26"
+      stroke-linejoin="round"
+    />
+
+    <!-- glossy highlight -->
+    <ellipse cx="205" cy="205" rx="48" ry="28" fill="#ffffff" opacity="0.28" transform="rotate(-24 205 205)"/>
+
+    <!-- left eye (open, sparkly) -->
+    <ellipse cx="212" cy="272" rx="13" ry="17" fill="#3d0a16"/>
+    <circle cx="216.5" cy="266" r="4.5" fill="#ffffff"/>
+
+    <!-- right eye (happy wink, arched up) -->
+    <path d="M286 274 Q300 260 314 274" fill="none" stroke="#3d0a16" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- cat smile -->
+    <path d="M240 304 Q248 312 256 306 Q264 312 272 304" fill="none" stroke="#3d0a16" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- blush -->
+    <ellipse cx="186" cy="298" rx="18" ry="10" fill="#ff9eb3" opacity="0.85"/>
+    <ellipse cx="326" cy="298" rx="18" ry="10" fill="#ff9eb3" opacity="0.85"/>
+  </g>
 </svg>
