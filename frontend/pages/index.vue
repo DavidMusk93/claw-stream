@@ -2,9 +2,10 @@
   <div class="min-h-screen bg-void">
     <!-- Top bar -->
     <header class="fixed top-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 h-12 flex items-center justify-between">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
         <div class="flex items-center gap-2.5">
-          <h1 class="text-[17px] font-semibold text-foreground tracking-tight">
+          <img src="/logo.svg" alt="Star Archive logo" class="w-8 h-8 -my-1" />
+          <h1 class="text-[19px] font-semibold text-foreground tracking-tight">
             Star Archive
           </h1>
           <span
@@ -13,14 +14,14 @@
           />
         </div>
         <button
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white text-[13px] text-foreground transition-colors duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm active:scale-95"
+          class="flex items-center gap-2 h-10 px-4 rounded-full bg-white text-[14px] font-medium text-foreground transition-all duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm active:scale-[0.97]"
           :disabled="syncRunning"
           @click="startSync"
         >
           <svg
             v-if="!syncRunning"
-            width="13"
-            height="13"
+            width="15"
+            height="15"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -32,9 +33,9 @@
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
           </svg>
           <template v-else>
-            <span class="relative flex h-[13px] w-[13px]">
+            <span class="relative flex h-[15px] w-[15px]">
               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-foreground opacity-75" />
-              <span class="relative inline-flex rounded-full h-[13px] w-[13px] bg-foreground/90" />
+              <span class="relative inline-flex rounded-full h-[15px] w-[15px] bg-foreground/90" />
             </span>
           </template>
           <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
@@ -44,29 +45,29 @@
     </header>
 
     <!-- Star navigation pills -->
-    <div class="fixed top-12 left-0 right-0 z-30 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
+    <div class="fixed top-14 left-0 right-0 z-30 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
       <StarNav :stars="displayStars" />
     </div>
 
     <!-- Main content -->
-    <main class="pt-[100px] pb-24">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 space-y-8">
+    <main class="pt-[120px] pb-24">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 space-y-12">
         <!-- Add Star Panel -->
-        <div class="p-4 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-foreground">Add Star</h2>
-            <span class="text-[12px] text-foreground-muted">ijavtorrent actress page</span>
+        <div class="p-5 sm:p-6 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-[17px] font-semibold text-foreground tracking-tight">Add Star</h2>
+            <span class="text-[13px] text-foreground-muted">ijavtorrent actress page</span>
           </div>
           <div class="flex items-center gap-3">
             <input
               v-model="newStarUrl"
               type="text"
               placeholder="https://ijavtorrent.com/actress/xxx-xxx-12345"
-              class="flex-1 h-11 px-4 rounded-xl bg-[#F5F5F7] text-[14px] text-foreground placeholder:text-foreground-muted/50 outline-none border border-black/[0.06] focus:border-[#ff375f]/40 transition-colors"
+              class="flex-1 h-12 px-4 rounded-xl bg-[#F5F5F7] text-[15px] text-foreground placeholder:text-foreground-muted/50 outline-none border border-black/[0.06] focus:border-[#ff375f]/40 transition-colors"
               @keydown.enter="addStar"
             />
             <button
-              class="h-11 px-5 rounded-xl bg-[#ff375f] text-white text-[14px] font-medium transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed"
+              class="h-12 px-6 rounded-xl bg-[#ff375f] text-white text-[15px] font-semibold transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed"
               :disabled="addingStar || !newStarUrl.trim()"
               @click="addStar"
             >
@@ -79,23 +80,23 @@
               <span v-else>Add</span>
             </button>
           </div>
-          <p v-if="addError" class="mt-2.5 text-[13px] text-[#ff453a]">{{ addError }}</p>
-          <p v-if="addSuccess" class="mt-2.5 text-[13px] text-[#30d158]">{{ addSuccess }}</p>
+          <p v-if="addError" class="mt-3 text-[14px] text-[#ff453a]">{{ addError }}</p>
+          <p v-if="addSuccess" class="mt-3 text-[14px] text-[#30d158]">{{ addSuccess }}</p>
         </div>
 
         <!-- Recently Added Panel -->
-        <div v-if="recentStars.length" class="p-4 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-[15px] font-semibold text-foreground">Recently Added</h2>
-            <button class="text-[12px] text-foreground-muted hover:text-foreground transition-colors" @click="clearRecent">
+        <div v-if="recentStars.length" class="p-5 sm:p-6 rounded-2xl bg-white border border-black/[0.06] shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-[17px] font-semibold text-foreground tracking-tight">Recently Added</h2>
+            <button class="text-[13px] text-foreground-muted hover:text-foreground transition-colors" @click="clearRecent">
               Clear
             </button>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap gap-2.5">
             <div
               v-for="s in recentStars"
               :key="s.code"
-              class="group flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F2F2F7] text-[13px] text-foreground hover:bg-[#E5E5EA] transition-colors cursor-pointer active:scale-95"
+              class="group flex items-center gap-2 px-3.5 py-2 rounded-full bg-[#F2F2F7] text-[14px] text-foreground hover:bg-[#E5E5EA] transition-all cursor-pointer active:scale-[0.97]"
               @click="scrollToStar(s.code)"
             >
               <span class="w-1.5 h-1.5 rounded-full bg-[#ff375f]" />
@@ -106,7 +107,7 @@
         </div>
 
         <!-- Loading skeletons -->
-        <div v-if="pending" class="space-y-10 md:space-y-14">
+        <div v-if="pending" class="space-y-16 md:space-y-24">
           <div
             v-for="n in 3"
             :key="n"
@@ -135,16 +136,16 @@
 
         <!-- Error -->
         <div v-else-if="error" class="text-center py-40">
-          <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-[#ff453a]/10 text-[#ff453a] mb-4">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#ff453a]/10 text-[#ff453a] mb-5">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <line x1="12" y1="8" x2="12" y2="12"/>
               <line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
           </div>
-          <p class="text-[15px] text-[#ff453a]">Failed to load data</p>
+          <p class="text-[17px] text-[#ff453a]">Failed to load data</p>
           <button
-            class="mt-4 px-4 py-2 rounded-full bg-black/[0.06] text-foreground text-[13px] font-medium hover:bg-black/[0.1] active:scale-95"
+            class="mt-5 px-5 py-2.5 rounded-full bg-black/[0.06] text-foreground text-[14px] font-medium hover:bg-black/[0.1] active:scale-[0.97] transition-all"
             @click="refreshNuxtData('stars')"
           >
             Retry
@@ -163,7 +164,7 @@
         </div>
 
         <!-- Star Cards -->
-        <div v-else class="space-y-10 md:space-y-14">
+        <div v-else class="space-y-16 md:space-y-24">
           <div
             v-for="(star, index) in displayStars"
             :id="`star-${star.code.toLowerCase()}`"
@@ -217,29 +218,29 @@
     >
       <div
         v-if="toastVisible"
-        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3 px-4 py-3 rounded-2xl shadow-2xl max-w-sm w-[90vw] bg-white border border-black/[0.06]"
+        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3.5 px-5 py-4 rounded-2xl shadow-2xl max-w-md w-[92vw] bg-white border border-black/[0.06]"
         :class="toastType === 'error' ? 'border-[#ff453a]/30' : ''"
         @click="dismissToast"
       >
         <span
-          class="w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+          class="w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5"
           :class="toastType === 'success' ? 'bg-[#30d158]/15 text-[#30d158]' : 'bg-[#ff453a]/15 text-[#ff453a]'"
         >
-          <svg v-if="toastType === 'success'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-if="toastType === 'success'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12" />
           </svg>
-          <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
         </span>
         <div class="flex-1 min-w-0">
-          <p class="text-[13px] font-semibold text-foreground leading-snug">{{ toastMessage }}</p>
-          <p v-if="toastDetail" class="text-[12px] text-foreground-muted mt-0.5 leading-snug">{{ toastDetail }}</p>
+          <p class="text-[14px] font-semibold text-foreground leading-snug">{{ toastMessage }}</p>
+          <p v-if="toastDetail" class="text-[13px] text-foreground-muted mt-0.5 leading-snug">{{ toastDetail }}</p>
         </div>
         <button class="text-foreground-muted/60 hover:text-foreground transition-colors shrink-0 mt-0.5">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
@@ -441,7 +442,14 @@ function handleSyncCompleted(data: any) {
   syncRunning.value = false
   const totalNew = data.total_new ?? 0
   const elapsed = data.elapsed ?? 0
-  if (totalNew > 0) {
+  const failed: string[] = data.failed ?? []
+  if (failed.length > 0) {
+    showToast(
+      `Sync incomplete — ${failed.length} star${failed.length > 1 ? 's' : ''} unreachable`,
+      `${totalNew} new title${totalNew === 1 ? '' : 's'} synced in ${elapsed}s; failed: ${failed.join(', ')}`,
+      'error'
+    )
+  } else if (totalNew > 0) {
     showToast(
       `${totalNew} new title${totalNew > 1 ? 's' : ''} added`,
       `Synced in ${elapsed}s`,

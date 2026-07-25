@@ -1,20 +1,20 @@
 <template>
   <nav class="max-w-7xl mx-auto px-4 sm:px-6">
-    <div class="flex items-center gap-2 py-3 overflow-x-auto scrollbar-hide">
+    <div class="flex items-center gap-2.5 py-3.5 overflow-x-auto scrollbar-hide">
       <a
         v-for="star in stars"
         :key="star.code"
         :href="`#star-${star.code.toLowerCase()}`"
-        class="shrink-0 px-4 py-1.5 rounded-full text-[13px] font-medium transition-all duration-200 border border-transparent"
+        class="shrink-0 px-5 py-2 rounded-full text-[15px] font-medium transition-all duration-200 border active:scale-[0.97]"
         :class="activeStar === star.code
-          ? 'bg-foreground text-white shadow-sm'
+          ? 'bg-foreground text-white shadow-sm border-transparent'
           : 'text-foreground-muted hover:text-foreground hover:bg-black/[0.04] border-black/[0.04]'"
         @click.prevent="scrollToStar(star.code)"
       >
         {{ star.name }}
         <span
           v-if="star.number"
-          class="ml-1 text-[10px]"
+          class="ml-1 text-[11px]"
           :class="activeStar === star.code ? 'text-white/70' : 'text-foreground-muted/60'"
         >
           #{{ star.number }}

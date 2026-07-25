@@ -76,33 +76,35 @@
           @mousemove="showControls"
           @touchstart="showControls"
         >
-          <!-- Progress bar -->
+          <!-- Progress bar — hit target taller than the visual bar (44px-ish touch zone) -->
           <div
             ref="progressBarRef"
-            class="relative h-1.5 sm:h-2 bg-white/15 rounded-full cursor-pointer group"
+            class="relative py-2.5 -my-2.5 cursor-pointer group"
             @click="onProgressClick"
           >
-            <div
-              v-for="(range, i) in bufferedRanges"
-              :key="i"
-              class="absolute h-full bg-white/25 rounded-full"
-              :style="{ left: range.start + '%', width: range.width + '%' }"
-            />
-            <div
-              class="absolute h-full bg-gradient-to-r from-[#ff375f] to-[#a855f7] rounded-full"
-              :style="{ width: progressPercent + '%' }"
-            />
-            <div
-              class="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-              :style="{ left: 'calc(' + progressPercent + '% - 7px)' }"
-            />
+            <div class="relative h-1.5 sm:h-2 bg-white/15 rounded-full">
+              <div
+                v-for="(range, i) in bufferedRanges"
+                :key="i"
+                class="absolute h-full bg-white/25 rounded-full"
+                :style="{ left: range.start + '%', width: range.width + '%' }"
+              />
+              <div
+                class="absolute h-full bg-[#ff375f] rounded-full"
+                :style="{ width: progressPercent + '%' }"
+              />
+              <div
+                class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
+                :style="{ left: 'calc(' + progressPercent + '% - 8px)' }"
+              />
+            </div>
           </div>
 
           <!-- Controls row -->
           <div class="flex items-center justify-between mt-3">
             <div class="flex items-center gap-3">
               <button
-                class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
+                class="w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-[0.97]"
                 @click="togglePlay"
               >
                 <svg v-if="!isPlaying" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -115,7 +117,7 @@
               </button>
 
               <button
-                class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
+                class="w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-[0.97]"
                 @click="toggleMute"
               >
                 <svg v-if="isMuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -130,13 +132,13 @@
                 </svg>
               </button>
 
-              <span class="text-xs text-white/90 font-mono tabular-nums">
+              <span class="text-[13px] text-white/90 font-mono tabular-nums">
                 {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
               </span>
             </div>
 
             <button
-              class="w-9 h-9 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-95"
+              class="w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center transition hover:bg-white/20 active:scale-[0.97]"
               @click="toggleFullscreen"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -157,7 +159,7 @@
           <div class="w-80 max-w-[85vw]">
             <div class="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
-                class="h-full bg-gradient-to-r from-[#ff375f] to-[#a855f7] rounded-full transition-all duration-500"
+                class="h-full bg-[#ff375f] rounded-full transition-all duration-500"
                 :style="{ width: Math.min(status?.progress || 0, 100) + '%' }"
               />
             </div>

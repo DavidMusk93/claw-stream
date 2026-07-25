@@ -2,16 +2,16 @@
   <div class="fixed bottom-4 right-4 z-50">
     <!-- Toggle button -->
     <button
-      class="w-12 h-12 rounded-full bg-white border border-black/[0.08] text-foreground flex items-center justify-center shadow-lg transition-all duration-200 active:scale-95 relative hover:border-black/20 hover:shadow-xl"
+      class="w-14 h-14 rounded-full bg-white border border-black/[0.08] text-foreground flex items-center justify-center shadow-lg transition-all duration-200 active:scale-[0.97] relative hover:border-black/20 hover:shadow-xl"
       @click="isOpen = !isOpen"
       title="Cache Manager"
     >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="17 8 12 3 7 8"/>
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
-      <span v-if="activeCount > 0" class="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#30d158] border-2 border-white shadow-[0_0_8px_rgba(48,209,88,0.4)]" />
+      <span v-if="activeCount > 0" class="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#30d158] border-2 border-white shadow-[0_0_8px_rgba(48,209,88,0.4)]" />
     </button>
 
     <!-- Panel -->
@@ -23,8 +23,8 @@
         <!-- Header -->
         <div class="p-4 border-b border-black/[0.06] flex items-center justify-between">
           <div>
-            <h3 class="font-semibold text-sm text-foreground">Cache Manager</h3>
-            <div class="text-[11px] text-foreground-muted mt-0.5">
+            <h3 class="font-semibold text-[15px] text-foreground tracking-tight">Cache Manager</h3>
+            <div class="text-[12px] text-foreground-muted mt-0.5">
               {{ items.length }} items · {{ activeCount }} active
             </div>
           </div>
@@ -34,7 +34,7 @@
               class="w-4 h-4 rounded-full border-2 border-black/[0.08] border-t-[#ff375f] animate-spin"
             />
             <div class="text-right">
-              <div class="text-xs text-foreground-muted font-mono tabular-nums">
+              <div class="text-[13px] text-foreground-muted font-mono tabular-nums">
                 {{ metrics?.used_human ?? '0 B' }} / {{ metrics?.max_human ?? '0 B' }}
               </div>
             </div>
@@ -42,7 +42,7 @@
         </div>
 
         <!-- Capacity bar -->
-        <div class="px-4 py-2 bg-[#F5F5F7] border-b border-black/[0.04]">
+        <div class="px-4 py-2.5 bg-[#F5F5F7] border-b border-black/[0.04]">
           <div class="h-1.5 bg-black/[0.06] rounded-full overflow-hidden">
             <div
               class="h-full rounded-full transition-all duration-500"
@@ -50,14 +50,14 @@
               :style="{ width: `${Math.min(usedPct, 100)}%` }"
             />
           </div>
-          <div class="mt-1 flex justify-between text-[10px] text-foreground-muted/70">
+          <div class="mt-1.5 flex justify-between text-[11px] text-foreground-muted/70">
             <span>{{ usedPct.toFixed(1) }}% used</span>
             <span>{{ metrics?.torrent_count ?? 0 }} torrents</span>
           </div>
         </div>
 
         <!-- Lane legend -->
-        <div class="px-4 py-2 bg-[#F2F2F7] border-b border-black/[0.04] flex items-center gap-3 text-[10px] text-foreground-muted/70 flex-wrap">
+        <div class="px-4 py-2.5 bg-[#F2F2F7] border-b border-black/[0.04] flex items-center gap-3 text-[11px] text-foreground-muted/70 flex-wrap">
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#10b981]" />Cached</span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#f59e0b]" />Downloading</span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-[#ef4444]" />Corrupt</span>
@@ -84,18 +84,18 @@
           >
             <!-- Row 1: code + tags -->
             <div class="flex items-center gap-2 mb-2">
-              <span v-if="item.number" class="text-[10px] text-foreground-muted font-mono">#{{ item.number }}</span>
-              <p class="text-[13px] font-semibold text-foreground truncate flex-1 min-w-0">
+              <span v-if="item.number" class="text-[11px] text-foreground-muted font-mono">#{{ item.number }}</span>
+              <p class="text-[14px] font-semibold text-foreground truncate flex-1 min-w-0">
                 {{ item.displayCode }}
               </p>
               <span
-                class="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium"
+                class="shrink-0 text-[11px] px-2 py-0.5 rounded-full font-medium"
                 :class="qualityClass(item)"
               >
                 {{ item.quality === 'HD' ? 'HD' : 'SD' }}
               </span>
               <span
-                class="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium"
+                class="shrink-0 text-[11px] px-2 py-0.5 rounded-full font-medium"
                 :class="stateClass(item)"
               >
                 {{ stateLabel(item) }}
@@ -103,7 +103,7 @@
             </div>
 
             <!-- Row 2: tier + peers + speed -->
-            <div class="flex items-center gap-2 mb-2 text-[10px] text-foreground-muted flex-wrap">
+            <div class="flex items-center gap-2 mb-2 text-[11px] text-foreground-muted flex-wrap">
               <span class="px-1.5 py-0.5 rounded-md bg-black/[0.05] text-foreground/50">{{ tierLabel(item) }}</span>
               <span v-if="item.peers > 0">{{ item.peers }} peers</span>
               <span v-if="item.download_rate > 0" class="text-[#30d158]">↓ {{ formatSpeed(item.download_rate) }}</span>
@@ -124,7 +124,7 @@
                   :title="`piece ${seg[0].toFixed(0)}%-${seg[1].toFixed(0)}%: ${laneLabel(seg[2])}`"
                 />
               </div>
-              <div class="mt-1 flex justify-between text-[10px] text-foreground-muted/50">
+              <div class="mt-1 flex justify-between text-[11px] text-foreground-muted/50">
                 <span>0%</span>
                 <span>piece map ({{ item.piece_segments.length }} segments)</span>
                 <span>100%</span>
@@ -132,7 +132,7 @@
             </div>
 
             <!-- Size row -->
-            <div class="flex items-center justify-between text-[10px] text-foreground-muted/60 mb-2">
+            <div class="flex items-center justify-between text-[11px] text-foreground-muted/60 mb-2">
               <span>{{ formatSize(item.local_size) }} / {{ formatSize(item.video_size) }}</span>
               <span class="font-mono">{{ item.hash.slice(0, 12) }}…</span>
             </div>
@@ -141,13 +141,13 @@
             <div class="flex gap-2">
               <button
                 v-if="!item.head_ready && item.progress < 99.9"
-                class="flex-1 text-[11px] bg-black/[0.06] hover:bg-black/[0.1] text-foreground py-1.5 rounded-lg transition-colors active:scale-95"
+                class="flex-1 text-[12px] font-medium bg-black/[0.06] hover:bg-black/[0.1] text-foreground py-2 rounded-lg transition-all active:scale-[0.97]"
                 @click="boostItem(item.hash)"
               >
                 Boost
               </button>
               <button
-                class="text-[11px] text-[#ff453a] hover:text-[#ff6961] px-3 py-1.5 rounded-lg bg-[#ff453a]/10 hover:bg-[#ff453a]/15 transition-colors active:scale-95"
+                class="text-[12px] font-medium text-[#ff453a] hover:text-[#ff6961] px-3 py-2 rounded-lg bg-[#ff453a]/10 hover:bg-[#ff453a]/15 transition-all active:scale-[0.97]"
                 @click="removeItem(item.hash)"
               >
                 Remove
@@ -159,10 +159,10 @@
         <!-- Footer -->
         <div class="p-3 border-t border-black/[0.06] flex gap-2 bg-[#F2F2F7]">
           <button
-            class="flex-1 text-xs flex items-center justify-center gap-1.5 bg-black/[0.06] hover:bg-black/[0.1] text-foreground py-2.5 rounded-xl transition-colors font-medium active:scale-95"
+            class="flex-1 text-[14px] flex items-center justify-center gap-1.5 bg-black/[0.06] hover:bg-black/[0.1] text-foreground py-3 rounded-xl transition-all font-medium active:scale-[0.97]"
             @click="refresh(true)"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="23 4 23 10 17 10"/>
               <polyline points="1 20 1 14 7 14"/>
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -170,7 +170,7 @@
             Refresh
           </button>
           <button
-            class="flex-1 text-xs bg-[#ff453a]/10 hover:bg-[#ff453a]/15 text-[#ff453a] py-2.5 rounded-xl transition-colors font-medium active:scale-95"
+            class="flex-1 text-[14px] bg-[#ff453a]/10 hover:bg-[#ff453a]/15 text-[#ff453a] py-3 rounded-xl transition-all font-medium active:scale-[0.97]"
             @click="clearAll"
           >
             Clear All
@@ -416,11 +416,11 @@ onUnmounted(() => {
 <style scoped>
 .slide-enter-active,
 .slide-leave-active {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .slide-enter-from,
 .slide-leave-to {
   opacity: 0;
-  transform: translateY(8px) scale(0.96);
+  transform: translateY(8px) scale(0.97);
 }
 </style>

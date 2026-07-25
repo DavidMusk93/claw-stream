@@ -4,7 +4,18 @@
 
 /* =============================================
    Apple Design System — Star Archive (Light)
+   Principles: response on pointer-down, spring
+   easing, size-specific tracking, materials for
+   floating chrome, generous whitespace.
    ============================================= */
+
+:root {
+  /* Spring-like easing (critically damped feel): fast attack, graceful settle */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Instant press feedback curve */
+  --ease-press: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --accent: #ff375f;
+}
 
 html {
   scroll-behavior: smooth;
@@ -14,6 +25,8 @@ html {
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
                'Helvetica Neue', 'Segoe UI', 'Inter', sans-serif;
+  font-size: 17px; /* Apple body size; components scale down from here */
+  line-height: 1.5;
   background: #F5F5F7;
   color: #1D1D1F;
   margin: 0;
@@ -22,6 +35,11 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
+}
+
+/* Size-specific tracking: large text tightens, small text opens up */
+h1, h2, h3, .tracking-display {
+  letter-spacing: -0.02em;
 }
 
 /* Hide scrollbar but keep scrollability */
@@ -45,14 +63,22 @@ body {
     background-color: rgba(255, 255, 255, 0.72);
   }
 
+  /* Press feedback — instant, on pointer-down, never only on release */
+  .pressable {
+    transition: transform 100ms var(--ease-press);
+  }
+  .pressable:active {
+    transform: scale(0.97);
+  }
+
   /* Media card — Apple TV / App Store style */
   .media-card {
     position: relative;
     border-radius: 16px;
     overflow: hidden;
     background: #FFFFFF;
-    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-                box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.25s var(--ease-spring),
+                box-shadow 0.25s var(--ease-spring);
   }
 
   .media-card:hover {
@@ -122,12 +148,46 @@ body {
   }
 
   .image-reveal {
-    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-                filter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.3s var(--ease-spring),
+                filter 0.3s var(--ease-spring);
   }
 
   .image-reveal:hover {
     transform: scale(1.02);
     filter: brightness(1.1) saturate(1.1);
+  }
+}
+
+/* =============================================
+   Reduced motion — gentler non-vestibular
+   equivalents: cross-fades instead of motion.
+   ============================================= */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.15s !important;
+    transition-property: opacity, color, background-color, border-color !important;
+  }
+  .pressable:active,
+  .media-card:hover,
+  .image-reveal:hover {
+    transform: none;
+  }
+}
+
+/* Reduced transparency — frostier/solid surfaces, no blur */
+@media (prefers-reduced-transparency: reduce) {
+  .system-glass,
+  .glass,
+  .glass-strong {
+    background-color: rgba(255, 255, 255, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }

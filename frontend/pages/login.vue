@@ -1,30 +1,15 @@
 <template>
-  <div
-    class="min-h-screen bg-void flex items-center justify-center px-6 relative overflow-hidden"
-    @mousemove="onMouseMove"
-  >
-    <!-- Ambient glow -->
-    <div
-      class="pointer-events-none absolute inset-0 opacity-40"
-      :style="{
-        background: `radial-gradient(600px circle at ${mouseX}px ${mouseY}px, rgba(225,29,72,0.15), transparent 60%)`
-      }"
-    />
-
-    <div class="w-full max-w-[340px] relative z-10">
+  <div class="min-h-screen bg-void flex items-center justify-center px-6 relative overflow-hidden">
+    <div class="w-full max-w-[380px] relative z-10">
       <!-- Logo area -->
       <div class="flex flex-col items-center mb-10">
-        <div
-          class="w-[72px] h-[72px] rounded-[22px] glass flex items-center justify-center mb-5 shadow-glass text-3xl"
-        >
-          🔒
-        </div>
+        <img src="/logo.svg" alt="Star Archive logo" class="w-[96px] h-[96px] mb-6 drop-shadow-sm" />
         <h1
-          class="text-[28px] font-semibold text-foreground tracking-[-0.02em]"
+          class="text-[32px] font-semibold text-foreground tracking-[-0.02em]"
         >
           Star Archive
         </h1>
-        <p class="text-sm text-foreground-muted mt-1.5 tracking-wide font-light">
+        <p class="text-[15px] text-foreground-muted mt-2 font-light">
           {{ randomGreeting }}
         </p>
       </div>
@@ -37,14 +22,14 @@
             v-model="password"
             :type="showPassword ? 'text' : 'password'"
             placeholder="🔑 Passcode"
-            class="w-full h-[50px] px-12 rounded-[14px] bg-black/[0.04] border border-black/[0.08] text-foreground text-[17px] text-center placeholder:text-foreground-muted/40 outline-none transition-all duration-200 focus:bg-black/[0.07] focus:border-rose/40 focus:shadow-[0_0_0_4px_rgba(225,29,72,0.1)]"
-            :class="{ 'border-rose/40 shadow-[0_0_0_4px_rgba(225,29,72,0.1)]': error }"
+            class="w-full h-[52px] px-12 rounded-[16px] bg-white border border-black/[0.08] text-foreground text-[17px] text-center placeholder:text-foreground-muted/40 outline-none transition-all duration-200 focus:border-[#ff375f]/50 focus:shadow-[0_0_0_4px_rgba(255,55,95,0.1)]"
+            :class="{ 'border-[#ff375f]/50 shadow-[0_0_0_4px_rgba(255,55,95,0.1)]': error }"
             @keydown.enter="submit"
           />
           <!-- Toggle visibility -->
           <button
             type="button"
-            class="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center text-foreground-muted/50 hover:text-foreground-muted transition-colors"
+            class="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-foreground-muted/50 hover:text-foreground-muted transition-colors"
             @click="showPassword = !showPassword"
           >
             {{ showPassword ? '🙈' : '👁️' }}
@@ -54,7 +39,7 @@
         <!-- Error message -->
         <p
           v-if="error"
-          class="text-[13px] text-rose text-center min-h-[1.25em] transition-all"
+          class="text-[14px] text-[#ff375f] text-center min-h-[1.25em] transition-all"
           :class="shake ? 'animate-shake' : ''"
         >
           {{ error }} 👻
@@ -64,15 +49,15 @@
         <!-- Enter button -->
         <button
           @click="submit"
-          class="w-full h-[50px] rounded-[14px] bg-gradient-to-r from-rose to-violet text-white text-[17px] font-medium tracking-wide transition-all duration-200 hover:brightness-110 active:scale-[0.97] active:opacity-90 shadow-glass hover:shadow-rose-glow flex items-center justify-center gap-2"
+          class="w-full h-[52px] rounded-[16px] bg-[#ff375f] text-white text-[17px] font-semibold transition-all duration-200 hover:brightness-110 active:scale-[0.97] flex items-center justify-center gap-2"
         >
           <span>🚀 Enter</span>
         </button>
       </div>
 
       <!-- Footer -->
-      <div class="h-8 flex items-center justify-center">
-        <span class="text-[11px] text-foreground-muted/30">{{ randomFooter }}</span>
+      <div class="h-10 flex items-center justify-center">
+        <span class="text-[12px] text-foreground-muted/40">{{ randomFooter }}</span>
       </div>
     </div>
   </div>
@@ -87,9 +72,6 @@ const showPassword = ref(false)
 const error = ref('')
 const shake = ref(false)
 const inputRef = ref<HTMLInputElement>()
-
-const mouseX = ref(0)
-const mouseY = ref(0)
 
 // Whimsical greetings rotation
 const greetings = [
@@ -112,11 +94,6 @@ const footers = [
   '🌙 It\'s late, keep it quiet',
 ]
 const randomFooter = footers[Math.floor(Math.random() * footers.length)]
-
-function onMouseMove(e: MouseEvent) {
-  mouseX.value = e.clientX
-  mouseY.value = e.clientY
-}
 
 function todayPassword(): string {
   const d = new Date()
