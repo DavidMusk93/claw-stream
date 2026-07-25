@@ -103,6 +103,9 @@ Only INSERT new titles; skip existing ones entirely:
 | **Large batch (> 20 new titles)** | `MAX_NEW_TITLES = 20` caps ingestion per star to avoid overwhelming the system |
 | **Cover download failure** | `upsert_title` and `write_batch` preserve existing `cover_b64`; missing new covers result in empty strings, not data loss |
 | **HTTP interception / Cloudflare** | No automatic fallback in the batch sync path; single-star background sync in `backend/routers/stars.py` still uses `PlaywrightFetcher` when needed |
+| **Star page fetch failure** | `fetch_star_page` re-raises; `run()` collects per-star failures and returns them in `{"results", "failed"}`. If **every** star page fails (e.g. source site unreachable), `run()` raises `RuntimeError` so the web UI reports a sync error instead of a fake "0 new titles / All caught up" success |
+| **Truncated page (HTTP 200 but incomplete)** | `fetch_star_page` validates integrity before parsing — the HTML must end with `</html>`, and when the DB already holds ≥ 4 titles for the star, a parse count below half of that is treated as a partial page. Truncated pages are retried up to `MAX_FETCH_ATTEMPTS = 3` times (backoff `FETCH_RETRY_DELAYS = (1s, 2s)`); a persistently truncated page raises `IncompletePageError` and lands in the `failed` list, never as a fake "no new titles". The count floor is skipped for paginated actress pages (`?page=2` links), which legitimately show only page 1 |
+| **Page parses to 0 titles** | Logged as a warning (possible layout change); treated as "no new titles" |
 
 ## 6. Implementation Plan
 

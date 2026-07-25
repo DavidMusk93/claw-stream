@@ -27,6 +27,7 @@ _sync_state: dict[str, Any] = {
     "started_at": None,
     "log_lines": [],
     "last_error": None,
+    "failed": [],
 }
 _sync_task: asyncio.Task[Any] | None = None
 
@@ -37,16 +38,20 @@ async def _run_sync_bg() -> None:
     async with _sync_lock:
         _sync_state["log_lines"] = []
         _sync_state["last_error"] = None
+        _sync_state["failed"] = []
         started_at = _sync_state["started_at"]
 
     try:
         from scrapers.v2.tasks.sync_titles import run as run_sync_titles
 
-        results = await run_sync_titles(CONFIG_PATH)
+        outcome = await run_sync_titles(CONFIG_PATH)
+        results = outcome["results"]
+        failed = outcome["failed"]
         log_lines = [f"{r.get('name', '?')}: {r.get('count', 0)} titles" for r in results]
         async with _sync_lock:
             _sync_state["log_lines"] = log_lines[-30:]
-        log.info("sync completed", extra={"lines": len(log_lines)})
+            _sync_state["failed"] = failed
+        log.info("sync completed", extra={"lines": len(log_lines), "failed": len(failed)})
         invalidate_stars_cache()
 
         # Broadcast completion via SSE
@@ -54,6 +59,7 @@ async def _run_sync_bg() -> None:
         await publish_event("sync.completed", {
             "log_lines": log_lines[-10:],
             "total_new": total_new,
+            "failed": [f["name"] for f in failed],
             "elapsed": round(time.time() - started_at, 1) if started_at else 0,
         })
     except Exception as e:
@@ -106,5 +112,6 @@ async def get_sync_status() -> dict[str, Any]:
             "started_at": _sync_state["started_at"],
             "elapsed": elapsed,
             "last_error": _sync_state["last_error"],
+            "failed": _sync_state.get("failed", []),
             "log_lines": _sync_state["log_lines"][-10:],
         }

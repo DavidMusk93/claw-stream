@@ -6,13 +6,28 @@ Diff-Sync architecture (first principle: update as fast as possible):
 3. In-memory diff: keep only new works
 4. Incremental cover download: only download covers for new works
 5. Incremental database write: only INSERT new works
+
+Failure semantics: a failed page fetch is NOT "no new titles". Fetch errors
+are collected per star; if every star page fails (e.g. source site
+unreachable), run() raises so callers report a sync error instead of a fake
+"0 new titles" success.
+
+Truncated-page semantics: the source site intermittently returns incomplete
+pages (HTTP 200 but the HTML stream is cut, or far fewer cards than the
+star actually has). Parsing such a fragment yields a fake "no new titles"
+diff. fetch_star_page() therefore validates page integrity (closing
+</html> tag, parsed-count floor vs. DB count) and retries before giving up;
+a persistently incomplete page is a fetch failure, not an empty title list.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
+from collections import Counter
+from typing import Any
 
 from core import get_logger
 from core import db
@@ -26,6 +41,14 @@ from scrapers.v2.cover_utils import download_covers_batch
 log = get_logger("sync-titles")
 
 MAX_NEW_TITLES = 20  # Max new titles processed per sync (prevent stars with too many works from overwhelming sync)
+
+MAX_FETCH_ATTEMPTS = 3  # Retries per star page before declaring the fetch failed
+FETCH_RETRY_DELAYS = (1.0, 2.0)  # Backoff between attempts (seconds); tests patch to zeros
+MIN_COUNT_CHECK_FLOOR = 4  # Only apply the parsed-count floor when DB count >= this
+
+
+class IncompletePageError(Exception):
+    """Page fetched with HTTP 200 but looks truncated (stream cut or partial card list)."""
 
 
 def _sort_key(item: VideoItem) -> str:
@@ -54,24 +77,61 @@ async def fetch_star_page(
     fetcher: HttpxFetcher,
     star: StarConfig,
     semaphore: asyncio.Semaphore,
+    min_expected: int = 0,
 ) -> list[VideoItem]:
-    """Fetch a single star's page and parse out a list of VideoItems."""
-    async with semaphore:
+    """Fetch a single star's page and parse out a list of VideoItems.
+
+    Retries up to MAX_FETCH_ATTEMPTS times when the page looks truncated:
+    the HTML stream lacks a closing </html> tag, or the parsed card count
+    falls below half of what the DB already holds for this star (the source
+    site intermittently serves partial pages with HTTP 200). The count
+    floor only applies to single-page listings — paginated actress pages
+    legitimately show only the first page's worth of cards.
+
+    Raises on persistent failure: an unreachable or truncated page is an
+    error, not an empty title list. Callers must handle the exception
+    explicitly.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
         try:
-            html = await fetcher.fetch(star.star_page_url)
+            async with semaphore:
+                html = await fetcher.fetch(star.star_page_url)
         except Exception as e:
-            log.error(f"fetch failed: {star.name}: {type(e).__name__}: {e}")
-            return []
+            last_err = e
+            log.warning(f"fetch failed (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: {type(e).__name__}: {e}")
+        else:
+            if not html.rstrip().endswith("</html>"):
+                last_err = IncompletePageError("missing closing </html> tag")
+                log.warning(f"truncated page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: no </html>, len={len(html)}")
+            else:
+                extractor = IJavTorrentExtractor()
+                raw_items = extractor.extract(html)
+                items = _dedup(raw_items)
+                log.info(f"{star.name}: {len(raw_items)} raw → {len(items)} dedup")
+                paginated = re.search(r'href="[^"]*\?page=2"', html) is not None
+                if not paginated and min_expected >= MIN_COUNT_CHECK_FLOOR and len(items) < min_expected / 2:
+                    last_err = IncompletePageError(
+                        f"parsed {len(items)} titles, DB holds {min_expected} (partial page?)"
+                    )
+                    log.warning(f"truncated page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: {last_err}")
+                else:
+                    if not items:
+                        log.warning(f"{star.name}: page fetched but 0 titles parsed (layout change or empty page?)")
+                    return items
+        if attempt < MAX_FETCH_ATTEMPTS:
+            await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
+    log.error(f"fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
+    raise last_err
 
-    extractor = IJavTorrentExtractor()
-    raw_items = extractor.extract(html)
-    items = _dedup(raw_items)
-    log.info(f"{star.name}: {len(raw_items)} raw → {len(items)} dedup")
-    return items
 
+async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> dict[str, Any]:
+    """Main entry: read config, concurrently sync all stars.
 
-async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> list[dict]:
-    """Main entry: read config, concurrently sync all stars"""
+    Returns {"results": per-star sync summaries, "failed": per-star fetch
+    failures}. Raises RuntimeError when every star page fetch fails — a total
+    outage must surface as a sync error, not as "0 new titles".
+    """
     t_total = time.perf_counter()
 
     with open(config_path, encoding="utf-8") as f:
@@ -103,10 +163,19 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
 
     # 3. Concurrently fetch all star pages (pure HTTP, no browser overhead)
     t0 = time.perf_counter()
+    # Per-star DB title counts: floor for the truncated-page check. A page
+    # parsing to less than half of the DB count is a partial page, retry it.
+    expected_counts = Counter(star_id for star_id, _ in existing_codes)
     async with HttpxFetcher() as fetcher:
         sem = asyncio.Semaphore(fetch_concurrency)
         page_results = await asyncio.gather(
-            *[fetch_star_page(fetcher, star, sem) for star in stars],
+            *[
+                fetch_star_page(
+                    fetcher, star, sem,
+                    min_expected=expected_counts.get(star_id_map[star.code], 0),
+                )
+                for star in stars
+            ],
             return_exceptions=True,
         )
     t1 = time.perf_counter()
@@ -115,10 +184,15 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     # 4. Diff: new works + existing works with missing metadata
     sync_batches: list[tuple[int, str, list[VideoItem]]] = []
     all_sync_items: list[VideoItem] = []
+    failed: list[dict[str, str]] = []
 
     for star, page_result in zip(stars, page_results):
         if isinstance(page_result, Exception):
             log.error(f"page fetch exception for {star.name}: {page_result}")
+            failed.append({
+                "name": star.name,
+                "error": f"{type(page_result).__name__}: {page_result}",
+            })
             continue
 
         star_id = star_id_map[star.code]
@@ -141,6 +215,16 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
             log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill")
         else:
             log.info(f"{star.name}: no new titles")
+
+    # A total fetch failure means nothing was synced at all — surface it as an
+    # error instead of reporting a fake "0 new titles" success.
+    if stars and len(failed) == len(stars):
+        raise RuntimeError(
+            f"all {len(stars)} star page fetches failed: {failed[0]['error']}"
+        )
+    if failed:
+        log.warning(f"{len(failed)}/{len(stars)} star pages failed to fetch: "
+                    f"{', '.join(f['name'] for f in failed)}")
 
     # 5. Incremental cover download: only download covers for works we will write
     cover_map: dict[str, str] = {}
@@ -181,9 +265,9 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> l
     for _, name, count in rows:
         log.info(f"{name}: {count} titles")
         total += count
-    log.info(f"sync complete: {total_new} new, {total_updated} backfill, {total} total titles | total elapsed={(time.perf_counter() - t_total) * 1000:.1f}ms")
+    log.info(f"sync complete: {total_new} new, {total_updated} backfill, {total} total titles, {len(failed)} fetch failed | total elapsed={(time.perf_counter() - t_total) * 1000:.1f}ms")
 
-    return clean
+    return {"results": clean, "failed": failed}
 
 
 def _query_stats(conn=None):
@@ -219,11 +303,12 @@ async def sync_star(
         code=star.code,
     )
 
-    items = await fetch_star_page(fetcher, star, semaphore)
+    existing_codes = await db_write(db.load_all_title_codes)
+    min_expected = sum(1 for sid, _ in existing_codes if sid == star_id)
+    items = await fetch_star_page(fetcher, star, semaphore, min_expected=min_expected)
     if not items:
         return {"name": star.name, "count": 0, "titles": []}
 
-    existing_codes = await db_write(db.load_all_title_codes)
     new_items = [it for it in items if (star_id, it.code) not in existing_codes]
 
     if len(new_items) > MAX_NEW_TITLES:
