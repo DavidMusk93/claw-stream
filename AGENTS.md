@@ -42,6 +42,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
 - **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` are served as static files by Caddy; `/api/cover/{code}` falls back to the DB blob and backfills disk.
 - **Upload bandwidth cap**: libtorrent `upload_rate_limit = 2 MB/s` to reserve bandwidth for HTTP streaming.
+- **Diff-Sync source: sukebei.nyaa.si RSS**: title sync queries per-star RSS search (query fallback `sync_query` → `name` → `jp`), capped concurrency + 429 back-off. Legacy source ijavtorrent lost most of its catalog in 2026-08. See `docs/design/diff-sync-design.md`.
 - **Auth on all API routers**: every router except `/api/auth` and `/api/test` uses `Depends(require_auth)` (cookie `claw_auth=ok`).
 
 ### 1.3 Core Components
@@ -269,7 +270,7 @@ systemctl reload caddy-claw
 | `tests/test_regression_video_stream.py` | Video stream pipeline regression (hole false-positives, memory explosion, finished deadlock) | Based on `local_bt_fixture` local BT seed |
 | `tests/test_torrent_engine_arch.py` | TorrentEngine architecture tests (bootstrap-first, cache-warming) | No real download, uses mock |
 | `tests/test_disk_truth_source.py` | "Disk is the single source of truth" regression (mocked libtorrent handle) | No network |
-| `tests/test_diff_sync.py` | Diff-Sync incremental sync regression (HTTP fetch instead of Playwright, diff filtering, incremental covers, truncated-page retry) | Mocked fetcher |
+| `tests/test_diff_sync.py` | Diff-Sync incremental sync regression (sukebei RSS fetch, diff filtering, incremental covers, truncated-RSS/429 retry) | Mocked fetcher |
 | `tests/conftest.py` | Shared fixtures (`local_seed`, `real_video_engine`) | Local BT seed |
 | `tests/local_bt_fixture.py` + `tests/fixtures/` | Local seeder fixture (`test_video.mp4` + `test_video.torrent`) | — |
 | `backend/regression/test_piece_tracker.py` | Internal piece tracker regression | — |

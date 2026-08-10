@@ -97,11 +97,13 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
     """Download cover, prefer HD sources: DMM CDN → given URL → return base64 data URI or empty"""
     tried: set[str] = set()
 
-    # 1. DMM CDN
+    # 1. DMM CDN — try both the bare code and the "118" maker prefix
     if code:
         c = code.lower().replace("-", "")
-        dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
-        if dmm_url not in tried:
+        for dmm_code in (c, f"118{c}"):
+            dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{dmm_code}/{dmm_code}pl.jpg"
+            if dmm_url in tried:
+                continue
             tried.add(dmm_url)
             try:
                 async with HttpxFetcher() as fetcher:
@@ -139,11 +141,14 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
     """Reuse fetcher client to download a single cover, return base64 data URI or empty"""
     tried: set[str] = set()
 
-    # 1. DMM CDN
+    # 1. DMM CDN — some makers (e.g. Prestige) use a numeric product-id
+    # prefix ("118abf367") instead of the bare code, so try both.
     if code:
         c = code.lower().replace("-", "")
-        dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{c}/{c}pl.jpg"
-        if dmm_url not in tried:
+        for dmm_code in (c, f"118{c}"):
+            dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{dmm_code}/{dmm_code}pl.jpg"
+            if dmm_url in tried:
+                continue
             tried.add(dmm_url)
             try:
                 data = await fetcher.fetch_bytes(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})

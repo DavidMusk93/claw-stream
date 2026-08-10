@@ -56,3 +56,5 @@ class StarConfig(BaseModel):
     star_page_url: str = ""
     type: str = "solo"
     note: str = ""
+    jp: str = ""            # Romaji name (present in config.json)
+    sync_query: str = ""    # Optional override for the sukebei RSS search query

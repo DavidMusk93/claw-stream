@@ -4,6 +4,9 @@ Verify core assumptions:
 1. HTTP fetching replaces Playwright, 10x+ speedup
 2. Diff logic is correct: existing works are filtered, only new works are kept
 3. Incremental cover download: only process new works
+
+Sync source: sukebei.nyaa.si RSS search (ijavtorrent lost most of its
+catalog in 2026-08 and can no longer serve as the sync source).
 """
 
 from __future__ import annotations
@@ -11,129 +14,277 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+import urllib.parse
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
+from scrapers.v2.extractors import SukebeiRssExtractor
 from scrapers.v2.tasks import sync_titles
-from scrapers.v2.tasks.sync_titles import fetch_star_page, run
+from scrapers.v2.tasks.sync_titles import fetch_star_rss, run
 from scrapers.v2.schemas import VideoItem, StarConfig
 
 
-@pytest.mark.asyncio
-async def test_fetch_star_page_uses_http():
-    """Verify fetch_star_page accepts HttpxFetcher (pure HTTP), no browser needed."""
-    mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(
-        return_value=(
-            '<html><body><div class="video-item">'
-            '<a href="/movie/test-001-12345"><img alt="TEST-001 sample"/></a>'
-            '</div></body></html>'
-        )
+@pytest.fixture(autouse=True)
+def _no_request_pacing(monkeypatch):
+    """Tests must not pay the real sukebei request-pacing delay."""
+    monkeypatch.setattr(sync_titles, "RSS_REQUEST_INTERVAL", 0.0)
+
+
+# ── RSS fixtures ───────────────────────────────────────────────────────
+
+_PUBDATE = "Tue, 28 Jul 2026 14:15:28 -0000"
+
+
+def _item(
+    title: str,
+    info_hash: str = "a" * 40,
+    seeders: int = 5,
+    leechers: int = 2,
+    downloads: int = 100,
+    size: str = "3.6 GiB",
+    pubdate: str = _PUBDATE,
+) -> str:
+    return (
+        f"<item><title>{title}</title><pubDate>{pubdate}</pubDate>"
+        f"<nyaa:seeders>{seeders}</nyaa:seeders>"
+        f"<nyaa:leechers>{leechers}</nyaa:leechers>"
+        f"<nyaa:downloads>{downloads}</nyaa:downloads>"
+        f"<nyaa:infoHash>{info_hash}</nyaa:infoHash>"
+        f"<nyaa:size>{size}</nyaa:size></item>"
     )
 
-    star = StarConfig(
-        name="Test Star",
-        code="TEST-001",
-        star_page_url="https://example.com/test",
+
+def _rss(*items: str) -> str:
+    return (
+        '<rss xmlns:nyaa="https://sukebei.nyaa.si/xmlns/nyaa" version="2.0">'
+        f"<channel>{''.join(items)}</channel></rss>"
     )
+
+
+_FULL_RSS = _rss(_item("TEST-001 Test Star sample title"))
+
+_EMPTY_RSS = _rss()
+
+
+def _rss_url(query: str) -> str:
+    return sync_titles.SUKEBEI_RSS_URL.format(q=urllib.parse.quote(query))
+
+
+# ── fetch_star_rss basics ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_rss_uses_http():
+    """Verify fetch_star_rss accepts HttpxFetcher (pure HTTP), no browser needed."""
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=_FULL_RSS)
+
+    star = StarConfig(name="Test Star", code="TEST-001")
     sem = asyncio.Semaphore(1)
 
-    result = await fetch_star_page(mock_fetcher, star, sem)
+    result = await fetch_star_rss(mock_fetcher, star, sem)
     assert len(result) == 1
     assert result[0].code == "TEST-001"
-    mock_fetcher.fetch.assert_called_once_with("https://example.com/test")
+    mock_fetcher.fetch.assert_called_once_with(_rss_url("Test Star"))
 
 
-# ── Truncated-page retry regression ──────────────────────────────────
-# ijavtorrent intermittently serves incomplete pages (HTTP 200, HTML cut
-# or partial card list). Parsing the fragment produced fake "no new
-# titles" syncs (夢実かなえ MFYD-159 incident). fetch_star_page must
-# detect and retry, and raise if the page never completes.
-
-_FULL_PAGE = (
-    '<html><body><div class="video-item">'
-    '<a href="/movie/test-001-12345"><img alt="TEST-001 sample"/></a>'
-    '</div></body></html>'
-)
+# ── Truncated-RSS retry regression ─────────────────────────────────────
+# A truncated (no </rss>) or unparseable RSS body must be retried, and a
+# persistently bad response is a fetch failure, never an empty list —
+# same failure semantics as the old ijavtorrent truncated-page guard.
 
 
 @pytest.mark.asyncio
-async def test_fetch_star_page_retries_truncated_html(monkeypatch):
-    """HTML without a closing </html> tag is truncated: retry, then succeed."""
+async def test_fetch_star_rss_retries_truncated_body(monkeypatch):
+    """RSS without a closing </rss> tag is truncated: retry, then succeed."""
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     mock_fetcher = AsyncMock()
     mock_fetcher.fetch = AsyncMock(
-        side_effect=['<html><body><div class="video-item">', _FULL_PAGE]
+        side_effect=['<rss version="2.0"><channel><item>', _FULL_RSS]
     )
 
-    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
-    result = await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+    star = StarConfig(name="Test Star", code="TEST-001")
+    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
 
     assert len(result) == 1
     assert mock_fetcher.fetch.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_fetch_star_page_raises_on_persistent_truncation(monkeypatch):
-    """A page that never completes is a fetch failure, not an empty list."""
+async def test_fetch_star_rss_raises_on_persistent_truncation(monkeypatch):
+    """A response that never completes is a fetch failure, not an empty list."""
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(return_value='<html><body><div class="video-item">')
+    mock_fetcher.fetch = AsyncMock(return_value='<rss version="2.0"><channel><item>')
 
-    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    star = StarConfig(name="Test Star", code="TEST-001")
     with pytest.raises(sync_titles.IncompletePageError):
-        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
     assert mock_fetcher.fetch.call_count == sync_titles.MAX_FETCH_ATTEMPTS
 
 
 @pytest.mark.asyncio
-async def test_fetch_star_page_retries_low_count_vs_db(monkeypatch):
-    """Parsed count far below the DB count means a partial page: retry."""
+async def test_fetch_star_rss_raises_when_all_queries_empty(monkeypatch):
+    """Zero usable items across every query variant is a failure, not 'no new titles'."""
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(return_value=_FULL_PAGE)  # only 1 card, DB holds 30
+    mock_fetcher.fetch = AsyncMock(return_value=_EMPTY_RSS)
 
-    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    star = StarConfig(name="NoHit Star", code="TEST-001", jp="NoHit")
     with pytest.raises(sync_titles.IncompletePageError):
-        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1), min_expected=30)
-    assert mock_fetcher.fetch.call_count == sync_titles.MAX_FETCH_ATTEMPTS
+        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    # 2 query variants × MAX_FETCH_ATTEMPTS
+    assert mock_fetcher.fetch.call_count == 2 * sync_titles.MAX_FETCH_ATTEMPTS
 
 
 @pytest.mark.asyncio
-async def test_fetch_star_page_count_floor_not_applied_to_small_catalogs():
-    """Stars below the floor skip the count check (site may legitimately list few)."""
+async def test_fetch_star_rss_query_fallback_to_jp():
+    """If the name query yields nothing, the jp romaji query is tried next."""
     mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(return_value=_FULL_PAGE)
 
-    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
-    result = await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1), min_expected=3)
+    async def _fetch(url: str) -> str:
+        if urllib.parse.quote("Test Star") in url:
+            return _EMPTY_RSS
+        return _rss(_item("TEST-001 TestStar romaji hit"))
+
+    mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
+
+    star = StarConfig(name="Test Star", code="TEST-001", jp="TestStar")
+    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
 
     assert len(result) == 1
-    mock_fetcher.fetch.assert_called_once()
+    assert result[0].code == "TEST-001"
+    assert mock_fetcher.fetch.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_fetch_star_page_count_floor_skipped_for_paginated_pages():
-    """Paginated actress pages legitimately show only page 1: no count check."""
-    paginated_page = _FULL_PAGE.replace(
-        "</body>", '<a href="/actress/test-star-1?page=2">2</a></body>'
+async def test_fetch_star_rss_sync_query_takes_precedence():
+    """sync_query overrides the default name/jp queries."""
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=_FULL_RSS)
+
+    star = StarConfig(name="Test Star", code="TEST-001", sync_query="Test Star")
+    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+
+    assert len(result) == 1
+    mock_fetcher.fetch.assert_called_once_with(_rss_url("Test Star"))
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_rss_raises_on_fetch_failure(monkeypatch):
+    """fetch_star_rss must propagate fetch exceptions, not return []."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(side_effect=TimeoutError("boom"))
+
+    star = StarConfig(name="Test Star", code="TEST-001")
+
+    with pytest.raises(TimeoutError):
+        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_rss_backs_off_on_429(monkeypatch):
+    """HTTP 429 from sukebei triggers a long back-off, then the retry succeeds."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    monkeypatch.setattr(sync_titles, "RATE_LIMIT_RETRY_DELAY", 0.0)
+    req = httpx.Request("GET", "https://x.test")
+    err = httpx.HTTPStatusError(
+        "too many", request=req, response=httpx.Response(429, request=req)
     )
     mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(return_value=paginated_page)
+    mock_fetcher.fetch = AsyncMock(side_effect=[err, _FULL_RSS])
 
-    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
-    result = await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1), min_expected=200)
+    star = StarConfig(name="Test Star", code="TEST-001")
+    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
 
     assert len(result) == 1
-    mock_fetcher.fetch.assert_called_once()
+    assert mock_fetcher.fetch.call_count == 2
+
+
+# ── SukebeiRssExtractor unit tests ─────────────────────────────────────
+
+
+def test_extractor_groups_multiple_torrents_per_code():
+    """Multiple torrent rows of the same work become MagnetCandidates of one VideoItem."""
+    rss = _rss(
+        _item("[FHDC][UN] ABF-358 究極のぬるぬるオーガズム 涼森れむ", info_hash="b" * 40, seeders=10),
+        _item("ABF-358 究極のぬるぬるオーガズム 涼森れむ", info_hash="c" * 40, seeders=3, size="5.2 GiB"),
+        _item("ABF-367 涼森れむの「顔」で、ヌく。", info_hash="d" * 40),
+    )
+    items = SukebeiRssExtractor().extract(rss, star_names={"涼森れむ"})
+
+    by_code = {it.code: it for it in items}
+    assert set(by_code) == {"ABF-358", "ABF-367"}
+    assert len(by_code["ABF-358"].magnets) == 2
+    assert by_code["ABF-358"].all_magnet_urls == [m.magnet for m in by_code["ABF-358"].magnets]
+    # Leading [tag] prefixes and the code are stripped from the work title
+    assert by_code["ABF-358"].title == "究極のぬるぬるオーガズム 涼森れむ"
+    # hhd800-priority sort from ijavtorrent does not apply; order is preserved
+    assert "urn:btih:" + "b" * 40 in by_code["ABF-358"].magnets[0].magnet
+
+
+def test_extractor_parses_metadata_fields():
+    """Resolution, size conversion, seed/leech, downloads→likes, pubDate→release_date."""
+    rss = _rss(
+        _item(
+            "[FHDC][UN] ABF-358 究極のぬるぬるオーガズム 涼森れむ",
+            seeders=49, leechers=127, downloads=18337, size="10.1 GiB",
+        )
+    )
+    (it,) = SukebeiRssExtractor().extract(rss, star_names={"涼森れむ"})
+
+    m = it.magnets[0]
+    assert m.resolution == "[FHDC]"
+    assert m.size == "10.1GB"
+    assert m.seed == 49
+    assert m.leech == 127
+    assert it.likes == 18337
+    assert it.release_date == "28/07/2026"
+    assert it.views is None
+    assert m.magnet.startswith("magnet:?xt=urn:btih:" + "a" * 40)
+    assert "tr=" in m.magnet  # public trackers appended
+
+
+def test_extractor_drops_noise_without_star_name():
+    """RSS search is full-text: items not mentioning the star are dropped."""
+    rss = _rss(
+        _item("ABF-358 涼森れむ good hit"),
+        _item("ABF-359 totally unrelated title"),
+    )
+    items = SukebeiRssExtractor().extract(rss, star_names={"涼森れむ"})
+
+    assert [it.code for it in items] == ["ABF-358"]
+
+
+def test_extractor_case_insensitive_ascii_name_match():
+    """Romaji star names match titles case-insensitively."""
+    rss = _rss(_item("SNOS-177 something Miru does"))
+    items = SukebeiRssExtractor().extract(rss, star_names={"miru"})
+
+    assert [it.code for it in items] == ["SNOS-177"]
+
+
+def test_extractor_skips_prefix_blacklist_and_missing_hash():
+    """SKIP_CODE_PREFIXES and items without infoHash are excluded."""
+    rss = _rss(
+        _item("OAE-123 涼森れむ blacklisted prefix"),
+        "<item><title>ABF-358 涼森れむ no hash</title></item>",
+    )
+    items = SukebeiRssExtractor().extract(rss, star_names={"涼森れむ"})
+
+    assert items == []
+
+
+# ── Diff logic (source-independent) ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_diff_logic_filters_existing():
     """Verify diff logic: existing works are filtered, only new works are kept."""
-    # Simulate page returning 3 works
+    # Simulate source returning 3 works
     items = [
         VideoItem(code="NEW-001", title="New 1", release_date="01/01/2026"),
         VideoItem(code="OLD-001", title="Old 1", release_date="01/01/2025"),
@@ -162,12 +313,12 @@ def test_http_vs_playwright_speed():
     async def _bench():
         t0 = time.perf_counter()
         async with HttpxFetcher() as fetcher:
-            html = await fetcher.fetch("https://ijavtorrent.com/actress/miu-shiromine-21671")
+            rss = await fetcher.fetch(_rss_url("miru"))
         elapsed = (time.perf_counter() - t0) * 1000
-        return elapsed, len(html)
+        return elapsed, len(rss)
 
-    elapsed, html_len = asyncio.run(_bench())
-    print(f"\nHTTP fetch: {elapsed:.1f}ms, {html_len} bytes")
+    elapsed, rss_len = asyncio.run(_bench())
+    print(f"\nHTTP fetch: {elapsed:.1f}ms, {rss_len} bytes")
 
     # Assertion: HTTP fetch should complete within 3 seconds
     assert elapsed < 3000, f"HTTP fetch too slow: {elapsed:.1f}ms"
@@ -176,7 +327,7 @@ def test_http_vs_playwright_speed():
 @pytest.mark.asyncio
 async def test_sync_batches_only_new_items():
     """Verify sync_batches only contains new works, not existing ones."""
-    # Simulate page results
+    # Simulate fetch results
     page_results = [
         [
             VideoItem(code="A-001", title="A1"),
@@ -229,32 +380,13 @@ async def test_incremental_cover_download():
     assert cover_items[1] == ("NEW-002", "https://example.com/2.jpg")
 
 
-# ── Failure-semantics regression ─────────────────────────────────────
-# A failed page fetch is NOT "no new titles": total outages must raise,
-# partial outages must be reported in the run() result. Prevents the fake
-# "0 new titles / All caught up" success seen when the source site is
-# unreachable (sync-titles.log ConnectTimeout incident).
-
-
-@pytest.mark.asyncio
-async def test_fetch_star_page_raises_on_fetch_failure(monkeypatch):
-    """fetch_star_page must propagate fetch exceptions, not return []."""
-    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
-    mock_fetcher = AsyncMock()
-    mock_fetcher.fetch = AsyncMock(side_effect=TimeoutError("boom"))
-
-    star = StarConfig(
-        name="Test Star",
-        code="TEST-001",
-        star_page_url="https://example.com/test",
-    )
-
-    with pytest.raises(TimeoutError):
-        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+# ── Failure-semantics regression ───────────────────────────────────────
+# A failed RSS fetch is NOT "no new titles": total outages must raise,
+# partial outages must be reported in the run() result.
 
 
 class _StubFetcher:
-    """HttpxFetcher stand-in: maps url -> html string or Exception."""
+    """HttpxFetcher stand-in: maps url -> rss string or Exception."""
 
     def __init__(self, behavior: dict):
         self._behavior = behavior
@@ -291,18 +423,18 @@ def _write_config(tmp_path, stars: list[StarConfig]) -> str:
 
 @pytest.mark.asyncio
 async def test_run_raises_when_all_fetches_fail(tmp_path, monkeypatch):
-    """Total outage: every star page fetch fails -> run() must raise."""
+    """Total outage: every star RSS fetch fails -> run() must raise."""
     stars = [
-        StarConfig(name="Star A", code="STAR-A", star_page_url="https://x.test/a"),
-        StarConfig(name="Star B", code="STAR-B", star_page_url="https://x.test/b"),
+        StarConfig(name="Star A", code="STAR-A"),
+        StarConfig(name="Star B", code="STAR-B"),
     ]
-    behavior = {s.star_page_url: TimeoutError("connect timeout") for s in stars}
+    behavior = {_rss_url(s.name): TimeoutError("connect timeout") for s in stars}
 
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     monkeypatch.setattr(sync_titles, "db_write", _stub_db_write)
     monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
 
-    with pytest.raises(RuntimeError, match="all 2 star page fetches failed"):
+    with pytest.raises(RuntimeError, match="all 2 star rss fetches failed"):
         await run(_write_config(tmp_path, stars))
 
 
@@ -310,12 +442,12 @@ async def test_run_raises_when_all_fetches_fail(tmp_path, monkeypatch):
 async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     """Partial outage: failed stars are reported; good stars still sync."""
     stars = [
-        StarConfig(name="Bad Star", code="STAR-A", star_page_url="https://x.test/a"),
-        StarConfig(name="Good Star", code="STAR-B", star_page_url="https://x.test/b"),
+        StarConfig(name="Bad Star", code="STAR-A"),
+        StarConfig(name="Good Star", code="STAR-B"),
     ]
     behavior = {
-        "https://x.test/a": TimeoutError("connect timeout"),
-        "https://x.test/b": "<html>ok</html>",
+        _rss_url("Bad Star"): TimeoutError("connect timeout"),
+        _rss_url("Good Star"): _rss(_item("SB-001 Good Star fresh title")),
     }
 
     class _StubSink:
@@ -331,13 +463,6 @@ async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     monkeypatch.setattr(sync_titles, "db_write", _stub_db_write)
     monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
-    monkeypatch.setattr(
-        sync_titles,
-        "IJavTorrentExtractor",
-        lambda: SimpleNamespace(
-            extract=lambda html: [VideoItem(code="B-001", title="B1")]
-        ),
-    )
     monkeypatch.setattr(sync_titles, "download_covers_batch", _stub_covers)
     monkeypatch.setattr(sync_titles, "TitleSyncSink", _StubSink)
 

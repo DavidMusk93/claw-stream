@@ -2,38 +2,44 @@
 
 Diff-Sync architecture (first principle: update as fast as possible):
 1. Batch upsert stars + preload all existing title codes (memory set)
-2. Pure HTTP concurrent fetching of star pages (HttpxFetcher, no browser overhead)
+2. Pure HTTP concurrent fetching of per-star sukebei RSS searches (HttpxFetcher, no browser overhead)
 3. In-memory diff: keep only new works
 4. Incremental cover download: only download covers for new works
 5. Incremental database write: only INSERT new works
 
-Failure semantics: a failed page fetch is NOT "no new titles". Fetch errors
-are collected per star; if every star page fails (e.g. source site
-unreachable), run() raises so callers report a sync error instead of a fake
-"0 new titles" success.
+Source: sukebei.nyaa.si RSS search (`?page=rss&q={name}&s=id&o=desc`), the
+upstream origin of the torrents. The previous source, ijavtorrent.com,
+lost most of its catalog in 2026-08 (actress pages and site search
+silently dropped titles, e.g. ABF-338), making every star page fail the
+truncated-page integrity check permanently. RSS exposes structured
+metadata (infoHash, seeders, size, downloads, pubDate) — no HTML scraping.
 
-Truncated-page semantics: the source site intermittently returns incomplete
-pages (HTTP 200 but the HTML stream is cut, or far fewer cards than the
-star actually has). Parsing such a fragment yields a fake "no new titles"
-diff. fetch_star_page() therefore validates page integrity (closing
-</html> tag, parsed-count floor vs. DB count) and retries before giving up;
-a persistently incomplete page is a fetch failure, not an empty title list.
+Failure semantics: a failed RSS fetch is NOT "no new titles". Fetch errors
+are collected per star; if every star fetch fails (e.g. source site
+unreachable), run() raises so callers report a sync error instead of a fake
+"0 new titles" success. A star whose every query variant returns zero
+usable items is also a failure, never an empty title list.
+
+Truncated-response semantics: an RSS body without a closing </rss> tag or
+with unparseable XML is retried before giving up (MAX_FETCH_ATTEMPTS).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
-from collections import Counter
+import urllib.parse
+import xml.etree.ElementTree as ET
 from typing import Any
+
+import httpx
 
 from core import get_logger
 from core import db
 from core.db.write_queue import db_write
 from scrapers.v2.fetchers import HttpxFetcher
-from scrapers.v2.extractors import IJavTorrentExtractor
+from scrapers.v2.extractors import SukebeiRssExtractor
 from scrapers.v2.sinks import TitleSyncSink
 from scrapers.v2.schemas import VideoItem, StarConfig
 from scrapers.v2.cover_utils import download_covers_batch
@@ -42,9 +48,13 @@ log = get_logger("sync-titles")
 
 MAX_NEW_TITLES = 20  # Max new titles processed per sync (prevent stars with too many works from overwhelming sync)
 
-MAX_FETCH_ATTEMPTS = 3  # Retries per star page before declaring the fetch failed
+MAX_FETCH_ATTEMPTS = 3  # Retries per star before declaring the fetch failed
 FETCH_RETRY_DELAYS = (1.0, 2.0)  # Backoff between attempts (seconds); tests patch to zeros
-MIN_COUNT_CHECK_FLOOR = 4  # Only apply the parsed-count floor when DB count >= this
+RATE_LIMIT_RETRY_DELAY = 10.0  # Backoff after an HTTP 429 from sukebei
+RSS_MAX_CONCURRENCY = 2  # sukebei rate-limits aggressive bursts (429); keep it polite
+RSS_REQUEST_INTERVAL = 0.5  # Min seconds between RSS requests (held under the semaphore)
+
+SUKEBEI_RSS_URL = "https://sukebei.nyaa.si/?page=rss&q={q}&c=0_0&f=0&s=id&o=desc"
 
 
 class IncompletePageError(Exception):
@@ -73,55 +83,70 @@ def _dedup(items: list[VideoItem]) -> list[VideoItem]:
     return unique
 
 
-async def fetch_star_page(
+async def fetch_star_rss(
     fetcher: HttpxFetcher,
     star: StarConfig,
     semaphore: asyncio.Semaphore,
-    min_expected: int = 0,
 ) -> list[VideoItem]:
-    """Fetch a single star's page and parse out a list of VideoItems.
+    """Fetch a single star's sukebei RSS search and parse out VideoItems.
 
-    Retries up to MAX_FETCH_ATTEMPTS times when the page looks truncated:
-    the HTML stream lacks a closing </html> tag, or the parsed card count
-    falls below half of what the DB already holds for this star (the source
-    site intermittently serves partial pages with HTTP 200). The count
-    floor only applies to single-page listings — paginated actress pages
-    legitimately show only the first page's worth of cards.
+    Query fallback order: sync_query → name → jp; the first query yielding
+    usable items wins. Retries up to MAX_FETCH_ATTEMPTS times when the RSS
+    body is truncated (no closing </rss> tag), unparseable, or every query
+    variant returns zero usable items.
 
-    Raises on persistent failure: an unreachable or truncated page is an
+    Raises on persistent failure: an unreachable or empty result is an
     error, not an empty title list. Callers must handle the exception
     explicitly.
     """
+    queries: list[str] = []
+    for q in (star.sync_query, star.name, star.jp):
+        if q and q not in queries:
+            queries.append(q)
+
     last_err: Exception | None = None
+    rate_limited = False
     for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
-        try:
-            async with semaphore:
-                html = await fetcher.fetch(star.star_page_url)
-        except Exception as e:
-            last_err = e
-            log.warning(f"fetch failed (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: {type(e).__name__}: {e}")
-        else:
-            if not html.rstrip().endswith("</html>"):
-                last_err = IncompletePageError("missing closing </html> tag")
-                log.warning(f"truncated page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: no </html>, len={len(html)}")
-            else:
-                extractor = IJavTorrentExtractor()
-                raw_items = extractor.extract(html)
-                items = _dedup(raw_items)
-                log.info(f"{star.name}: {len(raw_items)} raw → {len(items)} dedup")
-                paginated = re.search(r'href="[^"]*\?page=2"', html) is not None
-                if not paginated and min_expected >= MIN_COUNT_CHECK_FLOOR and len(items) < min_expected / 2:
-                    last_err = IncompletePageError(
-                        f"parsed {len(items)} titles, DB holds {min_expected} (partial page?)"
-                    )
-                    log.warning(f"truncated page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: {last_err}")
-                else:
-                    if not items:
-                        log.warning(f"{star.name}: page fetched but 0 titles parsed (layout change or empty page?)")
-                    return items
+        for query in queries:
+            url = SUKEBEI_RSS_URL.format(q=urllib.parse.quote(query))
+            try:
+                async with semaphore:
+                    rss = await fetcher.fetch(url)
+                    # Pace requests: sukebei answers bursts with HTTP 429
+                    await asyncio.sleep(RSS_REQUEST_INTERVAL)
+            except Exception as e:
+                last_err = e
+                if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
+                    rate_limited = True
+                    log.warning(f"rate limited 429 (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}")
+                    break  # Long back-off before the next attempt, not the next query
+                log.warning(f"rss fetch failed (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}: {type(e).__name__}: {e}")
+                continue
+            if not rss.rstrip().endswith("</rss>"):
+                last_err = IncompletePageError("missing closing </rss> tag")
+                log.warning(f"truncated rss (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}: no </rss>, len={len(rss)}")
+                continue
+            try:
+                items = SukebeiRssExtractor().extract(
+                    rss, star_names={star.name, star.jp, star.sync_query}
+                )
+            except ET.ParseError as e:
+                last_err = IncompletePageError(f"unparseable RSS XML: {e}")
+                log.warning(f"truncated rss (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}: {e}")
+                continue
+            items = _dedup(items)
+            if items:
+                log.info(f"{star.name}: q={query!r} → {len(items)} titles")
+                return items
+            last_err = IncompletePageError(f"0 usable items for query {query!r}")
+            log.warning(f"empty rss (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}")
         if attempt < MAX_FETCH_ATTEMPTS:
-            await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
-    log.error(f"fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
+            if rate_limited:
+                rate_limited = False
+                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
+            else:
+                await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
+    log.error(f"rss fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
     raise last_err
 
 
@@ -161,25 +186,16 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
-    # 3. Concurrently fetch all star pages (pure HTTP, no browser overhead)
+    # 3. Concurrently fetch all star RSS searches (pure HTTP, no browser overhead)
     t0 = time.perf_counter()
-    # Per-star DB title counts: floor for the truncated-page check. A page
-    # parsing to less than half of the DB count is a partial page, retry it.
-    expected_counts = Counter(star_id for star_id, _ in existing_codes)
     async with HttpxFetcher() as fetcher:
-        sem = asyncio.Semaphore(fetch_concurrency)
+        sem = asyncio.Semaphore(min(fetch_concurrency, RSS_MAX_CONCURRENCY))
         page_results = await asyncio.gather(
-            *[
-                fetch_star_page(
-                    fetcher, star, sem,
-                    min_expected=expected_counts.get(star_id_map[star.code], 0),
-                )
-                for star in stars
-            ],
+            *[fetch_star_rss(fetcher, star, sem) for star in stars],
             return_exceptions=True,
         )
     t1 = time.perf_counter()
-    log.info(f"[timing] fetch star pages: {(t1 - t0) * 1000:.1f}ms")
+    log.info(f"[timing] fetch star rss: {(t1 - t0) * 1000:.1f}ms")
 
     # 4. Diff: new works + existing works with missing metadata
     sync_batches: list[tuple[int, str, list[VideoItem]]] = []
@@ -188,7 +204,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
 
     for star, page_result in zip(stars, page_results):
         if isinstance(page_result, Exception):
-            log.error(f"page fetch exception for {star.name}: {page_result}")
+            log.error(f"rss fetch exception for {star.name}: {page_result}")
             failed.append({
                 "name": star.name,
                 "error": f"{type(page_result).__name__}: {page_result}",
@@ -220,10 +236,10 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
     # error instead of reporting a fake "0 new titles" success.
     if stars and len(failed) == len(stars):
         raise RuntimeError(
-            f"all {len(stars)} star page fetches failed: {failed[0]['error']}"
+            f"all {len(stars)} star rss fetches failed: {failed[0]['error']}"
         )
     if failed:
-        log.warning(f"{len(failed)}/{len(stars)} star pages failed to fetch: "
+        log.warning(f"{len(failed)}/{len(stars)} star rss fetches failed: "
                     f"{', '.join(f['name'] for f in failed)}")
 
     # 5. Incremental cover download: only download covers for works we will write
@@ -304,8 +320,7 @@ async def sync_star(
     )
 
     existing_codes = await db_write(db.load_all_title_codes)
-    min_expected = sum(1 for sid, _ in existing_codes if sid == star_id)
-    items = await fetch_star_page(fetcher, star, semaphore, min_expected=min_expected)
+    items = await fetch_star_rss(fetcher, star, semaphore)
     if not items:
         return {"name": star.name, "count": 0, "titles": []}
 
