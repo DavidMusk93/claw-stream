@@ -719,3 +719,38 @@ async def test_fetch_star_raises_only_when_both_sources_fail(monkeypatch):
     star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
     with pytest.raises(sync_titles.IncompletePageError, match="both sources failed"):
         await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+
+
+_MULTI_STAR_PAGE = (
+    '<html><body>'
+    '<div class="video-item">'
+    '<a href="/movie/solo-001-111"><img alt="SOLO-001 solo work"/></a>'
+    '<div class="mb-1"><a href="/actress/test-star-1">Test Star</a></div><table></table>'
+    '</div>'
+    '<div class="video-item">'
+    '<a href="/movie/orgy-002-222"><img alt="ORGY-002 omnibus"/></a>'
+    '<div class="mb-1"><a href="/actress/test-star-1">Test Star</a>'
+    '<a href="/actress/other-2">Other</a><a href="/actress/third-3">Third</a></div><table></table>'
+    '</div>'
+    '</body></html>'
+)
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_filters_multi_star_titles(monkeypatch):
+    """共演/omnibus titles (star_count > 1 on the ijav card) are dropped."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    ijav_url = "https://example.com/test"
+
+    async def _fetch(url: str) -> str:
+        if url == ijav_url:
+            return _MULTI_STAR_PAGE
+        return _EMPTY_RSS  # no usable items → RSS raises → ijav-only degraded
+
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
+    star = StarConfig(name="Test Star", code="SOLO-001", star_page_url=ijav_url)
+
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+
+    assert [it.code for it in result] == ["SOLO-001"]

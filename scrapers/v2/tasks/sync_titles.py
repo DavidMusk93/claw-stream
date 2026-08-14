@@ -258,6 +258,22 @@ def merge_sources(
     return items
 
 
+def _drop_multi_star(items: list[VideoItem], star_name: str = "") -> list[VideoItem]:
+    """Filter out multi-star (共演/omnibus) titles.
+
+    IJavTorrentExtractor counts the /actress/ links on each card into
+    star_count — solo works have exactly 1. RSS-supplement items have
+    star_count=0 (unknown) and pass through; omnibus compilations rarely
+    mention the star in the RSS title anyway, so the noise filter already
+    drops most of them there.
+    """
+    solo = [it for it in items if it.star_count <= 1]
+    dropped = len(items) - len(solo)
+    if dropped:
+        log.info(f"{star_name}: filtered {dropped} multi-star titles")
+    return solo
+
+
 async def fetch_star(
     fetcher: HttpxFetcher,
     star: StarConfig,
@@ -267,7 +283,8 @@ async def fetch_star(
     """Hybrid per-star fetch: ijavtorrent primary + sukebei RSS supplement.
 
     One source failing degrades to the other with a loud warning; the star
-    fails only when BOTH sources fail.
+    fails only when BOTH sources fail. Multi-star (共演/omnibus) titles are
+    filtered out of the result.
     """
     ijav_res, rss_res = await asyncio.gather(
         fetch_star_page(fetcher, star, ijav_sem),
@@ -280,11 +297,11 @@ async def fetch_star(
         raise IncompletePageError(f"both sources failed: ijav={ijav_err}; rss={rss_err}")
     if ijav_err is not None:
         log.warning(f"{star.name}: ijavtorrent unavailable ({ijav_err}), sukebei-only degraded sync")
-        return rss_res
+        return _drop_multi_star(rss_res, star.name)
     if rss_err is not None:
         log.warning(f"{star.name}: sukebei rss unavailable ({rss_err}), ijavtorrent-only degraded sync")
-        return ijav_res
-    return merge_sources(ijav_res, rss_res, star.name)
+        return _drop_multi_star(ijav_res, star.name)
+    return _drop_multi_star(merge_sources(ijav_res, rss_res, star.name), star.name)
 
 
 async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> dict[str, Any]:
