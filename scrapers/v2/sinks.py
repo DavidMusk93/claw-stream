@@ -174,7 +174,12 @@ class TitleSyncSink:
         """MagnetCandidate scoring"""
         res_score = 0
         res = m.resolution
-        if "[4K]" in res or "4k" in res.lower():
+        # VR tags first: "[4KVR]" contains "4k" as a substring
+        if "[8KVR]" in res:
+            res_score = 700
+        elif "[4KVR]" in res:
+            res_score = 650
+        elif "[4K]" in res or "4k" in res.lower():
             res_score = 600
         elif "[FHDC]" in res:
             res_score = 500

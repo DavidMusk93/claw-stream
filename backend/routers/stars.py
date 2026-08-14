@@ -182,7 +182,7 @@ class AddStarResponse(BaseModel):
 
 @router.post("/add")
 async def add_star(request: AddStarRequest) -> AddStarResponse:
-    """Add a new actor: parse homepage URL, dedupe, write to config.json and DB, background sync titles."""
+    """Add a new actor: parse ijavtorrent actress page URL, dedupe, write to config.json and DB, background sync titles."""
     url = request.star_page_url.strip()
 
     # URL format validation
@@ -250,17 +250,16 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     invalidate_stars_cache()
     log.info(f"star added: {name} ({code}) from {url}")
 
-    # Background async sync for this actor's titles
+    # Background async sync for this actor's titles (hybrid: ijav page + sukebei RSS)
     async def _bg_sync() -> None:
         try:
-            from scrapers.v2.fetchers import PlaywrightFetcher
+            from scrapers.v2.fetchers import HttpxFetcher
             from scrapers.v2.tasks.sync_titles import sync_star
             from scrapers.v2.schemas import StarConfig
 
             star_cfg = StarConfig(**new_star)
-            async with PlaywrightFetcher() as pf:
-                sem = asyncio.Semaphore(1)
-                result = await sync_star(pf, star_cfg, sem)
+            async with HttpxFetcher() as fetcher:
+                result = await sync_star(fetcher, star_cfg)
                 log.info(f"bg sync done: {name}: {result['count']} titles")
                 # Titles now written to DB — invalidate cache so next read is fresh
                 invalidate_stars_cache()

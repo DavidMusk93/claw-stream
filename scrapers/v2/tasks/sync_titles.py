@@ -2,26 +2,30 @@
 
 Diff-Sync architecture (first principle: update as fast as possible):
 1. Batch upsert stars + preload all existing title codes (memory set)
-2. Pure HTTP concurrent fetching of per-star sukebei RSS searches (HttpxFetcher, no browser overhead)
+2. Pure HTTP concurrent fetching (HttpxFetcher, no browser overhead)
 3. In-memory diff: keep only new works
 4. Incremental cover download: only download covers for new works
 5. Incremental database write: only INSERT new works
 
-Source: sukebei.nyaa.si RSS search (`?page=rss&q={name}&s=id&o=desc`), the
-upstream origin of the torrents. The previous source, ijavtorrent.com,
-lost most of its catalog in 2026-08 (actress pages and site search
-silently dropped titles, e.g. ABF-338), making every star page fail the
-truncated-page integrity check permanently. RSS exposes structured
-metadata (infoHash, seeders, size, downloads, pubDate) — no HTML scraping.
+Hybrid source: **ijavtorrent is the primary source** (actress pages carry the
+rich metadata: retail dates, views, likes, cover_url, hhd800-tagged magnets).
+**sukebei.nyaa.si RSS is the supplement/correction**: its per-star search
+covers titles missing from ijavtorrent's listing (ijav lost most of its
+catalog in 2026-08 and, even after recovery, shows sparse/capped actress
+listings with no pagination, e.g. JULIA 61 cards vs 201 in DB) and adds
+extra magnet candidates. Merge rule: ijavtorrent metadata wins, magnet
+candidates are unioned (deduped by magnet), RSS-only codes are appended.
 
-Failure semantics: a failed RSS fetch is NOT "no new titles". Fetch errors
-are collected per star; if every star fetch fails (e.g. source site
-unreachable), run() raises so callers report a sync error instead of a fake
-"0 new titles" success. A star whose every query variant returns zero
-usable items is also a failure, never an empty title list.
+Failure semantics: a star fails only when BOTH sources fail. One source
+failing degrades to the other with a loud warning — never a silent "no new
+titles". If every star fails, run() raises so callers report a sync error.
 
-Truncated-response semantics: an RSS body without a closing </rss> tag or
-with unparseable XML is retried before giving up (MAX_FETCH_ATTEMPTS).
+Truncated-response semantics: an ijavtorrent page without a closing </html>
+tag or parsing to 0 cards, and an RSS body without a closing </rss> tag or
+with unparseable XML, are retried before giving up (MAX_FETCH_ATTEMPTS).
+There is no DB-count floor for ijavtorrent pages: listings are legitimately
+sparse since the 2026-08 catalog loss, so a low card count is not proof of
+a truncated transfer.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ from core import get_logger
 from core import db
 from core.db.write_queue import db_write
 from scrapers.v2.fetchers import HttpxFetcher
-from scrapers.v2.extractors import SukebeiRssExtractor
+from scrapers.v2.extractors import IJavTorrentExtractor, SukebeiRssExtractor
 from scrapers.v2.sinks import TitleSyncSink
 from scrapers.v2.schemas import VideoItem, StarConfig
 from scrapers.v2.cover_utils import download_covers_batch
@@ -88,12 +92,12 @@ async def fetch_star_rss(
     star: StarConfig,
     semaphore: asyncio.Semaphore,
 ) -> list[VideoItem]:
-    """Fetch a single star's sukebei RSS search and parse out VideoItems.
+    """Fetch a single star's sukebei RSS searches and parse out VideoItems.
 
-    Query fallback order: sync_query → name → jp; the first query yielding
-    usable items wins. Retries up to MAX_FETCH_ATTEMPTS times when the RSS
-    body is truncated (no closing </rss> tag), unparseable, or every query
-    variant returns zero usable items.
+    All query variants (sync_query, name, jp) are fetched and their results
+    merged by code — uploaders tag different spellings across torrents, so
+    the first non-empty query is NOT good enough (e.g. romaji-only results
+    would miss titles tagged with just the Japanese name).
 
     Raises on persistent failure: an unreachable or empty result is an
     error, not an empty title list. Callers must handle the exception
@@ -107,6 +111,7 @@ async def fetch_star_rss(
     last_err: Exception | None = None
     rate_limited = False
     for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+        merged: dict[str, VideoItem] = {}
         for query in queries:
             url = SUKEBEI_RSS_URL.format(q=urllib.parse.quote(query))
             try:
@@ -134,20 +139,152 @@ async def fetch_star_rss(
                 last_err = IncompletePageError(f"unparseable RSS XML: {e}")
                 log.warning(f"truncated rss (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}: {e}")
                 continue
-            items = _dedup(items)
-            if items:
-                log.info(f"{star.name}: q={query!r} → {len(items)} titles")
-                return items
-            last_err = IncompletePageError(f"0 usable items for query {query!r}")
-            log.warning(f"empty rss (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name} q={query!r}")
+            for it in items:
+                if it.code in merged:
+                    _merge_into(merged[it.code], it)
+                else:
+                    merged[it.code] = it
+            log.info(f"{star.name}: q={query!r} → {len(items)} titles")
+        if merged:
+            items = _dedup(list(merged.values()))
+            log.info(f"{star.name}: {len(items)} titles after merging {len(queries)} queries")
+            return items
         if attempt < MAX_FETCH_ATTEMPTS:
             if rate_limited:
                 rate_limited = False
                 await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
             else:
                 await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
+    if last_err is None:
+        last_err = IncompletePageError(f"0 usable items for all queries: {queries}")
     log.error(f"rss fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
     raise last_err
+
+
+def _merge_into(dst: VideoItem, src: VideoItem) -> None:
+    """Merge same-code items from different query variants (dedupe by magnet).
+
+    dst's metadata wins: for the hybrid source merge dst is the ijavtorrent
+    item, whose retail release_date / views / cover_url are canonical.
+    """
+    known = set(dst.all_magnet_urls)
+    for c in src.magnets:
+        if c.magnet not in known:
+            known.add(c.magnet)
+            dst.magnets.append(c)
+            dst.all_magnet_urls.append(c.magnet)
+    dst.likes = max(dst.likes or 0, src.likes or 0) or None
+    if not dst.release_date:
+        dst.release_date = src.release_date
+    if not dst.cover_url:
+        dst.cover_url = src.cover_url
+
+
+async def fetch_star_page(
+    fetcher: HttpxFetcher,
+    star: StarConfig,
+    semaphore: asyncio.Semaphore,
+) -> list[VideoItem]:
+    """Fetch a single star's ijavtorrent actress page (the primary source).
+
+    Retries up to MAX_FETCH_ATTEMPTS times when the page looks truncated
+    (no closing </html> tag) or parses to 0 cards (layout change / empty
+    page). There is deliberately no DB-count floor: since the 2026-08
+    catalog loss, ijavtorrent listings are legitimately sparse (no
+    pagination, e.g. JULIA 61 cards vs 201 in DB), so a low card count is
+    not proof of a truncated transfer — the sukebei supplement compensates
+    for catalog gaps.
+
+    Stars without a star_page_url (added before ijavtorrent recovered)
+    return [] and are served by the RSS supplement alone.
+
+    Raises on persistent failure: an unreachable or truncated page is an
+    error, not an empty title list. Callers must handle the exception
+    explicitly.
+    """
+    if not star.star_page_url:
+        raise IncompletePageError("no ijavtorrent star_page_url configured")
+
+    last_err: Exception | None = None
+    for attempt in range(1, MAX_FETCH_ATTEMPTS + 1):
+        try:
+            async with semaphore:
+                html = await fetcher.fetch(star.star_page_url)
+        except Exception as e:
+            last_err = e
+            log.warning(f"ijav fetch failed (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: {type(e).__name__}: {e}")
+        else:
+            if not html.rstrip().endswith("</html>"):
+                last_err = IncompletePageError("missing closing </html> tag")
+                log.warning(f"truncated page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: no </html>, len={len(html)}")
+            else:
+                items = _dedup(IJavTorrentExtractor().extract(html))
+                if items:
+                    log.info(f"{star.name}: ijav → {len(items)} titles")
+                    return items
+                last_err = IncompletePageError("page fetched but 0 titles parsed (layout change or empty page?)")
+                log.warning(f"empty page (attempt {attempt}/{MAX_FETCH_ATTEMPTS}): {star.name}: 0 titles parsed")
+        if attempt < MAX_FETCH_ATTEMPTS:
+            await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
+    log.error(f"ijav fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
+    raise last_err
+
+
+def merge_sources(
+    primary: list[VideoItem],
+    supplement: list[VideoItem],
+    star_name: str = "",
+) -> list[VideoItem]:
+    """Merge ijavtorrent (primary) with sukebei RSS (supplement) by code.
+
+    Same code → magnet candidates unioned (ijav metadata wins); RSS-only
+    codes appended — they correct ijavtorrent's catalog gaps.
+    """
+    merged: dict[str, VideoItem] = {it.code: it for it in primary}
+    added = 0
+    enriched = 0
+    for it in supplement:
+        dst = merged.get(it.code)
+        if dst is None:
+            merged[it.code] = it
+            added += 1
+        else:
+            before = len(dst.magnets)
+            _merge_into(dst, it)
+            if len(dst.magnets) > before:
+                enriched += 1
+    items = _dedup(list(merged.values()))
+    log.info(f"{star_name}: merged {len(primary)} ijav + {len(supplement)} rss → {len(items)} titles ({added} rss-only, {enriched} enriched)")
+    return items
+
+
+async def fetch_star(
+    fetcher: HttpxFetcher,
+    star: StarConfig,
+    ijav_sem: asyncio.Semaphore,
+    rss_sem: asyncio.Semaphore,
+) -> list[VideoItem]:
+    """Hybrid per-star fetch: ijavtorrent primary + sukebei RSS supplement.
+
+    One source failing degrades to the other with a loud warning; the star
+    fails only when BOTH sources fail.
+    """
+    ijav_res, rss_res = await asyncio.gather(
+        fetch_star_page(fetcher, star, ijav_sem),
+        fetch_star_rss(fetcher, star, rss_sem),
+        return_exceptions=True,
+    )
+    ijav_err = ijav_res if isinstance(ijav_res, BaseException) else None
+    rss_err = rss_res if isinstance(rss_res, BaseException) else None
+    if ijav_err is not None and rss_err is not None:
+        raise IncompletePageError(f"both sources failed: ijav={ijav_err}; rss={rss_err}")
+    if ijav_err is not None:
+        log.warning(f"{star.name}: ijavtorrent unavailable ({ijav_err}), sukebei-only degraded sync")
+        return rss_res
+    if rss_err is not None:
+        log.warning(f"{star.name}: sukebei rss unavailable ({rss_err}), ijavtorrent-only degraded sync")
+        return ijav_res
+    return merge_sources(ijav_res, rss_res, star.name)
 
 
 async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> dict[str, Any]:
@@ -186,16 +323,17 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
-    # 3. Concurrently fetch all star RSS searches (pure HTTP, no browser overhead)
+    # 3. Concurrently fetch all stars: ijavtorrent primary + sukebei RSS supplement
     t0 = time.perf_counter()
     async with HttpxFetcher() as fetcher:
-        sem = asyncio.Semaphore(min(fetch_concurrency, RSS_MAX_CONCURRENCY))
+        ijav_sem = asyncio.Semaphore(fetch_concurrency)
+        rss_sem = asyncio.Semaphore(min(fetch_concurrency, RSS_MAX_CONCURRENCY))
         page_results = await asyncio.gather(
-            *[fetch_star_rss(fetcher, star, sem) for star in stars],
+            *[fetch_star(fetcher, star, ijav_sem, rss_sem) for star in stars],
             return_exceptions=True,
         )
     t1 = time.perf_counter()
-    log.info(f"[timing] fetch star rss: {(t1 - t0) * 1000:.1f}ms")
+    log.info(f"[timing] fetch stars (ijav+rss): {(t1 - t0) * 1000:.1f}ms")
 
     # 4. Diff: new works + existing works with missing metadata
     sync_batches: list[tuple[int, str, list[VideoItem]]] = []
@@ -204,7 +342,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
 
     for star, page_result in zip(stars, page_results):
         if isinstance(page_result, Exception):
-            log.error(f"rss fetch exception for {star.name}: {page_result}")
+            log.error(f"fetch exception for {star.name}: {page_result}")
             failed.append({
                 "name": star.name,
                 "error": f"{type(page_result).__name__}: {page_result}",
@@ -236,10 +374,10 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
     # error instead of reporting a fake "0 new titles" success.
     if stars and len(failed) == len(stars):
         raise RuntimeError(
-            f"all {len(stars)} star rss fetches failed: {failed[0]['error']}"
+            f"all {len(stars)} star fetches failed: {failed[0]['error']}"
         )
     if failed:
-        log.warning(f"{len(failed)}/{len(stars)} star rss fetches failed: "
+        log.warning(f"{len(failed)}/{len(stars)} star fetches failed: "
                     f"{', '.join(f['name'] for f in failed)}")
 
     # 5. Incremental cover download: only download covers for works we will write
@@ -308,7 +446,6 @@ def _query_stats(conn=None):
 async def sync_star(
     fetcher: HttpxFetcher,
     star: StarConfig,
-    semaphore: asyncio.Semaphore,
 ) -> dict:
     """Sync titles for a single star (background sync after adding a new actor)."""
     t0 = time.perf_counter()
@@ -320,7 +457,9 @@ async def sync_star(
     )
 
     existing_codes = await db_write(db.load_all_title_codes)
-    items = await fetch_star_rss(fetcher, star, semaphore)
+    items = await fetch_star(
+        fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1)
+    )
     if not items:
         return {"name": star.name, "count": 0, "titles": []}
 

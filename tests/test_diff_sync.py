@@ -5,8 +5,9 @@ Verify core assumptions:
 2. Diff logic is correct: existing works are filtered, only new works are kept
 3. Incremental cover download: only process new works
 
-Sync source: sukebei.nyaa.si RSS search (ijavtorrent lost most of its
-catalog in 2026-08 and can no longer serve as the sync source).
+Hybrid source: ijavtorrent actress pages are the primary source (rich
+metadata); sukebei.nyaa.si RSS search is the supplement/correction for
+ijavtorrent's catalog gaps. A star fails only when both sources fail.
 """
 
 from __future__ import annotations
@@ -22,8 +23,14 @@ import pytest
 
 from scrapers.v2.extractors import SukebeiRssExtractor
 from scrapers.v2.tasks import sync_titles
-from scrapers.v2.tasks.sync_titles import fetch_star_rss, run
-from scrapers.v2.schemas import VideoItem, StarConfig
+from scrapers.v2.tasks.sync_titles import (
+    fetch_star,
+    fetch_star_page,
+    fetch_star_rss,
+    merge_sources,
+    run,
+)
+from scrapers.v2.schemas import MagnetCandidate, VideoItem, StarConfig
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +167,37 @@ async def test_fetch_star_rss_query_fallback_to_jp():
 
 
 @pytest.mark.asyncio
+async def test_fetch_star_rss_unions_all_query_variants():
+    """All query variants are fetched and merged by code — uploaders tag
+    different spellings across torrents, so first-non-empty is not enough."""
+    mock_fetcher = AsyncMock()
+
+    async def _fetch(url: str) -> str:
+        if urllib.parse.quote("Test Star") in url:
+            # romaji-tagged uploads: two torrents of TEST-001
+            return _rss(
+                _item("TEST-001 Test Star upload one", info_hash="a" * 40),
+                _item("TEST-001 Test Star upload two", info_hash="b" * 40),
+            )
+        # Japanese-tagged uploads: another torrent of TEST-001 + a new code
+        return _rss(
+            _item("TEST-001 テスト星 upload three", info_hash="c" * 40),
+            _item("TEST-002 テスト星 jp only title", info_hash="d" * 40),
+        )
+
+    mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
+
+    star = StarConfig(name="Test Star", code="TEST-001", jp="テスト星")
+    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+
+    by_code = {it.code: it for it in result}
+    assert set(by_code) == {"TEST-001", "TEST-002"}
+    # Same code from both queries: magnet candidates merged, not overwritten
+    assert len(by_code["TEST-001"].magnets) == 3
+    assert mock_fetcher.fetch.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_fetch_star_rss_sync_query_takes_precedence():
     """sync_query overrides the default name/jp queries."""
     mock_fetcher = AsyncMock()
@@ -222,7 +260,7 @@ def test_extractor_groups_multiple_torrents_per_code():
     assert by_code["ABF-358"].all_magnet_urls == [m.magnet for m in by_code["ABF-358"].magnets]
     # Leading [tag] prefixes and the code are stripped from the work title
     assert by_code["ABF-358"].title == "究極のぬるぬるオーガズム 涼森れむ"
-    # hhd800-priority sort from ijavtorrent does not apply; order is preserved
+    # Candidate order is preserved; scoring (incl. the hhd800 bonus) happens in the sink
     assert "urn:btih:" + "b" * 40 in by_code["ABF-358"].magnets[0].magnet
 
 
@@ -276,6 +314,54 @@ def test_extractor_skips_prefix_blacklist_and_missing_hash():
     items = SukebeiRssExtractor().extract(rss, star_names={"涼森れむ"})
 
     assert items == []
+
+
+def test_extractor_marks_hhd800_hd_source():
+    """The '+++ [FHD]' uploads on sukebei are the hhd800 releases — same rule as ijavtorrent."""
+    rss = _rss(
+        _item("+++ [FHD] SNOS-334 瀬戸環奈 hd source", info_hash="a" * 40),
+        _item("[Reducing Mosaic] SNOS-334 瀬戸環奈 low quality", info_hash="b" * 40),
+    )
+    (it,) = SukebeiRssExtractor().extract(rss, star_names={"瀬戸環奈"})
+
+    assert it.magnets[0].is_hhd800 is True
+    assert it.magnets[0].resolution == "[FHD]"
+    assert it.magnets[1].is_hhd800 is False
+
+
+def test_extractor_parses_vr_resolution_tags():
+    """VR titles carry [8KVR]/[4KVR] tags instead of the FHD vocabulary."""
+    rss = _rss(_item("[8KVR] SIVR-490 【VR】瀬戸環奈 vr title"))
+    (it,) = SukebeiRssExtractor().extract(rss, star_names={"瀬戸環奈"})
+
+    assert it.magnets[0].resolution == "[8KVR]"
+
+
+def test_extractor_matches_digit_led_codes():
+    """Amateur series codes like 229SCUTE-1575 start with digits; dates must not match."""
+    rss = _rss(
+        _item("229SCUTE-1575 いつき(25) amateur title"),
+        _item("uploaded 2026-08-14 いつき no code here"),
+    )
+    items = SukebeiRssExtractor().extract(rss, star_names={"いつき"})
+
+    assert [it.code for it in items] == ["229SCUTE-1575"]
+
+
+def test_score_magnet_hd_selection_parity():
+    """HD selection parity with the ijavtorrent era: hhd800 FHD > 8KVR > 4K."""
+    from scrapers.v2.schemas import MagnetCandidate
+    from scrapers.v2.sinks import TitleSyncSink
+
+    hhd_fhd = MagnetCandidate(magnet="m1", resolution="[FHD]", size="7.1GB", seed=100, is_hhd800=True)
+    vr_8k = MagnetCandidate(magnet="m2", resolution="[8KVR]", size="16.5GB", seed=100)
+    four_k = MagnetCandidate(magnet="m3", resolution="[4K]", size="24.5GB", seed=100)
+    plain_fhd = MagnetCandidate(magnet="m4", resolution="[FHD]", size="7.1GB", seed=100)
+
+    assert TitleSyncSink._score_magnet(hhd_fhd) > TitleSyncSink._score_magnet(vr_8k)
+    assert TitleSyncSink._score_magnet(vr_8k) > TitleSyncSink._score_magnet(four_k)
+    assert TitleSyncSink._score_magnet(four_k) > TitleSyncSink._score_magnet(plain_fhd)
+
 
 
 # ── Diff logic (source-independent) ────────────────────────────────────
@@ -434,7 +520,7 @@ async def test_run_raises_when_all_fetches_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_titles, "db_write", _stub_db_write)
     monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
 
-    with pytest.raises(RuntimeError, match="all 2 star rss fetches failed"):
+    with pytest.raises(RuntimeError, match="all 2 star fetches failed"):
         await run(_write_config(tmp_path, stars))
 
 
@@ -472,3 +558,164 @@ async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     assert len(out["results"]) == 1
     assert out["results"][0]["name"] == "Good Star"
     assert out["results"][0]["count"] == 1
+
+
+# ── Hybrid source: ijavtorrent primary + sukebei supplement ──────────
+# ijavtorrent carries the rich metadata (retail dates, views, cover_url,
+# hhd800-tagged magnets) but its listing is sparse since the 2026-08
+# catalog loss; the sukebei RSS supplement corrects the gaps.
+
+_FULL_PAGE = (
+    '<html><body><div class="video-item">'
+    '<a href="/movie/test-001-12345"><img alt="TEST-001 sample"/></a>'
+    '</div></body></html>'
+)
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_page_uses_http():
+    """ijavtorrent primary source: fetch_star_page parses an actress page."""
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=_FULL_PAGE)
+
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    result = await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+
+    assert len(result) == 1
+    assert result[0].code == "TEST-001"
+    mock_fetcher.fetch.assert_called_once_with("https://example.com/test")
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_page_retries_truncated_html(monkeypatch):
+    """HTML without a closing </html> tag is truncated: retry, then succeed."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(
+        side_effect=['<html><body><div class="video-item">', _FULL_PAGE]
+    )
+
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    result = await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+
+    assert len(result) == 1
+    assert mock_fetcher.fetch.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_page_raises_on_persistent_truncation(monkeypatch):
+    """A page that never completes is a fetch failure, not an empty list."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value='<html><body><div class="video-item">')
+
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    with pytest.raises(sync_titles.IncompletePageError):
+        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+    assert mock_fetcher.fetch.call_count == sync_titles.MAX_FETCH_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_page_raises_on_fetch_failure(monkeypatch):
+    """fetch_star_page must propagate fetch exceptions, not return []."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(side_effect=TimeoutError("boom"))
+
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    with pytest.raises(TimeoutError):
+        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_page_without_url_raises():
+    """Stars without an ijavtorrent URL are served by the RSS supplement alone."""
+    mock_fetcher = AsyncMock()
+    star = StarConfig(name="Test Star", code="TEST-001")
+
+    with pytest.raises(sync_titles.IncompletePageError, match="star_page_url"):
+        await fetch_star_page(mock_fetcher, star, asyncio.Semaphore(1))
+    mock_fetcher.fetch.assert_not_called()
+
+
+def test_merge_sources_primary_wins_and_supplement_fills_gaps():
+    """Same code: ijav metadata wins, magnets unioned. RSS-only codes appended."""
+    ijav = [
+        VideoItem(
+            code="TEST-001", title="ijav title", release_date="01/08/2026",
+            views=100, likes=50, cover_url="https://img.test/1.jpg",
+            magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "a" * 40, is_hhd800=True)],
+            all_magnet_urls=["magnet:?xt=urn:btih:" + "a" * 40],
+        )
+    ]
+    rss = [
+        VideoItem(
+            code="TEST-001", title="rss title", release_date="02/08/2026",
+            likes=80,
+            magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "b" * 40)],
+            all_magnet_urls=["magnet:?xt=urn:btih:" + "b" * 40],
+        ),
+        VideoItem(code="TEST-002", title="rss only correction", release_date="03/08/2026"),
+    ]
+
+    merged = merge_sources(ijav, rss)
+    by_code = {it.code: it for it in merged}
+
+    assert set(by_code) == {"TEST-001", "TEST-002"}
+    t1 = by_code["TEST-001"]
+    assert len(t1.magnets) == 2                      # magnets unioned
+    assert t1.release_date == "01/08/2026"           # ijav retail date wins
+    assert t1.views == 100 and t1.cover_url == "https://img.test/1.jpg"
+    assert t1.likes == 80                            # likes = max
+    assert by_code["TEST-002"].title == "rss only correction"
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_merges_ijav_and_rss(monkeypatch):
+    """Both sources up: merged result with RSS-only codes appended."""
+    ijav_url = "https://example.com/test"
+    mock_fetcher = AsyncMock()
+
+    async def _fetch(url: str) -> str:
+        if url == ijav_url:
+            return _FULL_PAGE
+        return _rss(_item("TEST-002 Test Star rss only title"))
+
+    mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url=ijav_url)
+
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+
+    assert {it.code for it in result} == {"TEST-001", "TEST-002"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_degrades_to_rss_when_ijav_fails(monkeypatch):
+    """ijavtorrent down: degrade to the sukebei supplement, do not fail the star."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    ijav_url = "https://example.com/test"
+    mock_fetcher = AsyncMock()
+
+    async def _fetch(url: str) -> str:
+        if url == ijav_url:
+            raise TimeoutError("ijav down")
+        return _rss(_item("TEST-001 Test Star rss hit"))
+
+    mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url=ijav_url)
+
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+
+    assert [it.code for it in result] == ["TEST-001"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_raises_only_when_both_sources_fail(monkeypatch):
+    """A star fails only when ijavtorrent AND sukebei both fail."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(side_effect=TimeoutError("all down"))
+
+    star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
+    with pytest.raises(sync_titles.IncompletePageError, match="both sources failed"):
+        await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))

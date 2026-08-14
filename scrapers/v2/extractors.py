@@ -232,7 +232,9 @@ MAGNET_TRACKERS = (
     "udp://tracker.torrent.eu.org:451/announce",
 )
 
-_CODE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,7}-\d{2,5})\b")
+# Title code pattern. Most codes are letter-led (ABF-358); amateur series
+# like 229SCUTE-1575 are digit-led, so also allow "3+ digits then letters".
+_CODE_RE = re.compile(r"\b((?:[A-Z]|\d{3}[A-Z])[A-Z0-9]{0,7}-\d{2,5})\b")
 
 
 def _build_magnet(info_hash: str, title: str) -> str:
@@ -246,6 +248,11 @@ def _build_magnet(info_hash: str, title: str) -> str:
 def _parse_resolution_tag(title: str) -> str:
     """Map resolution hints in a torrent title to the vocabulary _score_magnet knows."""
     upper = title.upper()
+    # VR tags before plain 4K: "[4KVR]" contains "4K" as a substring
+    if "8KVR" in upper:
+        return "[8KVR]"
+    if "4KVR" in upper:
+        return "[4KVR]"
     if "4K" in upper or "2160P" in upper:
         return "[4K]"
     if "[FHDC]" in upper:
@@ -323,6 +330,9 @@ class SukebeiRssExtractor:
             size = _size_to_gb(item.findtext(f"{{{NYAA_NS}}}size") or "")
             resolution = _parse_resolution_tag(title)
             release = _pubdate_to_release(item.findtext("pubDate") or "")
+            # Same hhd800 HD-source rule as the ijavtorrent extractor: the
+            # "+++ [FHD]" uploads on sukebei are the hhd800 releases.
+            is_hhd800 = title.lstrip().startswith("+++ [FHD]") or "hhd800" in title_lower
 
             candidate = MagnetCandidate(
                 magnet=_build_magnet(info_hash, title),
@@ -330,7 +340,7 @@ class SukebeiRssExtractor:
                 size=size,
                 seed=seed,
                 leech=leech,
-                is_hhd800=False,
+                is_hhd800=is_hhd800,
             )
 
             entry = grouped.setdefault(

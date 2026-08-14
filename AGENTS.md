@@ -42,7 +42,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
 - **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` are served as static files by Caddy; `/api/cover/{code}` falls back to the DB blob and backfills disk.
 - **Upload bandwidth cap**: libtorrent `upload_rate_limit = 2 MB/s` to reserve bandwidth for HTTP streaming.
-- **Diff-Sync source: sukebei.nyaa.si RSS**: title sync queries per-star RSS search (query fallback `sync_query` → `name` → `jp`), capped concurrency + 429 back-off. Legacy source ijavtorrent lost most of its catalog in 2026-08. See `docs/design/diff-sync-design.md`.
+- **Diff-Sync hybrid source: ijavtorrent primary + sukebei.nyaa.si RSS supplement**: title sync fetches the ijavtorrent actress page (rich metadata: retail dates, views, cover_url, hhd800 magnets) and merges sukebei RSS search results (all query variants `sync_query`/`name`/`jp` unioned by code) to correct ijav's catalog gaps — ijav metadata wins, magnets unioned, RSS-only codes appended. A star fails only when BOTH sources fail. ijav lost much of its catalog in 2026-08 and still serves sparse listings (no pagination). See `docs/design/diff-sync-design.md`.
 - **Auth on all API routers**: every router except `/api/auth` and `/api/test` uses `Depends(require_auth)` (cookie `claw_auth=ok`).
 
 ### 1.3 Core Components
