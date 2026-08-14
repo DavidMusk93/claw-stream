@@ -3,7 +3,7 @@
     <div class="w-full max-w-[380px] relative z-10">
       <!-- Logo area -->
       <div class="flex flex-col items-center mb-10">
-        <img src="/logo.svg" alt="Star Archive logo" class="w-[96px] h-[96px] mb-6 drop-shadow-sm" />
+        <img src="/logo.png" alt="Star Archive logo" class="w-[96px] h-[96px] mb-6 drop-shadow-sm rounded-2xl" />
         <h1
           class="text-[32px] font-semibold text-foreground tracking-[-0.02em]"
         >

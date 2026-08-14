@@ -1,0 +1,10 @@
+Logo artwork
+============
+
+logo.png, icon.png, icon-192x192.png, icon-512x512.png are derived from an
+AI-generated image created by the site owner via Grok Imagine (2026-07):
+
+  https://grok.com/imagine/post/88153557-2a1e-4443-b472-7a48eaf20103
+
+Modifications: center-cropped to square compositions, resized, rounded-corner
+mask for app icons.
