@@ -87,11 +87,52 @@
         },
         {
             "name": "Itsuki Yukimura",
-            "jp": "Itsuki Yukimura",
+            "jp": "いつき",
             "handle": "itsuki_yukimura",
             "code": "229SCUTE-1575",
             "type": "solo",
-            "star_page_url": "https://ijavtorrent.com/actress/itsuki-yukimura-29881"
+            "star_page_url": "https://ijavtorrent.com/actress/itsuki-yukimura-29881",
+            "sync_query": "229SCUTE"
+        },
+        {
+            "name": "Nao Satsuki",
+            "jp": "彩月七緒",
+            "handle": "nao_satsuki",
+            "code": "PPPE-435",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/nao-satsuki-27155"
+        },
+        {
+            "name": "Shiori Miyuki",
+            "jp": "Shiori Miyuki",
+            "handle": "shiori_miyuki",
+            "code": "MFYD-177",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/shiori-miyuki-30229"
+        },
+        {
+            "name": "Ran Kikuno",
+            "jp": "Ran Kikuno",
+            "handle": "ran_kikuno",
+            "code": "FPRE-239",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/ran-kikuno-24661"
+        },
+        {
+            "name": "Reya Ookado",
+            "jp": "Reya Ookado",
+            "handle": "reya_ookado",
+            "code": "EBWH-350",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/reya-ookado-30285"
+        },
+        {
+            "name": "Kanon Hayasaka",
+            "jp": "Kanon Hayasaka",
+            "handle": "kanon_hayasaka",
+            "code": "SNOS-213",
+            "type": "solo",
+            "star_page_url": "https://ijavtorrent.com/actress/kanon-hayasaka-29991"
         }
     ]
 }
