@@ -158,9 +158,21 @@ def load_all_title_codes(conn=None) -> set[tuple[int, str]]:
             managed.close()
 
 
+# Resolutions that count as a proper HD source. [4K]/[8KVR]/[4KVR] included:
+# makers hhd800 never covers (FALENO/DAHLIA max out at 4K uploads, VR tops at
+# 8KVR) must not be re-backfilled forever.
+HD_RESOLUTIONS = ("[FHD]", "[FHDC]", "[8KVR]", "[4KVR]", "[4K]")
+
+
 @trace_db
 def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
-    """Load (star_id, code) for titles missing critical metadata fields."""
+    """Load (star_id, code) for titles missing critical metadata fields.
+
+    Also flags titles whose magnet candidates contain no HD-resolution
+    source (e.g. synced from the narrow RSS window during the 2026-08
+    ijavtorrent outage, before the hhd800 upload rotated out) — the hybrid
+    sync backfills their magnets when a source lists them again.
+    """
     managed, should_close = _managed_conn(conn)
     try:
         rows = managed.execute(
@@ -172,7 +184,19 @@ def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
                OR star_name IS NULL OR star_name = ''
             """
         ).fetchall()
-        return set(rows)
+        result = set(rows)
+
+        magnet_rows = managed.execute(
+            "SELECT star_id, code, all_magnets FROM titles WHERE all_magnets IS NOT NULL"
+        ).fetchall()
+        for star_id, code, all_magnets in magnet_rows:
+            try:
+                mags = json.loads(all_magnets)
+            except (TypeError, ValueError):
+                continue
+            if not any(m.get("resolution") in HD_RESOLUTIONS for m in mags):
+                result.add((star_id, code))
+        return result
     finally:
         if should_close:
             managed.close()

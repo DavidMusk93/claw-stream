@@ -110,6 +110,7 @@ Only INSERT new titles; skip existing ones entirely:
 | **First sync (empty database)** | `new_items = all_items`; degenerates to full sync, but HTTP is still ~10× faster than Playwright |
 | **Large batch (> 20 new titles)** | `MAX_NEW_TITLES = 20` caps ingestion per star to avoid overwhelming the system |
 | **Cover download failure** | `upsert_title` and `write_batch` preserve existing `cover_b64`; missing new covers result in empty strings, not data loss |
+| **Titles without any HD candidate** | `load_title_codes_missing_metadata` also flags titles whose `all_magnets` lack `[FHD]`/`[FHDC]`/`[4K]`/`[8KVR]`/`[4KVR]` (e.g. synced from the narrow RSS window during the 2026-08 ijav outage), so the backfill path refreshes their magnets when a source lists them again. `[4K]`/VR tags count as HD — makers hhd800 never covers (FALENO/DAHLIA, VR) must not be re-backfilled forever |
 | **HTTP interception / Cloudflare** | No automatic fallback; both sources use `HttpxFetcher` (pure HTTP) |
 | **Add star** | `POST /api/stars/add` takes an ijavtorrent actress page URL, parses name/code from the page, then background-syncs via the same hybrid pipeline (`sync_star`) |
 | **Star fetch failure** | A star fails only when ijavtorrent AND sukebei both fail (`fetch_star` raises); one source down degrades to the other with a loud warning. `run()` collects per-star failures in `{"results", "failed"}`; if **every** star fails, `run()` raises `RuntimeError` so the web UI reports a sync error instead of a fake "0 new titles / All caught up" success |
