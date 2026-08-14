@@ -62,6 +62,17 @@ class HttpxFetcher:
         resp.raise_for_status()
         return resp.content
 
+    async def fetch_bytes_final_url(self, url: str, **kwargs) -> tuple[bytes, str]:
+        """Fetch binary content, also returning the final URL after redirects.
+
+        Lets callers detect redirect-to-placeholder responses (e.g. DMM's
+        now_printing.jpg) that arrive as a misleading HTTP 200.
+        """
+        client = await self._ensure_client()
+        resp = await client.get(url, headers={**self.headers, **kwargs.get("headers", {})})
+        resp.raise_for_status()
+        return resp.content, str(resp.url)
+
     async def close(self):
         if self._client:
             await self._client.aclose()

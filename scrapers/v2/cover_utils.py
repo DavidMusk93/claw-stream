@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import random
+import re
 import struct
 
 from scrapers.v2.fetchers import HttpxFetcher, USER_AGENTS
@@ -93,36 +94,82 @@ def is_good_cover(data: bytes) -> bool:
     return w >= 200 and h >= 200
 
 
+def _dmm_candidate_urls(code: str) -> list[str]:
+    """Generate DMM CDN cover URL candidates for a title code.
+
+    DMM hosts covers under two roots with different id styles:
+    - mono/movie/adult: physical media, bare code (abf367) or maker-prefixed
+      (118abf367 for Prestige).
+    - digital/video: digital/VR releases, number zero-padded to 5 digits,
+      sometimes maker-prefixed (sivr00490, 1favr00002, 13dsvr01669).
+
+    Unknown ids redirect to a now_printing.jpg placeholder (checked by the
+    caller via the final URL), so ordering only affects latency, not correctness.
+    """
+    m = re.fullmatch(r"([a-z]+)[- ]?(\d+)", code.lower().strip())
+    if not m:
+        return []
+    letters, digits = m.groups()
+    bare = f"{letters}{digits}"
+    padded = f"{letters}{digits.zfill(5)}"
+
+    urls: list[str] = []
+    # Physical: bare code, then the known numeric maker prefixes.
+    for v in (bare, f"118{bare}"):
+        urls.append(f"https://pics.dmm.co.jp/mono/movie/adult/{v}/{v}pl.jpg")
+    # Digital: padded id with common maker prefixes, then unpadded.
+    ids = [padded] if padded == bare else [padded, bare]
+    for ident in ids:
+        for prefix in ("", "1", "13", "118"):
+            v = f"{prefix}{ident}"
+            urls.append(f"https://pics.dmm.co.jp/digital/video/{v}/{v}pl.jpg")
+
+    # Dedupe, preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+async def _try_dmm(fetcher: HttpxFetcher, code: str) -> str:
+    """Try DMM CDN candidates for code, return base64 data URI or empty.
+
+    Skips DMM's now_printing.jpg placeholder: unknown ids redirect there, and
+    follow_redirects makes it look like a valid 200 cover.
+    """
+    for url in _dmm_candidate_urls(code):
+        try:
+            data, final_url = await fetcher.fetch_bytes_final_url(
+                url, headers={"User-Agent": random.choice(USER_AGENTS)}
+            )
+            if "now_printing" in final_url:
+                continue
+            if data and is_good_cover(data):
+                b64 = base64.b64encode(data).decode()
+                return f"data:{_guess_mime(data)};base64,{b64}"
+        except Exception:
+            pass
+    return ""
+
+
 async def download_cover_b64(cover_url: str, code: str = "") -> str:
     """Download cover, prefer HD sources: DMM CDN → given URL → return base64 data URI or empty"""
-    tried: set[str] = set()
-
-    # 1. DMM CDN — try both the bare code and the "118" maker prefix
+    # 1. DMM CDN — physical and digital/VR id variants
     if code:
-        c = code.lower().replace("-", "")
-        for dmm_code in (c, f"118{c}"):
-            dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{dmm_code}/{dmm_code}pl.jpg"
-            if dmm_url in tried:
-                continue
-            tried.add(dmm_url)
-            try:
-                async with HttpxFetcher() as fetcher:
-                    data = await fetcher.fetch_bytes(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                    if data and is_good_cover(data):
-                        b64 = base64.b64encode(data).decode()
-                        return f"data:{_guess_mime(data)};base64,{b64}"
-            except Exception:
-                pass
+        async with HttpxFetcher() as fetcher:
+            b64 = await _try_dmm(fetcher, code)
+            if b64:
+                return b64
 
     # 2. Given URL
-    for url in [cover_url] if cover_url else []:
-        if url in tried:
-            continue
-        tried.add(url)
+    if cover_url:
         try:
             async with HttpxFetcher() as fetcher:
                 data = await fetcher.fetch_bytes(
-                    url,
+                    cover_url,
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
                         "Referer": "https://ijavtorrent.com/",
@@ -132,40 +179,24 @@ async def download_cover_b64(cover_url: str, code: str = "") -> str:
                     b64 = base64.b64encode(data).decode()
                     return f"data:{_guess_mime(data)};base64,{b64}"
         except Exception:
-                pass
+            pass
 
     return ""
 
 
 async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) -> str:
     """Reuse fetcher client to download a single cover, return base64 data URI or empty"""
-    tried: set[str] = set()
-
-    # 1. DMM CDN — some makers (e.g. Prestige) use a numeric product-id
-    # prefix ("118abf367") instead of the bare code, so try both.
+    # 1. DMM CDN — physical and digital/VR id variants
     if code:
-        c = code.lower().replace("-", "")
-        for dmm_code in (c, f"118{c}"):
-            dmm_url = f"https://pics.dmm.co.jp/mono/movie/adult/{dmm_code}/{dmm_code}pl.jpg"
-            if dmm_url in tried:
-                continue
-            tried.add(dmm_url)
-            try:
-                data = await fetcher.fetch_bytes(dmm_url, headers={"User-Agent": random.choice(USER_AGENTS)})
-                if data and is_good_cover(data):
-                    b64 = base64.b64encode(data).decode()
-                    return f"data:{_guess_mime(data)};base64,{b64}"
-            except Exception:
-                pass
+        b64 = await _try_dmm(fetcher, code)
+        if b64:
+            return b64
 
     # 2. Given URL
-    for url in [cover_url] if cover_url else []:
-        if url in tried:
-            continue
-        tried.add(url)
+    if cover_url:
         try:
             data = await fetcher.fetch_bytes(
-                url,
+                cover_url,
                 headers={
                     "User-Agent": random.choice(USER_AGENTS),
                     "Referer": "https://ijavtorrent.com/",

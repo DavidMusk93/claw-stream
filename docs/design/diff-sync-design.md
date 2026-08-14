@@ -58,7 +58,7 @@ new_items = [it for it in items if (star_id, it.code) not in existing_codes]
 
 - `release_date` is the torrent **upload date** (`pubDate`), not the retail release date (legacy rows keep retail dates; sorting still works)
 - `views` is unavailable (`None`); `likes` = max `nyaa:downloads` among the title's torrents
-- `cover_url` is unavailable; covers rely on the DMM CDN by-code fallback in `cover_utils.py` (including the `118`-prefixed maker variant, e.g. Prestige `118abf367`)
+- `cover_url` is unavailable; covers rely on the DMM CDN by-code fallback in `cover_utils.py` (`_dmm_candidate_urls`): physical `mono/movie/adult` ids (bare + `118` maker prefix, e.g. Prestige `118abf367`) and digital/VR `digital/video` ids with the number zero-padded to 5 digits plus maker prefixes (e.g. `sivr00490`, `1favr00002`, `13dsvr01669`). Unknown DMM ids redirect to a `now_printing.jpg` placeholder with HTTP 200 — the fallback detects it via the final URL and skips it.
 
 **Why parse all titles?**
 
