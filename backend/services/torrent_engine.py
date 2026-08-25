@@ -59,6 +59,9 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
 
     Returns (moov_start, moov_end). moov_start=0 and moov_end>0 means head-moov.
     moov_start>0 means tail-moov. Returns (0, 0) if not found.
+
+    Head scan first; if no moov is found there (tail-moov files, or a head
+    that does not parse cleanly), fall back to scanning the file tail.
     """
     cached = _MOOV_CACHE.get(path)
     if cached is not None:
@@ -72,13 +75,11 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
         with open(path, "rb") as f:
             data = f.read(max_read)
             offset = 0
-            mdat_end = 0
             while offset < len(data) - 8:
                 size = int.from_bytes(data[offset:offset+4], "big")
                 box_type = data[offset+4:offset+8]
                 if size == 0:
-                    if box_type == b"mdat":
-                        mdat_end = file_size
+                    # size=0 means "to end of file"; only mdat is valid here.
                     break
                 if size == 1:
                     if offset + 16 > len(data):
@@ -87,12 +88,10 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
                     if size > 100 * 1024 * 1024 * 1024:
                         break
                     if box_type == b"mdat":
-                        mdat_end = offset + size
                         break
                 elif size < 8 or size > 100 * 1024 * 1024 * 1024:
                     break
                 elif box_type == b"mdat":
-                    mdat_end = offset + size
                     break
                 if box_type == b"moov":
                     result = (0, offset + size)
@@ -100,22 +99,23 @@ def _scan_mp4_moov(path: str, max_read: int = 16 * 1024 * 1024) -> tuple[int, in
                     return result
                 offset += size
 
-            # tail-moov: moov is after mdat
-            if mdat_end > 0:
-                f.seek(max(0, mdat_end - 1024))
-                check = f.read(2048)
-                moov_idx = check.find(b"moov")
-                if moov_idx >= 4:
-                    box_size_raw = int.from_bytes(check[moov_idx - 4:moov_idx], "big")
-                    if box_size_raw == 1 and moov_idx >= 12:
-                        box_size = int.from_bytes(check[moov_idx - 12:moov_idx - 4], "big")
-                    else:
-                        box_size = box_size_raw
-                    if 0 < box_size < 100 * 1024 * 1024:
-                        moov_start = (mdat_end - 1024 if mdat_end >= 1024 else 0) + moov_idx - 4
-                        result = (moov_start, moov_start + box_size)
-                        _MOOV_CACHE[path] = result
-                        return result
+            # tail-moov fallback: scan the last 128MB for the moov box
+            tail_scan_size = min(128 * 1024 * 1024, file_size)
+            tail_offset = max(0, file_size - tail_scan_size)
+            f.seek(tail_offset)
+            check = f.read(tail_scan_size)
+            moov_idx = check.find(b"moov")
+            if moov_idx >= 4:
+                box_size_raw = int.from_bytes(check[moov_idx - 4:moov_idx], "big")
+                if box_size_raw == 1 and moov_idx >= 12:
+                    box_size = int.from_bytes(check[moov_idx - 12:moov_idx - 4], "big")
+                else:
+                    box_size = box_size_raw
+                if 0 < box_size < 100 * 1024 * 1024:
+                    moov_start = tail_offset + moov_idx - 4
+                    result = (moov_start, moov_start + box_size)
+                    _MOOV_CACHE[path] = result
+                    return result
     except Exception as exc:
         log.warning(f"_scan_mp4_moov failed for {path}: {exc}")
     return 0, 0
@@ -359,7 +359,11 @@ class TorrentEngine:
         self._status_cache_ttl = 2.0  # seconds
         self._status_cache_lock = threading.Lock()
 
+        # In-flight add_torrent markers: hash -> Event (set when add finishes)
+        self._adding: dict[str, threading.Event] = {}
+
         self._stop = False
+        self._last_progress_push = 0.0
         self._alert_thread = threading.Thread(target=self._process_alerts, daemon=True)
         self._alert_thread.start()
         self._clean_thread = threading.Thread(target=self._periodic_clean, daemon=True)
@@ -687,20 +691,47 @@ class TorrentEngine:
         )
 
     def add_torrent(self, magnet: str, prefetch: bool = False) -> dict[str, Any] | None:
-        """Add a magnet link to the download queue."""
+        """Add a magnet link to the download queue.
+
+        Concurrent adds of the same hash (preload thread vs API call) are
+        serialized via an in-flight marker; the loser waits and then returns
+        the winner's entry instead of racing session.add_torrent.
+        """
         hash_str = self._extract_hash(magnet)
         if not hash_str:
             return None
 
-        with self.lock:
-            existing = self.torrents.get(hash_str)
-        if existing:
-            existing["last_access"] = time.time()
-            # Only re-run _on_metadata if tracker is missing (first time
-            # metadata becomes available after a bare-hash add).
-            if existing["handle"].status().has_metadata and not existing.get("tracker"):
-                self._on_metadata(existing["handle"])
-            return existing
+        while True:
+            with self.lock:
+                existing = self.torrents.get(hash_str)
+                in_flight = self._adding.get(hash_str)
+                if existing is None and in_flight is None:
+                    in_flight = threading.Event()
+                    self._adding[hash_str] = in_flight
+                    owner = True
+                else:
+                    owner = False
+            if existing is not None:
+                existing["last_access"] = time.time()
+                # Only re-run _on_metadata if tracker is missing (first time
+                # metadata becomes available after a bare-hash add).
+                if existing["handle"].status().has_metadata and not existing.get("tracker"):
+                    self._on_metadata(existing["handle"])
+                return existing
+            if owner:
+                break
+            # Another add for this hash is in flight — wait for it to finish.
+            in_flight.wait(timeout=60)
+
+        try:
+            return self._add_torrent_inner(hash_str, magnet, prefetch)
+        finally:
+            with self.lock:
+                self._adding.pop(hash_str, None)
+            in_flight.set()
+
+    def _add_torrent_inner(self, hash_str: str, magnet: str, prefetch: bool) -> dict[str, Any] | None:
+        """Body of add_torrent, run as the owner of the in-flight marker."""
 
         # Check cache limit before adding
         self._enforce_cache_limit()
@@ -744,12 +775,23 @@ class TorrentEngine:
         if os.path.exists(torrent_path) and video_exists:
             try:
                 ti = lt.torrent_info(torrent_path)
-                if str(ti.info_hash()) != hash_str:
+                ti_hashes = ti.info_hashes()
+                ti_v1 = str(ti_hashes.v1)
+                ti_v2_trunc = str(ti_hashes.v2)[:40]
+                if hash_str not in (ti_v1, ti_v2_trunc):
                     log.warning(
                         f"metadata cache mismatch: {hash_str[:12]}... "
-                        f"file hash={str(ti.info_hash())[:12]}... deleting stale cache"
+                        f"file hash={ti_v1[:12]}/{ti_v2_trunc[:12]}... deleting stale cache"
                     )
                     os.remove(torrent_path)
+                elif ti_v1 != "0" * 40 and ti_v1 != hash_str:
+                    # Hybrid (v1+v2) torrent addressed by its truncated v2 hash:
+                    # libtorrent rejects params.ti when the real v1 differs from
+                    # the magnet's btih. Skip the cache and fetch from peers.
+                    log.info(
+                        f"metadata cache skipped (hybrid torrent addressed by v2): "
+                        f"{hash_str[:12]}..."
+                    )
                 else:
                     params.ti = ti
                     log.info(f"metadata cache hit: {hash_str[:12]}... ({ti.name()})")
