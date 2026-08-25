@@ -58,12 +58,29 @@ Before SSE, the frontend ran four independent short-polling loops:
 | Event | Source | Payload | Replaces |
 |-------|--------|---------|----------|
 | `sync.started` | `sync.py` | `{started_at}` | Manual syncRunning=true |
-| `sync.completed` | `sync.py` | `{log_lines, total_new, failed, elapsed}` | 2s polling loop |
-| `sync.error` | `sync.py` | `{error, elapsed}` | 2s polling loop |
+| `sync.completed` | `sync.py` | `{log_lines, total_new, failed, elapsed}` | 5s sync-status polling |
+| `sync.error` | `sync.py` | `{error, elapsed}` | 5s sync-status polling |
+| `sync.resync_required` | `EventBus` | `{}` | Slow-client safety net (see §4) |
 | `star.ready` | `stars.py` | `{code, name, titles_count}` | 3s add-star polling |
-| `torrent.head_ready` | `TorrentEngine` | `{hash}` | 2s video status polling |
-| `torrent.status` | `TorrentEngine` | `{hash, state}` | 2s video status polling |
-| `cache.update` | `TorrentEngine` / `cache.py` | `{action, hash}` | 5s cache polling |
+| `torrent.head_ready` | `TorrentEngine` | `{hash}` | video status polling |
+| `torrent.status` | `TorrentEngine` | `{hash, state}` | video status polling |
+| `torrent.progress` | `TorrentEngine` | `{hash, state, progress, download_rate, upload_rate, peers, ready, head_ready, video_size, local_size, verified_pieces}` | 5s video status polling |
+| `cache.update` | `TorrentEngine` / `cache.py` | `{action, hash}` | 30s cache polling |
+
+### `torrent.progress`: throttled snapshot push
+
+State *transitions* are rare, but progress/speed during an active download is a
+continuous signal. Instead of letting the frontend poll for it, the engine
+pushes a throttled snapshot every **2 seconds** from the alert thread
+(`TorrentEngine._maybe_push_progress`), only for torrents that are downloading,
+checking, or were played within the last 10 minutes.
+
+The payload is built from **in-memory state only** (`handle.status()` +
+`PieceStateTracker` counters — no disk I/O), and carries every field the player
+UI renders. The frontend merges it into local state directly and never refetches
+`/torrent/status` on a schedule; `local_size` is a verified-bytes estimate
+(exact on-disk size still comes from the one-shot status fetch at subscribe time
+and from resync).
 
 ### The key insight: state change is rare
 
@@ -105,21 +122,23 @@ torrent I/O.
 
 ---
 
-## 4. Fallback Strategy: Graceful Degradation
+## 4. Resilience: Reconnect + Resync, No Polling Fallback
 
-SSE connections can drop (network switch, sleep/wake, proxy timeout).
-We do **not** let the UI freeze.
+SSE connections can drop (network switch, sleep/wake, proxy timeout) and client
+event queues can overflow on slow devices. We handle both **without any
+polling fallback**:
 
-| Feature | SSE | Fallback |
-|---------|-----|----------|
-| Sync status | Real-time events | None needed (POST returns immediately) |
-| Star ready | `star.ready` event | None needed (cache invalidation handles refresh) |
-| Video player | `torrent.head_ready` | 5s polling (was 2s) |
-| Cache panel | `cache.update` event | 10s polling (was 5s) |
+| Failure | Mechanism |
+|---------|-----------|
+| Connection drop | Server sends `retry: 3000` as the first frame; browser `EventSource` reconnects natively (frontend keeps an exponential-backoff guard) |
+| Slow client (queue full, 256 events) | `EventBus` **coalesces**: it drains the client queue and enqueues one `sync.resync_required` marker instead of silently disconnecting. The frontend refetches its state once and continues |
+| Missed one-shot event (`torrent.head_ready`) | Covered by the same `sync.resync_required` refetch plus the `torrent.progress` stream, which re-asserts `head_ready=true` every 2s while the torrent is active |
 
-**Why keep fallback at all?** Because `head_ready` is a one-shot event. If the SSE
-connection drops between piece-finish and reconnect, the video modal would wait
-forever. A 5s fallback poll catches this edge case with minimal cost.
+**Why no polling fallback at all?** A fallback timer masks event-loss bugs and
+re-creates the battery/CPU cost SSE was meant to remove. Resync-on-demand is
+cheaper and safer than trying to deliver every intermediate frame to a slow
+client. The frontend contains **zero `setInterval` status loops**; the only
+`setTimeout`s left are UI interaction timers (control-bar hide, gesture hints).
 
 ---
 
@@ -133,13 +152,14 @@ Per request: ~800 bytes headers + TLS overhead
 Monthly baseline (24×7): ~5.1 GB of status polls
 ```
 
-### After (SSE + sparse fallback)
+### After (pure SSE, no polling)
 
 ```
-1 SSE connection (persistent, ~50 bytes heartbeat/30s)
-Fallback polls: ~12 req/minute (video 5s + cache 10s)
-Monthly baseline: ~0.3 GB
-Reduction: ~94%
+1 SSE connection (persistent, ~50 bytes heartbeat/30s + retry: 3000 hint)
+torrent.progress: 0.5 events/s × ~200B, only while a torrent is active
+Fallback polls: 0
+Monthly baseline: ~0.1 GB
+Reduction: ~98%
 ```
 
 ### Latency improvement
@@ -191,19 +211,20 @@ but the improvement is life-or-death for low-end users.
 
 ## 7. Implementation Checklist
 
-- [x] `core/events.py` — Async pub/sub event bus (singleton)
-- [x] `backend/routers/events.py` — `/api/events` SSE endpoint with heartbeat
+- [x] `core/events.py` — Async pub/sub event bus (singleton) + slow-client coalesce/resync
+- [x] `backend/routers/events.py` — `/api/events` SSE endpoint with heartbeat + `retry: 3000`
 - [x] `sync.py` — Broadcast `sync.started/completed/error`
 - [x] `stars.py` — Broadcast `star.ready` after `_bg_sync`
 - [x] `torrent_engine.py` — `_emit_event()` + cross-thread `run_coroutine_threadsafe`
 - [x] `torrent_engine.py` — Broadcast `torrent.head_ready` on piece finish
 - [x] `torrent_engine.py` — Broadcast `torrent.status` on finished/checked
+- [x] `torrent_engine.py` — Broadcast `torrent.progress` (2s throttle, in-memory only)
 - [x] `torrent_engine.py` — Broadcast `cache.update` on add/remove/periodic_clean
 - [x] `cache.py` — Broadcast `cache.update` on delete/gc
 - [x] `frontend/composables/useEventSource.ts` — Global SSE manager with auto-reconnect
-- [x] `frontend/pages/index.vue` — Listen to `sync.*` and `star.ready`
-- [x] `frontend/composables/useVideoPlayer.ts` — Listen to `torrent.*` + 5s fallback
-- [x] `frontend/components/cache/CachePanel.vue` — Listen to `cache.update` + 10s fallback
+- [x] `frontend/pages/index.vue` — Listen to `sync.*` + `star.ready` + resync (no polling)
+- [x] `frontend/composables/useVideoPlayer.ts` — Pure SSE status (progress merge + event-driven head-ready wait)
+- [x] `frontend/components/cache/CachePanel.vue` — `cache.update` debounce + `torrent.progress` field-level updates (no polling)
 
 ---
 

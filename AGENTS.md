@@ -37,7 +37,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **PieceStateTracker**: Independent piece state machine (`backend/services/piece_tracker.py`). libtorrent `have_piece()` is unreliable during `checking_files`, so we track with bitmaps.
 - **On-demand download**: Only download head + tail + current window (±30 pieces); all other pieces priority = 0.
 - **Thread pool expansion**: Default thread pool expanded to 32 workers in `backend/main.py` lifespan to prevent blocking I/O from overwhelming the event loop.
-- **SSE push replaces polling**: `core/events.py` in-process event bus + `GET /api/events` SSE stream (`sync.status`, `torrent.status`, `cache.update`, `star.ready`); frontend consumes via `useEventSource.ts`. See `docs/design/sse-push-architecture.md`.
+- **SSE push replaces polling**: `core/events.py` in-process event bus + `GET /api/events` SSE stream (`sync.status`, `sync.resync_required`, `torrent.status`, `torrent.progress` (2s throttled, in-memory only), `cache.update`, `star.ready`); frontend consumes via `useEventSource.ts` with zero polling timers. Slow clients are coalesced (queue drain + `sync.resync_required`), never silently disconnected. See `docs/design/sse-push-architecture.md`.
 - **DuckDB serial write queue**: all DB writes go through `core/db/write_queue.py` (single worker coroutine), eliminating DuckDB's one-writer lock conflicts.
 - **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
 - **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` are served as static files by Caddy; `/api/cover/{code}` falls back to the DB blob and backfills disk.

@@ -39,20 +39,40 @@ class EventBus:
         log.debug(f"SSE client unsubscribed, total={len(self._clients)}")
 
     async def publish(self, event: str, data: dict[str, Any]) -> None:
-        """Broadcast an event to all connected clients."""
+        """Broadcast an event to all connected clients.
+
+        Slow-client policy (coalesce + resync, not disconnect): when a client
+        queue is full, drain it and enqueue a single ``sync.resync_required``
+        marker. The connection stays open and the frontend does one full
+        refetch on receipt, so no event stream is silently lost.
+        """
         payload = json.dumps({"event": event, "data": data, "ts": time.time()})
-        dead: list[asyncio.Queue] = []
         async with self._lock:
             clients = list(self._clients)
         for q in clients:
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
-                dead.append(q)
-        for q in dead:
-            async with self._lock:
-                if q in self._clients:
-                    self._clients.remove(q)
+                self._coalesce_slow_client(q)
+
+    def _coalesce_slow_client(self, q: asyncio.Queue) -> None:
+        """Drain a full client queue and mark it for resync."""
+        drained = 0
+        try:
+            while True:
+                q.get_nowait()
+                drained += 1
+        except asyncio.QueueEmpty:
+            pass
+        marker = json.dumps({"event": "sync.resync_required", "data": {}, "ts": time.time()})
+        try:
+            q.put_nowait(marker)
+        except asyncio.QueueFull:
+            pass
+        log.warning(
+            f"SSE slow client coalesced: dropped {drained} events, "
+            f"sent sync.resync_required (clients={len(self._clients)})"
+        )
 
 
 # Global singleton

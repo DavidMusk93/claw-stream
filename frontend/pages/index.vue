@@ -358,7 +358,6 @@ function openVideo(magnet: string) {
 
 const syncRunning = ref(false)
 const syncError = ref('')
-let syncStatusTimer: ReturnType<typeof setInterval> | null = null
 const { getSyncStatus } = useApi()
 
 async function fetchSyncStatus(silent = false) {
@@ -372,23 +371,6 @@ async function fetchSyncStatus(silent = false) {
     if (!silent) syncError.value = e?.message || 'Failed to check sync status'
   }
 }
-
-function startSyncStatusPoll() {
-  if (syncStatusTimer) return
-  syncStatusTimer = setInterval(() => fetchSyncStatus(true), 5000)
-}
-
-function stopSyncStatusPoll() {
-  if (syncStatusTimer) {
-    clearInterval(syncStatusTimer)
-    syncStatusTimer = null
-  }
-}
-
-watch(syncRunning, (running) => {
-  if (running) startSyncStatusPoll()
-  else stopSyncStatusPoll()
-})
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
@@ -487,11 +469,15 @@ onMounted(() => {
   unsubs.push(onServerEvent('sync.completed', handleSyncCompleted))
   unsubs.push(onServerEvent('sync.error', handleSyncError))
   unsubs.push(onServerEvent('star.ready', handleStarReady))
+  // Server coalesced our event queue (slow client) — refetch state once.
+  unsubs.push(onServerEvent('sync.resync_required', () => {
+    fetchSyncStatus(true)
+    refreshNuxtData('stars')
+  }))
 
   onUnmounted(() => {
     unsubs.forEach((fn) => fn())
     if (toastTimer) clearTimeout(toastTimer)
-    stopSyncStatusPoll()
   })
 })
 

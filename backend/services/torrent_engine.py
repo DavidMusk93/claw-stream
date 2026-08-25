@@ -29,6 +29,10 @@ MIN_FREE_SPACE_GB = int(os.environ.get("CACHE_MIN_FREE_GB", "50"))
 PREFETCH_COUNT = 13
 PREFETCH_PERCENT = 0.02
 CACHE_CLEAN_INTERVAL_SEC = 60  # Background cleanup interval
+# Throttle interval for torrent.progress SSE pushes (seconds).
+PROGRESS_PUSH_INTERVAL_SEC = 2.0
+# A torrent stays "live" for progress pushes this long after its last play.
+PROGRESS_PUSH_ACTIVE_WINDOW_SEC = 600
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
     r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
@@ -844,7 +848,76 @@ class TorrentEngine:
                     self._handle_alert(alert)
                 except Exception:
                     log.exception("Unhandled alert processing error")
+            self._maybe_push_progress()
             time.sleep(0.5)
+
+    def _maybe_push_progress(self) -> None:
+        """Throttled torrent.progress SSE push for active torrents.
+
+        Runs in the alert thread. Reads only in-memory state
+        (handle.status() + PieceStateTracker counters) — no disk I/O.
+        The frontend merges the payload into local state directly, which
+        replaces the old 5s /torrent/status polling.
+        """
+        now = time.time()
+        if now - self._last_progress_push < PROGRESS_PUSH_INTERVAL_SEC:
+            return
+        self._last_progress_push = now
+
+        with self.lock:
+            items = list(self.torrents.items())
+
+        checking_states = (
+            lt.torrent_status.checking_files,
+            lt.torrent_status.checking_resume_data,
+        )
+        for hash_str, info in items:
+            try:
+                h = info["handle"]
+                if not h.is_valid():
+                    continue
+                s = h.status()
+                last_play = info.get("_last_play_time", 0)
+                active = (
+                    s.state in (
+                        lt.torrent_status.downloading,
+                        lt.torrent_status.downloading_metadata,
+                    )
+                    or s.state in checking_states
+                    or (last_play and now - last_play < PROGRESS_PUSH_ACTIVE_WINDOW_SEC)
+                )
+                if not active:
+                    continue
+                tracker = info.get("tracker")
+                verified = tracker.verified_count() if tracker else 0
+                if tracker:
+                    total_video_pieces = tracker.end_piece - tracker.start_piece + 1
+                    progress = (verified / total_video_pieces) * 100 if total_video_pieces > 0 else 0.0
+                    head_ready = tracker.head_ready() if tracker._moov_pc > 0 else False
+                    # Verified-bytes estimate; exact on-disk size still comes
+                    # from /torrent/status on refetch/resync.
+                    local_size = verified * tracker.piece_length
+                else:
+                    progress = s.progress * 100
+                    head_ready = False
+                    local_size = 0
+                self._emit_event("torrent.progress", {
+                    "hash": hash_str,
+                    "state": str(s.state),
+                    "progress": progress,
+                    "download_rate": s.download_rate,
+                    "upload_rate": s.upload_rate,
+                    "peers": s.num_peers,
+                    "ready": bool(
+                        info["ready"] and s.has_metadata and s.state not in checking_states
+                    ),
+                    "head_ready": head_ready,
+                    "video_size": info.get("video_size", 0),
+                    "local_size": local_size,
+                    "verified_pieces": verified,
+                })
+            except Exception:
+                log.debug(f"progress push failed for {hash_str[:12]}...", exc_info=True)
 
     def _handle_alert(self, alert: lt.alert) -> None:
         """Handle a single libtorrent alert."""

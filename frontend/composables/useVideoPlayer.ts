@@ -1,3 +1,13 @@
+/**
+ * useVideoPlayer — playback status driven by SSE only (no polling)
+ *
+ * Status updates arrive over the single shared EventSource:
+ *   torrent.progress       — throttled 2s push with full status fields; merged locally
+ *   torrent.head_ready     — head data ready for playback
+ *   torrent.status         — state transitions (checked / finished)
+ *   sync.resync_required   — server coalesced a slow client; refetch status once
+ */
+
 import type { TorrentStatus } from '~/types/api'
 import { onScopeDispose } from 'vue'
 import { logInfo, logError } from './useLogger'
@@ -8,16 +18,23 @@ export function useVideoPlayer() {
   const loading = ref(false)
   const error = ref('')
   const canplayFired = ref(false)
-  let pollTimer: ReturnType<typeof setInterval> | null = null
   let _unsubEvent: (() => void) | null = null
   let _currentHash = ''
+
+  function traceHeaders() {
+    return { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' }
+  }
+
+  function mergeStatus(patch: Record<string, any>) {
+    status.value = { ...(status.value ?? {}), ...patch } as TorrentStatus
+  }
 
   async function checkHeadReady(hash: string): Promise<boolean> {
     const t0 = performance.now()
     try {
       const res = await $fetch(`/api/check/${hash}`, {
         baseURL: config.public.apiBase,
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
       }) as any
       const ok = res.head_ready === true
       logInfo('player', `checkHeadReady ${hash.slice(0, 12)} -> ${ok} (${(performance.now() - t0).toFixed(0)}ms)`)
@@ -32,7 +49,7 @@ export function useVideoPlayer() {
     try {
       const res = await $fetch(`/torrent/status/${hash}`, {
         baseURL: config.public.apiBase,
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
       }) as TorrentStatus
       const prev = status.value
       status.value = res
@@ -49,47 +66,52 @@ export function useVideoPlayer() {
   function startPolling(hash: string) {
     stopPolling()
     _currentHash = hash
-    logInfo('player', `startPolling ${hash.slice(0, 12)}`)
+    logInfo('player', `startStatusSubscription ${hash.slice(0, 12)}`)
 
-    // SSE: instant push when torrent state changes
+    // One initial fetch to populate fields progress events don't carry
+    // (name, quality, piece_segments, exact on-disk local_size).
+    pollStatus(hash).catch(() => {})
+
     const { onServerEvent } = useEventSource()
+    const unsubProgress = onServerEvent('torrent.progress', (data: any) => {
+      if (data.hash !== hash) return
+      const prev = status.value
+      mergeStatus(data)
+      if (!prev?.head_ready && data.head_ready) {
+        logInfo('player', `status ${hash.slice(0, 12)} head_ready=true progress=${(data.progress ?? 0).toFixed(1)}%`)
+      }
+    })
     const unsubHead = onServerEvent('torrent.head_ready', (data: any) => {
       if (data.hash === hash) {
         logInfo('player', `SSE head_ready ${hash.slice(0, 12)}`)
-        pollStatus(hash).catch(() => {})
+        mergeStatus({ head_ready: true })
       }
     })
-    // Also listen on general status changes
     const unsubStatus = onServerEvent('torrent.status', (data: any) => {
-      if (data.hash === hash) {
-        pollStatus(hash).catch(() => {})
-      }
+      if (data.hash !== hash) return
+      mergeStatus({
+        state: data.state,
+        ...(data.ready !== undefined ? { ready: data.ready } : {}),
+      })
+    })
+    const unsubResync = onServerEvent('sync.resync_required', () => {
+      logInfo('player', 'resync required, refetching status once')
+      pollStatus(hash).catch(() => {})
     })
     _unsubEvent = () => {
+      unsubProgress()
       unsubHead()
       unsubStatus()
+      unsubResync()
     }
-
-    // Fallback polling every 5s (SSE covers instant changes)
-    pollTimer = setInterval(async () => {
-      try {
-        await pollStatus(hash)
-      } catch {
-        // ignore polling errors, already logged
-      }
-    }, 5000)
 
     // Ensure cleanup if the calling component is unmounted
     onScopeDispose(stopPolling)
   }
 
   function stopPolling() {
-    if (pollTimer) {
-      logInfo('player', 'stopPolling')
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
     if (_unsubEvent) {
+      logInfo('player', 'stopStatusSubscription')
       _unsubEvent()
       _unsubEvent = null
     }
@@ -102,13 +124,13 @@ export function useVideoPlayer() {
     const start = Date.now()
     logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} start`)
 
-    // Ensure torrent is added once before polling.
+    // Ensure torrent is added once before waiting.
     // add_torrent is idempotent; if already added it returns immediately.
     try {
       await $fetch('/torrent/add', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { magnet: `magnet:?xt=urn:btih:${hash}` },
       })
     } catch {
@@ -120,23 +142,53 @@ export function useVideoPlayer() {
       await $fetch('/torrent/resume', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { hash, time: 0, duration: 0 },
       })
     } catch {
       // ignore
     }
 
-    while (Date.now() - start < timeoutSec * 1000) {
-      if (await checkHeadReady(hash)) {
-        loading.value = false
-        logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} success in ${((Date.now() - start) / 1000).toFixed(1)}s`)
-        return true
-      }
-      await new Promise(r => setTimeout(r, 1500))
+    if (await checkHeadReady(hash)) {
+      loading.value = false
+      logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} success immediately`)
+      return true
     }
 
+    // Event-driven wait: resolve on SSE, no polling loop.
+    const ready = await new Promise<boolean>((resolve) => {
+      const { onServerEvent } = useEventSource()
+      let settled = false
+      let timer: ReturnType<typeof setTimeout>
+      const done = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        unsubs.forEach((fn) => fn())
+        clearTimeout(timer)
+        resolve(ok)
+      }
+      const unsubs = [
+        onServerEvent('torrent.head_ready', (d: any) => {
+          if (d.hash === hash) done(true)
+        }),
+        onServerEvent('torrent.progress', (d: any) => {
+          if (d.hash !== hash) return
+          // Keep the loading overlay progress/speed live while waiting.
+          mergeStatus(d)
+          if (d.head_ready) done(true)
+        }),
+        onServerEvent('sync.resync_required', () => {
+          checkHeadReady(hash).then((ok) => { if (ok) done(true) }).catch(() => {})
+        }),
+      ]
+      timer = setTimeout(() => done(false), timeoutSec * 1000)
+    })
+
     loading.value = false
+    if (ready) {
+      logInfo('player', `waitForHeadReady ${hash.slice(0, 12)} success in ${((Date.now() - start) / 1000).toFixed(1)}s`)
+      return true
+    }
     error.value = 'Load timeout, please check file integrity'
     logError('player', `waitForHeadReady ${hash.slice(0, 12)} timeout after ${timeoutSec}s`)
     return false
@@ -149,7 +201,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/seek', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { hash, time, duration },
       })
     } catch (e: any) {
@@ -164,7 +216,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/progress', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { hash, time, duration },
       })
     } catch (e: any) {
@@ -179,7 +231,7 @@ export function useVideoPlayer() {
       await $fetch('/torrent/pause', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { hash, time: 0, duration: 0 },
       })
     } catch (e: any) {
@@ -190,11 +242,11 @@ export function useVideoPlayer() {
   async function reportResume(hash: string, time: number, duration: number) {
     if (!hash || !duration || duration === Infinity) return
     try {
-      logInfo('player', `reportResume ${hash.slice(0, 12)} time=${time.toFixed(1)}s`)
+      logInfo('player', `reportResume ${hash.slice(0, 12)} time=${time.toFixed(1)}s/${duration.toFixed(1)}s`)
       await $fetch('/torrent/resume', {
         baseURL: config.public.apiBase,
         method: 'POST',
-        headers: { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' },
+        headers: traceHeaders(),
         body: { hash, time, duration },
       })
     } catch (e: any) {

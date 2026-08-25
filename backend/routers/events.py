@@ -2,7 +2,9 @@
 
 Single SSE stream replaces all frontend polling:
 - sync.status — sync start / complete / error
+- sync.resync_required — client event queue overflowed; refetch state once
 - torrent.status — torrent state changes
+- torrent.progress — throttled (2s) in-memory progress push, replaces status polling
 - cache.update — cache items / metrics changes
 - star.ready — newly-added star titles ready
 """
@@ -30,6 +32,8 @@ async def sse_stream() -> StreamingResponse:
 
     async def event_generator():
         try:
+            # Tell the browser to wait 3s before reconnecting after a drop.
+            yield "retry: 3000\n\n"
             while True:
                 # Wait for next event with heartbeat every 30s to keep connection alive
                 try:

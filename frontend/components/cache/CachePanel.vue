@@ -193,8 +193,7 @@ const items = ref<any[]>([])
 const metrics = ref<CacheMetrics | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
-let timer: ReturnType<typeof setInterval> | null = null
-let unsubCache: (() => void) | null = null
+let unsubs: (() => void)[] = []
 let refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const { getCacheItems, getCacheMetrics, deleteCache, addTorrent } = useApi()
@@ -386,19 +385,32 @@ watch(isOpen, (open) => {
   if (open) {
     refresh(true)
     const { onServerEvent } = useEventSource()
-    unsubCache = onServerEvent('cache.update', () => {
-      scheduleRefresh()
-    })
-    timer = setInterval(() => refresh(false), 30000)
+    unsubs = [
+      onServerEvent('cache.update', () => {
+        scheduleRefresh()
+      }),
+      // Field-level live update for visible rows — no refetch, no list re-sort.
+      onServerEvent('torrent.progress', (data: any) => {
+        const item = items.value.find((i) => i.hash === data.hash)
+        if (!item) return
+        Object.assign(item, {
+          state: data.state,
+          progress: data.progress,
+          download_rate: data.download_rate,
+          upload_rate: data.upload_rate,
+          peers: data.peers,
+          head_ready: data.head_ready,
+          verified_pieces: data.verified_pieces,
+        })
+      }),
+      // Server coalesced our event queue — refetch once.
+      onServerEvent('sync.resync_required', () => {
+        refresh(false)
+      }),
+    ]
   } else {
-    if (timer) {
-      clearInterval(timer)
-      timer = null
-    }
-    if (unsubCache) {
-      unsubCache()
-      unsubCache = null
-    }
+    unsubs.forEach((fn) => fn())
+    unsubs = []
     if (refreshDebounceTimer) {
       clearTimeout(refreshDebounceTimer)
       refreshDebounceTimer = null
@@ -407,8 +419,8 @@ watch(isOpen, (open) => {
 })
 
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
-  if (unsubCache) unsubCache()
+  unsubs.forEach((fn) => fn())
+  unsubs = []
   if (refreshDebounceTimer) clearTimeout(refreshDebounceTimer)
 })
 </script>
