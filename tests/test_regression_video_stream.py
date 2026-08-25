@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import stream_router, check_router
+from backend.routers.auth import require_auth
 from backend.services.torrent_engine import (
     TorrentEngine,
     _range_has_data,
@@ -164,6 +165,8 @@ class TestBrowserPlaybackFlow(unittest.TestCase):
         cls.app.state.engine = cls.engine
         cls.app.include_router(stream_router)
         cls.app.include_router(check_router)
+        # Routers enforce the claw_auth cookie in production; bypass in tests.
+        cls.app.dependency_overrides[require_auth] = lambda: None
         cls.client = TestClient(cls.app)
 
     @classmethod

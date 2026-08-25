@@ -3,9 +3,9 @@
 
 Covers fixes that caused ABF-328 "stuck connecting to torrents":
 - prioritize_pieces batch set instead of unreliable piece_priority
-- have_piece=True -> immediate VERIFIED (avoid DOWNLOADING stuck)
+- have_piece() is never trusted (disk is the single source of truth)
 - _bootstrap offset fix for file_offset > 0
-- strict overlay does not force-unbootstrapped pieces
+- bootstrap rescan clears VERIFIED and keeps _moov_vc consistent
 """
 from __future__ import annotations
 
@@ -67,6 +67,9 @@ class MockTorrentHandle:
         self._deadlines: dict[int, int] = {}
         self._status = MagicMock(state=0)  # downloading
 
+    def is_valid(self) -> bool:
+        return True
+
     def torrent_file(self) -> MockTorrentInfo:
         return self._ti
 
@@ -123,11 +126,11 @@ class TestRequestPiecesBatchPrioritize(unittest.TestCase):
         tracker, h = make_tracker(num_pieces=100)
         tracker.set_head_tail_counts(head_count=5, tail_count=5)
         count = tracker.request_head_tail(head_count=5, tail_count=5)
-        # head 0-5 (6 pcs, start_piece=0 + head_count=5 -> end=min(5,99)=5)
-        # + tail 95-99 (5 pcs) = 11 pieces
-        self.assertEqual(count, 11)
+        # head 0-4 (5 pcs, start_piece=0 + head_count-1 -> end=min(4,99)=4)
+        # + tail 95-99 (5 pcs) = 10 pieces
+        self.assertEqual(count, 10)
         # Verify priorities were set via prioritize_pieces (batch)
-        for p in range(0, 6):
+        for p in range(0, 5):
             self.assertEqual(h._prios[p], 7, f"head piece {p} should be prio 7")
         for p in range(95, 100):
             self.assertEqual(h._prios[p], 7, f"tail piece {p} should be prio 7")
@@ -172,26 +175,29 @@ class TestBootstrapOffsetWithFileOffset(unittest.TestCase):
 
 
 class TestRequestPiecesMarksVerifiedWhenHave(unittest.TestCase):
-    """Regression: recheck leaves have_piece=True but tracker stuck in
-    DOWNLOADING because piece_finished_alert never fires for already-complete
-    pieces."""
+    """Regression: have_piece() must NOT be trusted (page-cache false
+    positives in finished/checking state). Disk is the single source of
+    truth: VERIFIED only comes from _bootstrap_from_filesystem() or
+    piece_finished_alert."""
 
     def test_have_piece_true_becomes_verified_not_downloading(self) -> None:
         tracker, h = make_tracker(num_pieces=20, have={3, 4})
         tracker.set_moov_range(0, 100)  # any moov range for head_ready
         count = tracker.request_pieces(2, 5)
-        # pieces 3,4 are already have -> VERIFIED
-        # pieces 2,5 are NOT_DOWNLOADED -> DOWNLOADING
+        # All four pieces requested -> DOWNLOADING. Pieces 3,4 claim
+        # have_piece=True but that is deliberately ignored.
         self.assertEqual(count, 4)
-        self.assertEqual(tracker.piece_state(3), PieceState.VERIFIED)
-        self.assertEqual(tracker.piece_state(4), PieceState.VERIFIED)
+        self.assertEqual(tracker.piece_state(3), PieceState.DOWNLOADING)
+        self.assertEqual(tracker.piece_state(4), PieceState.DOWNLOADING)
         self.assertEqual(tracker.piece_state(2), PieceState.DOWNLOADING)
         self.assertEqual(tracker.piece_state(5), PieceState.DOWNLOADING)
 
 
 class TestOverlayStrictConservative(unittest.TestCase):
-    """Regression: strict=True should NOT force VERIFIED for pieces that
-    _bootstrap did not confirm, preventing page-cache false positives."""
+    """Regression: libtorrent have_piece() page-cache false positives must
+    never leak into tracker state. The current design makes this structural:
+    nothing in PieceStateTracker consults have_piece(); only the filesystem
+    bootstrap and piece_finished/hash_failed alerts mutate state."""
 
     def test_strict_does_not_override_unbootstrapped(self) -> None:
         tracker, h = make_tracker(num_pieces=10)
@@ -199,12 +205,9 @@ class TestOverlayStrictConservative(unittest.TestCase):
         self.assertEqual(tracker.verified_count(), 0)
         # libtorrent claims have_piece(3) = True (page cache false positive)
         h._have = {3}
-        # strict=True should NOT mark piece 3 as VERIFIED
-        tracker._overlay_have_piece(strict=True)
+        # Tracker state is unaffected — there is no have_piece overlay anymore.
         self.assertFalse(tracker.is_verified(3))
-        # strict=False (incremental) would mark it
-        tracker._overlay_have_piece(strict=False)
-        self.assertTrue(tracker.is_verified(3))
+        self.assertEqual(tracker.verified_count(), 0)
 
 
 class TestTailMoovFallbackHeadReady(unittest.TestCase):
@@ -279,16 +282,19 @@ class TestMoovVcConsistency(unittest.TestCase):
         self.assertEqual(tracker.piece_state(3), PieceState.DOWNLOADING)
 
     def test_overlay_strict_clears_verified_and_updates_moov_vc(self) -> None:
-        """Regression: _overlay_have_piece(strict=True) clears VERIFIED when
-        have_piece becomes false, and must update _moov_vc. IPZZ-802 recheck
-        loop root cause."""
+        """Regression: re-bootstrap after data loss clears VERIFIED and must
+        update _moov_vc. IPZZ-802 recheck loop root cause. (The old
+        _overlay_have_piece(strict=True) API is gone; _bootstrap_from_filesystem
+        is now the only disk-truth rescan path.)"""
         tracker, h = make_tracker(num_pieces=20)
         self._moov_range_covering_piece_3(tracker)
         tracker._set_verified(3)
         self.assertEqual(tracker._moov_vc, 1)
-        # Simulate recheck: libtorrent now says have_piece(3)=False
+        # Simulate recheck/data loss: disk now has nothing for this torrent.
+        # The tracker's temp file was created empty, so a filesystem rescan
+        # must drop the manually-set VERIFIED bit.
         h._have = set()
-        tracker._overlay_have_piece(strict=True)
+        tracker._bootstrap_from_filesystem()
         self.assertEqual(tracker.piece_state(3), PieceState.NOT_DOWNLOADED)
         self.assertEqual(tracker._moov_vc, 0)
 

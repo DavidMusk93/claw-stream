@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 import libtorrent as lt
 
 from backend.routers import stream_router, check_router
+from backend.routers.auth import require_auth
 from backend.services.torrent_engine import CACHE_DIR, TorrentEngine, find_video_state
 from backend.services.video_stream import read_video_range
 from tests.local_bt_fixture import LocalSeed, download_with_engine, cleanup_cache_dir
@@ -75,6 +76,8 @@ class _SharedEngine:
         app.state.engine = cls._instance
         app.include_router(stream_router)
         app.include_router(check_router)
+        # Routers enforce the claw_auth cookie in production; bypass in tests.
+        app.dependency_overrides[require_auth] = lambda: None
         cls._client = TestClient(app)
         return cls._instance, cls._video_path, cls._client
 
@@ -86,6 +89,11 @@ class _SharedEngine:
         if cls._temp_dir:
             shutil.rmtree(cls._temp_dir, ignore_errors=True)
             cls._temp_dir = None
+        # Remove the downloaded fixture from the shared cache dir so later
+        # test modules do not inherit a preload/add_torrent race.
+        if cls._hash:
+            cleanup_cache_dir(None, cls._hash)
+            cls._hash = None
         if cls._seed:
             cls._seed.stop()
             cls._seed = None
@@ -192,7 +200,8 @@ class _MockEngine:
 
 
 class TestCheckingFilesBlocking(unittest.TestCase):
-    """Verify that checking_files state blocks stream and check endpoints.
+    """Verify that checking_files blocks /stream (503) while /api/check keeps
+    serving filesystem truth (SEEK_DATA), independent of libtorrent's state.
 
     Uses a real cached video file (3–6 GB) from CACHE_DIR. Large files keep
     libtorrent in checking_files for 10–30 s — long enough to reliably assert
@@ -224,6 +233,8 @@ class TestCheckingFilesBlocking(unittest.TestCase):
         app.state.engine = engine
         app.include_router(stream_router)
         app.include_router(check_router)
+        # Routers enforce the claw_auth cookie in production; bypass in tests.
+        app.dependency_overrides[require_auth] = lambda: None
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
@@ -248,10 +259,10 @@ class TestCheckingFilesBlocking(unittest.TestCase):
                         return entry
         return None
 
-    def test_checking_files_allows_stream_if_data_present(self) -> None:
-        """Large cached file enters checking_files, but stream/check still work
-        because filesystem SEEK_DATA verifies data presence independently of
-        libtorrent's checking state."""
+    def test_checking_files_blocks_stream_with_503(self) -> None:
+        """Large cached file enters checking_files; /api/check still reports
+        head_ready from the filesystem (SEEK_DATA), but /stream returns 503
+        to prevent reading data whose integrity is not yet verified."""
         hash_str = self.hash_str
 
         # Poll until checking_files (large files enter this state immediately)
@@ -273,13 +284,12 @@ class TestCheckingFilesBlocking(unittest.TestCase):
             "head_ready must be True when filesystem head data is present even during checking",
         )
 
-        # /stream must return 206 if data exists
+        # /stream must refuse with 503 while checking (see stream.py docstring)
         r = self.client.get(
             f"/stream/{hash_str}",
             headers={"Range": "bytes=0-1048575"},
         )
-        # Hole detection may return 416 if data is missing; 206 or 416 are both acceptable
-        self.assertIn(r.status_code, (206, 416), "Stream must be allowed during checking_files")
+        self.assertEqual(r.status_code, 503, "Stream must be blocked during checking_files")
 
         # Wait for checking to finish (may take 10–30 s for a 4 GB file)
         for _ in range(600):
@@ -388,6 +398,8 @@ def _make_private_app(cache_dir: str) -> tuple[FastAPI, TorrentEngine]:
     app.state.engine = engine
     app.include_router(stream_router)
     app.include_router(check_router)
+    # Routers enforce the claw_auth cookie in production; bypass in tests.
+    app.dependency_overrides[require_auth] = lambda: None
     return app, engine
 
 

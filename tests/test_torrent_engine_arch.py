@@ -51,6 +51,9 @@ class MockTorrentHandle:
         self._have: set[int] = set()
         self._hash = ""
 
+    def is_valid(self) -> bool:
+        return True
+
     def status(self) -> MagicMock:
         m = MagicMock()
         m.state = self._state
@@ -191,20 +194,24 @@ class TestBootstrapFirstVerification(unittest.TestCase):
         self.assertTrue(info.get("ready"), "ready must be True after bootstrap-first")
         self.assertTrue(tracker._bootstrap_called, "bootstrap must be called")
 
-    def test_finished_missing_triggers_readd(self) -> None:
-        """finished + bootstrap head_ready=False → _readd_torrent triggered."""
+    def test_finished_missing_triggers_recheck(self) -> None:
+        """finished + bootstrap head_ready=False → force_recheck triggered.
+
+        Current architecture (commit bd31dc9) uses force_recheck, which
+        re-verifies against hashes while preserving downloaded cache. The
+        older _readd_torrent path is retained only as a rate-limited helper.
+        """
         handle = MockTorrentHandle(state=lt.torrent_status.finished)
         tracker = MockTracker(head_ready_val=False, moov_pc=5)
         info, hash_str = self._inject_torrent(handle, tracker)
 
         self.engine._on_metadata(handle)
 
-        # Current architecture re-adds the torrent to clear finished-state deadlock;
-        # force_recheck is intentionally never used because it reads page-cache zeros.
-        self.assertFalse(
+        self.assertTrue(
             handle._force_recheck_called,
-            "force_recheck must NOT be called in bootstrap-first architecture",
+            "force_recheck must be called when bootstrap shows holes",
         )
+        self.assertTrue(info.get("_recheck_done"), "_recheck_done must be set")
 
     def test_non_finished_does_not_recheck(self) -> None:
         """Non-finished torrents never trigger recheck logic."""
@@ -218,17 +225,18 @@ class TestBootstrapFirstVerification(unittest.TestCase):
         self.assertFalse(info.get("_recheck_done"), "_recheck_done must not be set")
 
     def test_finished_no_tracker_leaves_not_ready(self) -> None:
-        """finished but tracker missing → leave ready=False (tracker created by _on_metadata normally)."""
+        """finished with a freshly-created tracker and no verified disk data →
+        force_recheck clears the finished false-positive; ready stays False."""
         handle = MockTorrentHandle(state=lt.torrent_status.finished)
         info, hash_str = self._inject_torrent(handle, tracker=None)
 
         self.engine._on_metadata(handle)
 
-        self.assertFalse(
+        self.assertTrue(
             handle._force_recheck_called,
-            "force_recheck must NOT be called in bootstrap-first architecture",
+            "finished false-positive with unverified disk data must force_recheck",
         )
-        self.assertFalse(info.get("ready"), "ready should remain False without tracker")
+        self.assertFalse(info.get("ready"), "ready should remain False without verified data")
 
 
 class TestTieredCacheClassification(unittest.TestCase):

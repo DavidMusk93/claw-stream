@@ -129,6 +129,11 @@ def download_with_engine(
     # Manually connect to local seed to avoid DHT discovery delay
     handle.connect_peer(("127.0.0.1", seed_port), 0)
 
+    # Engine adds torrents paused by design (on-demand download). Tests want a
+    # full download, so resume first, then — once metadata has been applied —
+    # raise every piece's priority to override the head+moov-only window.
+    engine.resume_download(hash_str, 0.0, 0.0)
+
     # Wait for metadata
     for _ in range(int(timeout * 2)):
         if handle.status().has_metadata:
@@ -137,6 +142,16 @@ def download_with_engine(
     if not handle.status().has_metadata:
         engine.shutdown()
         raise RuntimeError("Timeout waiting for metadata from local seed")
+
+    # Wait until _on_metadata finished applying its (restrictive) priorities,
+    # then request all pieces so the torrent actually completes.
+    for _ in range(int(timeout * 2)):
+        if info.get("_metadata_done"):
+            break
+        time.sleep(0.5)
+    ti_tmp = handle.torrent_file()
+    if ti_tmp:
+        handle.prioritize_pieces([7] * ti_tmp.num_pieces())
 
     # Wait for download completion (is_seed is more reliable than progress)
     deadline = time.time() + timeout
