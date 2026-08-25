@@ -2,7 +2,7 @@
  * useEventSource — Global SSE connection manager
  *
  * Single EventSource replaces all polling:
- *   sync.started / sync.completed / sync.error
+ *   sync.started / sync.progress / sync.completed / sync.error
  *   star.ready
  *   torrent.status (future)
  *   cache.update (future)

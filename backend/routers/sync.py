@@ -44,7 +44,10 @@ async def _run_sync_bg() -> None:
     try:
         from scrapers.v2.tasks.sync_titles import run as run_sync_titles
 
-        outcome = await run_sync_titles(CONFIG_PATH)
+        async def _on_progress(progress: dict[str, Any]) -> None:
+            await publish_event("sync.progress", progress)
+
+        outcome = await run_sync_titles(CONFIG_PATH, on_progress=_on_progress)
         results = outcome["results"]
         failed = outcome["failed"]
         log_lines = [f"{r.get('name', '?')}: {r.get('count', 0)} titles" for r in results]

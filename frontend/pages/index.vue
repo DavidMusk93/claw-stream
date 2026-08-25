@@ -14,12 +14,14 @@
           />
         </div>
         <button
-          class="flex items-center gap-2 h-10 px-4 rounded-full bg-white text-[14px] font-medium text-foreground transition-all duration-200 hover:bg-[#F2F2F7] active:bg-[#E5E5EA] disabled:opacity-40 disabled:cursor-not-allowed border border-black/[0.06] shadow-sm active:scale-[0.97]"
+          class="flex items-center gap-2 h-10 px-4 rounded-full text-[14px] font-medium transition-all duration-200 active:scale-[0.97] disabled:cursor-default"
+          :class="syncRunning
+            ? 'bg-black/[0.04] text-foreground-muted'
+            : 'bg-black text-white hover:bg-black/85 shadow-sm'"
           :disabled="syncRunning"
           @click="startSync"
         >
           <svg
-            v-if="!syncRunning"
             width="15"
             height="15"
             viewBox="0 0 24 24"
@@ -28,17 +30,12 @@
             stroke-width="2.5"
             stroke-linecap="round"
             stroke-linejoin="round"
+            :class="{ 'animate-spin': syncRunning }"
           >
             <polyline points="23 4 23 10 17 10" />
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
           </svg>
-          <template v-else>
-            <span class="relative flex h-[15px] w-[15px]">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-foreground opacity-75" />
-              <span class="relative inline-flex rounded-full h-[15px] w-[15px] bg-foreground/90" />
-            </span>
-          </template>
-          <span v-if="syncRunning" class="hidden sm:inline">Syncing...</span>
+          <span v-if="syncRunning" class="tabular-nums">{{ syncProgressText || 'Syncing…' }}</span>
           <span v-else class="hidden sm:inline">Refresh</span>
         </button>
       </div>
@@ -207,46 +204,16 @@
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
     <CachePanel :stars="displayStars" />
 
-    <!-- Sync result toast -->
-    <Transition
-      enter-active-class="transition duration-300 ease-out"
-      enter-from-class="translate-y-4 opacity-0"
-      enter-to-class="translate-y-0 opacity-100"
-      leave-active-class="transition duration-200 ease-in"
-      leave-from-class="translate-y-0 opacity-100"
-      leave-to-class="translate-y-4 opacity-0"
-    >
-      <div
-        v-if="toastVisible"
-        class="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-start gap-3.5 px-5 py-4 rounded-2xl shadow-2xl max-w-md w-[92vw] bg-white border border-black/[0.06]"
-        :class="toastType === 'error' ? 'border-[#ff453a]/30' : ''"
-        @click="dismissToast"
-      >
-        <span
-          class="w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5"
-          :class="toastType === 'success' ? 'bg-[#30d158]/15 text-[#30d158]' : 'bg-[#ff453a]/15 text-[#ff453a]'"
-        >
-          <svg v-if="toastType === 'success'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-        </span>
-        <div class="flex-1 min-w-0">
-          <p class="text-[14px] font-semibold text-foreground leading-snug">{{ toastMessage }}</p>
-          <p v-if="toastDetail" class="text-[13px] text-foreground-muted mt-0.5 leading-snug">{{ toastDetail }}</p>
-        </div>
-        <button class="text-foreground-muted/60 hover:text-foreground transition-colors shrink-0 mt-0.5">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-    </Transition>
+    <!-- Sync progress toast -->
+    <SyncToast
+      :visible="toastVisible"
+      :state="toastState"
+      :title="toastTitle"
+      :detail="toastDetail"
+      :progress-text="toastProgressText"
+      :fraction="toastFraction"
+      @dismiss="dismissToast"
+    />
   </div>
 </template>
 
@@ -373,23 +340,68 @@ async function fetchSyncStatus(silent = false) {
 }
 
 const toastVisible = ref(false)
-const toastMessage = ref('')
+const toastState = ref<'running' | 'success' | 'error'>('running')
+const toastTitle = ref('')
 const toastDetail = ref('')
-const toastType = ref<'success' | 'error'>('success')
+const toastProgressText = ref('')
+const toastFraction = ref(0)
+const syncProgressText = ref('')
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-function showToast(message: string, detail: string = '', type: 'success' | 'error' = 'success') {
-  toastMessage.value = message
+function showRunningToast(title: string, detail = '', progressText = '', fraction = 0.02) {
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null }
+  toastState.value = 'running'
+  toastTitle.value = title
   toastDetail.value = detail
-  toastType.value = type
+  toastProgressText.value = progressText
+  toastFraction.value = fraction
+  toastVisible.value = true
+}
+
+function finishToast(title: string, detail: string, state: 'success' | 'error') {
+  toastState.value = state
+  toastTitle.value = title
+  toastDetail.value = detail
+  toastProgressText.value = ''
+  toastFraction.value = 1
   toastVisible.value = true
   if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { toastVisible.value = false }, 4000)
+  toastTimer = setTimeout(() => { toastVisible.value = false }, state === 'error' ? 6000 : 4000)
 }
 
 function dismissToast() {
   toastVisible.value = false
   if (toastTimer) clearTimeout(toastTimer)
+}
+
+// Live sync progress pushed via SSE sync.progress events.
+// Phases: prepare → fetch (per star) → covers → write (per star).
+function handleSyncProgress(data: any) {
+  switch (data.phase) {
+    case 'prepare':
+      showRunningToast('Syncing…', data.detail || 'Preparing')
+      break
+    case 'fetch': {
+      const done = data.done ?? 0
+      const total = data.total ?? 0
+      const detail = data.star
+        ? (data.ok ? `${data.star} — ${data.titles} titles` : `${data.star} — fetch failed`)
+        : 'Fetching ijavtorrent + sukebei RSS'
+      showRunningToast('Fetching stars', detail, `${done}/${total}`, total ? (done / total) * 0.8 : 0.02)
+      syncProgressText.value = total ? `${done}/${total}` : ''
+      break
+    }
+    case 'covers':
+      showRunningToast('Downloading covers', `${data.count ?? 0} new covers`, '', 0.85)
+      break
+    case 'write': {
+      const done = data.done ?? 0
+      const total = data.total ?? 0
+      const detail = data.star ? `${data.star}: +${data.new ?? 0} new` : ''
+      showRunningToast('Writing to database', detail, total ? `${done}/${total}` : '', 0.85 + (total ? (done / total) * 0.13 : 0))
+      break
+    }
+  }
 }
 
 async function startSync() {
@@ -404,6 +416,8 @@ async function startSync() {
 
     if (res.status === 'started' || res.status === 'running') {
       syncRunning.value = true
+      syncProgressText.value = ''
+      showRunningToast('Syncing…', 'Starting sync')
     }
   } catch (e: any) {
     syncError.value = e?.message || 'Failed to start sync'
@@ -422,23 +436,24 @@ async function clearStarsServiceWorkerCache() {
 
 function handleSyncCompleted(data: any) {
   syncRunning.value = false
+  syncProgressText.value = ''
   const totalNew = data.total_new ?? 0
   const elapsed = data.elapsed ?? 0
   const failed: string[] = data.failed ?? []
   if (failed.length > 0) {
-    showToast(
+    finishToast(
       `Sync incomplete — ${failed.length} star${failed.length > 1 ? 's' : ''} unreachable`,
       `${totalNew} new title${totalNew === 1 ? '' : 's'} synced in ${elapsed}s; failed: ${failed.join(', ')}`,
       'error'
     )
   } else if (totalNew > 0) {
-    showToast(
+    finishToast(
       `${totalNew} new title${totalNew > 1 ? 's' : ''} added`,
       `Synced in ${elapsed}s`,
       'success'
     )
   } else {
-    showToast('All caught up', `Checked in ${elapsed}s — no new releases`, 'success')
+    finishToast('All caught up', `Checked in ${elapsed}s — no new releases`, 'success')
   }
   clearStarsServiceWorkerCache()
   refreshNuxtData('stars')
@@ -446,8 +461,9 @@ function handleSyncCompleted(data: any) {
 
 function handleSyncError(data: any) {
   syncRunning.value = false
+  syncProgressText.value = ''
   syncError.value = data.error || 'Sync failed'
-  showToast('Sync failed', data.error || '', 'error')
+  finishToast('Sync failed', data.error || '', 'error')
 }
 
 function handleStarReady(data: any) {
@@ -464,8 +480,11 @@ onMounted(() => {
 
   unsubs.push(onServerEvent('sync.started', () => {
     syncRunning.value = true
+    syncProgressText.value = ''
+    showRunningToast('Syncing…', 'Starting sync')
   }))
 
+  unsubs.push(onServerEvent('sync.progress', handleSyncProgress))
   unsubs.push(onServerEvent('sync.completed', handleSyncCompleted))
   unsubs.push(onServerEvent('sync.error', handleSyncError))
   unsubs.push(onServerEvent('star.ready', handleStarReady))

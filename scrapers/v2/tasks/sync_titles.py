@@ -35,7 +35,7 @@ import json
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -304,14 +304,34 @@ async def fetch_star(
     return _drop_multi_star(merge_sources(ijav_res, rss_res, star.name), star.name)
 
 
-async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> dict[str, Any]:
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+async def run(
+    config_path: str = "config.json",
+    fetch_concurrency: int = 8,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
     """Main entry: read config, concurrently sync all stars.
+
+    ``on_progress`` (optional) is awaited with a phase dict at each stage so
+    callers can stream live progress (e.g. SSE ``sync.progress`` events):
+    ``prepare`` → ``fetch`` (per star) → ``covers`` → ``write`` (per star).
 
     Returns {"results": per-star sync summaries, "failed": per-star fetch
     failures}. Raises RuntimeError when every star page fetch fails — a total
     outage must surface as a sync error, not as "0 new titles".
     """
     t_total = time.perf_counter()
+
+    async def _emit(phase: str, **kw: Any) -> None:
+        if on_progress is not None:
+            try:
+                await on_progress({"phase": phase, **kw})
+            except Exception:
+                log.exception(f"progress callback failed (phase={phase})")
+
+    await _emit("prepare", detail="Loading star list and existing titles")
 
     with open(config_path, encoding="utf-8") as f:
         raw = json.load(f)
@@ -342,11 +362,32 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
 
     # 3. Concurrently fetch all stars: ijavtorrent primary + sukebei RSS supplement
     t0 = time.perf_counter()
+    fetched = 0
+
     async with HttpxFetcher() as fetcher:
         ijav_sem = asyncio.Semaphore(fetch_concurrency)
         rss_sem = asyncio.Semaphore(min(fetch_concurrency, RSS_MAX_CONCURRENCY))
+
+        async def _fetch_one(star: StarConfig) -> list[VideoItem]:
+            nonlocal fetched
+            ok, count, err = True, 0, None
+            try:
+                items = await fetch_star(fetcher, star, ijav_sem, rss_sem)
+                count = len(items)
+                return items
+            except Exception as e:
+                ok, err = False, f"{type(e).__name__}: {e}"[:200]
+                raise
+            finally:
+                fetched += 1
+                await _emit(
+                    "fetch", star=star.name, done=fetched, total=len(stars),
+                    ok=ok, titles=count, error=err,
+                )
+
+        await _emit("fetch", done=0, total=len(stars))
         page_results = await asyncio.gather(
-            *[fetch_star(fetcher, star, ijav_sem, rss_sem) for star in stars],
+            *[_fetch_one(star) for star in stars],
             return_exceptions=True,
         )
     t1 = time.perf_counter()
@@ -403,6 +444,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
         t0 = time.perf_counter()
         cover_items = [(it.code, it.cover_url or "") for it in all_sync_items]
         log.info(f"downloading {len(cover_items)} covers in batch...")
+        await _emit("covers", count=len(cover_items))
         cover_map = await download_covers_batch(cover_items, concurrency=8)
         t1 = time.perf_counter()
         log.info(f"[timing] download covers: {(t1 - t0) * 1000:.1f}ms | downloaded={len(cover_map)}")
@@ -413,7 +455,7 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
     total_updated = 0
     clean: list[dict] = []
 
-    for star_id, name, sync_items, new_items in sync_batches:
+    for i, (star_id, name, sync_items, new_items) in enumerate(sync_batches, 1):
         star_cfg = next(s for s in stars if star_id_map[s.code] == star_id)
         sink = TitleSyncSink(star_id=star_id, star_code=star_cfg.code, star_name=name)
         new_codes = {it.code for it in new_items}
@@ -423,6 +465,10 @@ async def run(config_path: str = "config.json", fetch_concurrency: int = 8) -> d
         total_updated += batch_result["updated"]
         log.info(f"done: {name}: {batch_result['new']} new, {batch_result['updated']} backfill")
         clean.append({"name": name, "titles": sync_items, "count": batch_result["new"]})
+        await _emit(
+            "write", star=name, done=i, total=len(sync_batches),
+            new=batch_result["new"],
+        )
     t1 = time.perf_counter()
     log.info(f"[timing] batch write all stars: {(t1 - t0) * 1000:.1f}ms")
 

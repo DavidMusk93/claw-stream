@@ -2,6 +2,7 @@
 
 Single SSE stream replaces all frontend polling:
 - sync.status — sync start / complete / error
+- sync.progress — live per-phase sync progress (prepare/fetch/covers/write)
 - sync.resync_required — client event queue overflowed; refetch state once
 - torrent.status — torrent state changes
 - torrent.progress — throttled (2s) in-memory progress push, replaces status polling
