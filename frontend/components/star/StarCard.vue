@@ -129,7 +129,7 @@
         >
           <img
             v-if="title.cover_url && !thumbErrors[title.code]"
-            :src="title.cover_url"
+            :src="`${title.cover_url}?thumb=1`"
             :alt="title.code"
             class="w-full h-auto block bg-[#F2F2F7]"
             loading="lazy"

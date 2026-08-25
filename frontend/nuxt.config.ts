@@ -57,11 +57,22 @@ export default defineNuxtConfig({
           },
         },
         {
-          urlPattern: /^\/api\/(health|cover)/,
+          // Covers (full + thumb) are immutable per code and keyed by code in
+          // the URL. Keep the entry budget above the library size so browsing
+          // the whole catalog never evicts earlier covers.
+          urlPattern: /^\/(images|api\/cover)\/.*/,
+          handler: 'StaleWhileRevalidate',
+          options: {
+            cacheName: 'image-cache',
+            expiration: { maxEntries: 1500, maxAgeSeconds: 2592000 },
+          },
+        },
+        {
+          urlPattern: /^\/api\/health/,
           handler: 'StaleWhileRevalidate',
           options: {
             cacheName: 'static-api-cache',
-            expiration: { maxEntries: 200, maxAgeSeconds: 2592000 },
+            expiration: { maxEntries: 5, maxAgeSeconds: 2592000 },
           },
         },
         {
@@ -70,17 +81,6 @@ export default defineNuxtConfig({
           options: {
             cacheName: 'api-cache',
             expiration: { maxEntries: 50, maxAgeSeconds: 60 },
-          },
-        },
-        {
-          // Covers are immutable once written, but a new cover for the same
-          // code should be visible quickly. SWR serves cached versions while
-          // revalidating in the background.
-          urlPattern: /^\/(images|api\/cover)\/.*/,
-          handler: 'StaleWhileRevalidate',
-          options: {
-            cacheName: 'image-cache',
-            expiration: { maxEntries: 500, maxAgeSeconds: 2592000 },
           },
         },
       ],

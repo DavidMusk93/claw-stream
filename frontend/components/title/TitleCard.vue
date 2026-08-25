@@ -8,7 +8,7 @@
     <div class="relative rounded-lg overflow-hidden bg-[#1a1a1a] shadow-md transition-all duration-300 group-hover:shadow-2xl group-hover:scale-105 group-hover:z-10">
       <img
         v-if="title.cover_url && !imgError"
-        :src="title.cover_url"
+        :src="`${title.cover_url}?thumb=1`"
         :alt="title.code"
         class="w-full h-auto block bg-[#F2F2F7]"
         loading="lazy"

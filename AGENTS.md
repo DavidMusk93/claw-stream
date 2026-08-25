@@ -40,7 +40,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **SSE push replaces polling**: `core/events.py` in-process event bus + `GET /api/events` SSE stream (`sync.status`, `sync.resync_required`, `torrent.status`, `torrent.progress` (2s throttled, in-memory only), `cache.update`, `star.ready`); frontend consumes via `useEventSource.ts` with zero polling timers. Slow clients are coalesced (queue drain + `sync.resync_required`), never silently disconnected. See `docs/design/sse-push-architecture.md`.
 - **DuckDB serial write queue**: all DB writes go through `core/db/write_queue.py` (single worker coroutine), eliminating DuckDB's one-writer lock conflicts.
 - **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
-- **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` are served as static files by Caddy; `/api/cover/{code}` falls back to the DB blob and backfills disk.
+- **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` (plus a 400px-wide `{code}_thumb.jpg` for list/grid views) are served as static files by Caddy; `/api/cover/{code}[?thumb=1]` falls back to the DB blob and backfills disk.
 - **Upload bandwidth cap**: libtorrent `upload_rate_limit = 2 MB/s` to reserve bandwidth for HTTP streaming.
 - **Diff-Sync hybrid source: ijavtorrent primary + sukebei.nyaa.si RSS supplement**: title sync fetches the ijavtorrent actress page (rich metadata: retail dates, views, cover_url, hhd800 magnets) and merges sukebei RSS search results (all query variants `sync_query`/`name`/`jp` unioned by code) to correct ijav's catalog gaps — ijav metadata wins, magnets unioned, RSS-only codes appended; multi-star (共演/omnibus) titles filtered via the card's actress-link count. A star fails only when BOTH sources fail. ijav lost much of its catalog in 2026-08 and still serves sparse listings (no pagination). See `docs/design/diff-sync-design.md`.
 - **Auth on all API routers**: every router except `/api/auth` and `/api/test` uses `Depends(require_auth)` (cookie `claw_auth=ok`).
@@ -207,14 +207,17 @@ In production the Nitro server also proxies `/api`, `/stream`, `/torrent`, `/ima
 
 Caddy serves `cc.guohuasun.com` on 443, auto-provisions Let's Encrypt certificates:
 - `/images/*` → served directly from disk bind mount `/var/lib/caddy/claw-images`
-  (requires `mount --bind /root/claw-stream/images /var/lib/caddy/claw-images`)
+  (requires `mount --bind /root/claw-stream/images /var/lib/caddy/claw-images`),
+  with `Cache-Control: public, max-age=604800`
 - `/api/*`, `/stream/*`, `/torrent/*`, `/cache/*` → `localhost:8765`
 - Everything else → `localhost:3000` (Nuxt SSR, 10s dial / 30s response timeout)
 - **HTTP/3 (QUIC) is disabled** — mobile networks throttle/drop UDP, causing 50–80s cover loads
 
-Reload after config change:
+The live config is `/etc/caddy/Caddyfile` (unit `caddy.service`); the repo
+`Caddyfile` is the source of truth — copy it over, then reload:
 ```bash
-systemctl reload caddy-claw
+cp /root/claw-stream/Caddyfile /etc/caddy/Caddyfile
+systemctl reload caddy
 ```
 
 ### 4.5 Port Allocation
@@ -344,6 +347,7 @@ systemctl restart star-archive-frontend
 ./refresh.sh [config.json]
 
 # Export covers from DuckDB blobs to images/titles/{code}/{code}.jpg
+# (also generates {code}_thumb.jpg, 400px wide, for list/grid views)
 .venv/bin/python scripts/export_covers.py
 
 # Fetch actor covers from DMM/FANZA CDN and base64-encode them
@@ -351,7 +355,7 @@ systemctl restart star-archive-frontend
 ./b64-encode.sh [image-dir]
 ```
 
-`/api/cover/{code}` is the canonical cover URL: disk static file (307 redirect) → in-memory LRU → DuckDB blob (+ disk backfill). New titles never 404 even if the disk export lagged.
+`/api/cover/{code}` is the canonical cover URL: disk static file (307 redirect) → in-memory LRU → DuckDB blob (+ disk backfill). New titles never 404 even if the disk export lagged. `?thumb=1` redirects to the small `{code}_thumb.jpg` variant when it exists.
 
 ### 7.6 Common Ops Commands
 

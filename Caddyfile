@@ -19,9 +19,12 @@
 cc.guohuasun.com {
     # Static cover images → served directly from disk (bypass Nuxt/FastAPI)
     # Requires: mount --bind /root/claw-stream/images /var/lib/caddy/claw-images
+    # Covers are immutable per code — cache aggressively so refreshes don't
+    # revalidate 1000+ images over HTTPS.
     handle /images/* {
         root * /var/lib/caddy/claw-images
         uri strip_prefix /images
+        header Cache-Control "public, max-age=604800"
         file_server
     }
 
@@ -48,8 +51,9 @@ cc.guohuasun.com {
         }
     }
 
+    # Access log must be writable by the `caddy` user — /root is not.
     log {
-        output file /root/claw-stream/logs/caddy-access.log {
+        output file /var/log/caddy/claw-access.log {
             roll_size 10MB
             roll_keep 5
         }
