@@ -107,6 +107,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 ├── config/
 │   └── mcporter.json        # MCP server config (exa) for AI agent tooling
 ├── config.json              # Actor list config: {title, sort_by, stars[{name, jp, handle, code, type, star_page_url}]}
+│                            #   Personal preference — git-ignored, never commit
 ├── pyproject.toml           # Python dependencies (uv managed) — libtorrent NOT included, see §1.1
 ├── Caddyfile                # Reverse proxy config (443 → backend:8765 / frontend:3000)
 ├── refresh.sh               # One-shot data refresh: scrapers/search_news.py → DuckDB + stats
