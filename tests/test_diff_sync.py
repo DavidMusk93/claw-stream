@@ -754,3 +754,43 @@ async def test_fetch_star_filters_multi_star_titles(monkeypatch):
     result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
 
     assert [it.code for it in result] == ["SOLO-001"]
+
+
+# ── Magnet HTML-entity regression (2026-08-25) ───────────────────────
+# ijavtorrent embeds magnet hrefs double-escaped (`&amp;amp;dn=`). A single
+# html.unescape left `&amp;` in the URI, turning every parameter into
+# `amp;dn`/`amp;tr` and silently dropping the display name and all trackers.
+
+_MAGNET_PAGE = (
+    '<html><body><div class="video-item">'
+    '<a href="/movie/snos-373-12345"><img alt="SNOS-373 sample"/></a>'
+    '<table><tr style="vertical-align: middle"><td>'
+    '<a href="magnet:?xt=urn:btih:eeebcc8323ddad581899ff162cf79a8700fb47e7'
+    '&amp;amp;dn=SNOS-373%20Test'
+    '&amp;amp;tr=http%3A%2F%2Fsukebei.tracker.wf%3A8888%2Fannounce">dl</a>'
+    '<i class="fa-weight-hanging"></i> 5.2 GB <strong>S:</strong> 10'
+    '</td></tr></table></div></body></html>'
+)
+
+
+def test_ijav_extractor_fully_unescapes_double_escaped_magnets():
+    """Double-escaped source HTML must yield a clean magnet URI."""
+    from scrapers.v2.extractors import IJavTorrentExtractor
+
+    items = IJavTorrentExtractor().extract(_MAGNET_PAGE)
+
+    assert len(items) == 1
+    magnet = items[0].magnets[0].magnet
+    assert "&amp;" not in magnet
+    assert "&dn=" in magnet and "&tr=" in magnet
+
+
+def test_ijav_extractor_drops_invalid_magnets():
+    """Magnets that fail validation (no btih hash / entities left) are dropped."""
+    from scrapers.v2.extractors import IJavTorrentExtractor
+
+    page = _MAGNET_PAGE.replace("eeebcc8323ddad581899ff162cf79a8700fb47e7", "notahash")
+    items = IJavTorrentExtractor().extract(page)
+
+    assert len(items) == 1
+    assert items[0].magnets == []

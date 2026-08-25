@@ -15,7 +15,10 @@ from typing import Protocol
 
 from selectolax.parser import HTMLParser
 
+from core import get_logger
 from scrapers.v2.schemas import VideoItem, MagnetCandidate
+
+log = get_logger("extractors")
 
 
 class Extractor(Protocol):
@@ -30,13 +33,37 @@ def _extract_dn(magnet_url: str) -> str:
     if not magnet_url:
         return ""
     try:
-        decoded_url = htmlmod.unescape(magnet_url)
+        decoded_url = _unescape_magnet(magnet_url)
         parsed = urllib.parse.urlparse(decoded_url)
         params = urllib.parse.parse_qs(parsed.query)
         dn = params.get("dn", [""])[0]
         return urllib.parse.unquote(dn) if dn else ""
     except Exception:
         return ""
+
+
+_MAGNET_RE = re.compile(r"^magnet:\?xt=urn:btih:[0-9a-fA-F]{40}([?&]|$)")
+
+
+def _unescape_magnet(magnet_url: str) -> str:
+    """HTML-unescape a magnet URI, handling double-escaped sources.
+
+    ijavtorrent embeds magnets double-escaped (`&amp;amp;dn=`); a single
+    unescape pass leaves a broken `&amp;` that turns every parameter into
+    `amp;dn`/`amp;tr`, silently dropping the display name and all trackers.
+    Unescape until stable (bounded) so the URI is fully decoded.
+    """
+    for _ in range(3):
+        unescaped = htmlmod.unescape(magnet_url)
+        if unescaped == magnet_url:
+            break
+        magnet_url = unescaped
+    return magnet_url
+
+
+def _is_valid_magnet(magnet_url: str) -> bool:
+    """Sanity check: btih v1 magnet with a 40-hex-char hash, no entities left."""
+    return bool(_MAGNET_RE.match(magnet_url)) and "&amp;" not in magnet_url
 
 
 def _extract_resolution(magnet_url: str) -> str:
@@ -195,7 +222,10 @@ class IJavTorrentExtractor:
             m = re.search(r'href="(magnet:\?xt=[^"]+)"', row)
             if not m:
                 continue
-            magnet_url = htmlmod.unescape(m.group(1))
+            magnet_url = _unescape_magnet(m.group(1))
+            if not _is_valid_magnet(magnet_url):
+                log.warning(f"dropping invalid magnet in row: {m.group(1)[:80]}")
+                continue
             magnets.append(magnet_url)
             resolutions.append(_extract_resolution(magnet_url))
             dn = _extract_dn(magnet_url)
@@ -321,7 +351,7 @@ class SukebeiRssExtractor:
                 continue
 
             info_hash = item.findtext(f"{{{NYAA_NS}}}infoHash") or ""
-            if not info_hash:
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", info_hash):
                 continue
 
             seed = int(item.findtext(f"{{{NYAA_NS}}}seeders") or 0)
