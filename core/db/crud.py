@@ -182,6 +182,7 @@ def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
                OR release_date IS NULL OR release_date = ''
                OR star_code IS NULL OR star_code = ''
                OR star_name IS NULL OR star_name = ''
+               OR magnet IS NULL OR magnet = ''
             """
         ).fetchall()
         result = set(rows)
