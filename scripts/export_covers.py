@@ -92,49 +92,80 @@ def _ensure_thumb(code_lower: str, b64_data: str) -> bool:
 
 
 def export_covers() -> dict[str, int]:
-    """Export all covers from DuckDB to disk as JPEG."""
+    """Export all covers from DuckDB to disk as JPEG.
+
+    Blobs are fetched one code at a time: loading every cover_b64 up front
+    OOM-kills the process on small machines (observed on a 4 GB host).
+    """
     db.init_schema()
     conn = db._conn()
     try:
-        rows = conn.execute(
-            """
-            SELECT code, cover_b64
-            FROM titles
-            WHERE cover_b64 IS NOT NULL AND cover_b64 != ''
-            ORDER BY code
-            """
-        ).fetchall()
+        codes = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT code
+                FROM titles
+                WHERE cover_b64 IS NOT NULL AND cover_b64 != ''
+                ORDER BY code
+                """
+            ).fetchall()
+        ]
     finally:
         conn.close()
 
-    stats = {"total": len(rows), "exported": 0, "skipped": 0, "failed": 0, "thumbs": 0}
+    stats = {"total": len(codes), "exported": 0, "skipped": 0, "failed": 0, "thumbs": 0}
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    for code, b64_data in rows:
-        code_lower = code.lower()
-        out_dir = IMAGES_DIR / code_lower
-        out_path = out_dir / f"{code_lower}.jpg"
+    conn = db._conn()
+    try:
+        for code in codes:
+            code_lower = code.lower()
+            out_dir = IMAGES_DIR / code_lower
+            out_path = out_dir / f"{code_lower}.jpg"
+            thumb_path = out_dir / f"{code_lower}_thumb.jpg"
 
-        if out_path.exists() and out_path.stat().st_size > 0:
-            stats["skipped"] += 1
-        else:
-            try:
-                raw_bytes = _decode_b64(b64_data)
-                jpeg_bytes = _normalize_to_jpeg(raw_bytes)
-                if not jpeg_bytes:
-                    stats["failed"] += 1
-                    continue
+            # Skip the DB read entirely when both artifacts already exist.
+            if (
+                out_path.exists()
+                and out_path.stat().st_size > 0
+                and thumb_path.exists()
+                and thumb_path.stat().st_size > 0
+            ):
+                stats["skipped"] += 1
+                stats["thumbs"] += 1
+                continue
 
-                out_dir.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(jpeg_bytes)
-                stats["exported"] += 1
-            except Exception as exc:
-                print(f"Failed to export {code}: {exc}", file=sys.stderr)
+            row = conn.execute(
+                "SELECT cover_b64 FROM titles WHERE code = ?", (code,)
+            ).fetchone()
+            b64_data = row[0] if row else None
+            if not b64_data:
                 stats["failed"] += 1
                 continue
 
-        if _ensure_thumb(code_lower, b64_data):
-            stats["thumbs"] += 1
+            if out_path.exists() and out_path.stat().st_size > 0:
+                stats["skipped"] += 1
+            else:
+                try:
+                    raw_bytes = _decode_b64(b64_data)
+                    jpeg_bytes = _normalize_to_jpeg(raw_bytes)
+                    if not jpeg_bytes:
+                        stats["failed"] += 1
+                        continue
+
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_path.write_bytes(jpeg_bytes)
+                    stats["exported"] += 1
+                except Exception as exc:
+                    print(f"Failed to export {code}: {exc}", file=sys.stderr)
+                    stats["failed"] += 1
+                    continue
+
+            if _ensure_thumb(code_lower, b64_data):
+                stats["thumbs"] += 1
+    finally:
+        conn.close()
 
     return stats
 
