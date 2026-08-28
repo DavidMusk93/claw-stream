@@ -42,47 +42,16 @@ async def main() -> None:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    # Phase 1: collect everything needed from the DB, then close the
+    # connection. Holding a DuckDB connection open across async network I/O
+    # OOM-killed this script on a 4 GB host (DuckDB Allocation failure).
     conn = _conn()
-    total_fixed = 0
-    total_failed = 0
-
-    # 收集所有需要修复的 (star_name, star_page_url)
-    stars_to_fix = []
-    for star_cfg in config.get("stars", []):
-        name = star_cfg.get("name", "?")
-        code = star_cfg.get("code", "?")
-        url = star_cfg.get("star_page_url", "")
-
-        rows = conn.execute(
-            """
-            SELECT COUNT(*) FROM titles t
-            JOIN stars s ON s.id = t.star_id
-            WHERE s.code = ? AND (t.cover_b64 IS NULL OR t.cover_b64 = '')
-            """,
-            (code,),
-        ).fetchone()
-        missing = rows[0] if rows else 0
-        if missing > 0 and url:
-            stars_to_fix.append((name, code, url, missing))
-
-    print(f"Stars to fix: {len(stars_to_fix)} ({sum(s[3] for s in stars_to_fix)} missing covers)")
-
-    async with HttpxFetcher() as fetcher:
-        for name, code, url, missing in stars_to_fix:
-            print(f"\n{name} ({code}): {missing} missing covers")
-
-            try:
-                html = await fetcher.fetch(url)
-            except Exception as exc:
-                print(f"  fetch failed: {exc}")
-                continue
-
-            items = IJavTorrentExtractor().extract(html)
-            if not items:
-                print("  no items extracted")
-                continue
-
-            cover_map = {it.code: it.cover_url for it in items if it.cover_url}
+    try:
+        stars_to_fix = []
+        for star_cfg in config.get("stars", []):
+            name = star_cfg.get("name", "?")
+            code = star_cfg.get("code", "?")
+            url = star_cfg.get("star_page_url", "")
 
             title_rows = conn.execute(
                 """
@@ -92,6 +61,36 @@ async def main() -> None:
                 """,
                 (code,),
             ).fetchall()
+            if title_rows and url:
+                stars_to_fix.append((name, code, url, title_rows))
+    finally:
+        conn.close()
+
+    print(f"Stars to fix: {len(stars_to_fix)} ({sum(len(s[3]) for s in stars_to_fix)} missing covers)")
+
+    total_fixed = 0
+    total_failed = 0
+
+    # Phase 2: network I/O with no DB connection held.
+    pending_writes: list[tuple[int, str]] = []
+    async with HttpxFetcher() as fetcher:
+        for name, code, url, title_rows in stars_to_fix:
+            print(f"\n{name} ({code}): {len(title_rows)} missing covers")
+
+            try:
+                html = await fetcher.fetch(url)
+            except Exception as exc:
+                print(f"  fetch failed: {exc}")
+                total_failed += len(title_rows)
+                continue
+
+            items = IJavTorrentExtractor().extract(html)
+            if not items:
+                print("  no items extracted")
+                total_failed += len(title_rows)
+                continue
+
+            cover_map = {it.code: it.cover_url for it in items if it.cover_url}
 
             # 并发下载封面
             tasks = []
@@ -110,27 +109,29 @@ async def main() -> None:
 
             results = await asyncio.gather(*[_sem_task(t) for t in tasks], return_exceptions=True)
 
-            # 串行写入 DB
             for result in results:
-                if isinstance(result, Exception):
+                if isinstance(result, Exception) or result is None:
                     total_failed += 1
                     continue
-                if result is None:
-                    total_failed += 1
-                    continue
-                title_id, b64 = result
-                try:
-                    conn.execute(
-                        "UPDATE titles SET cover_b64 = ? WHERE id = ?",
-                        (b64, title_id),
-                    )
-                    conn.commit()
-                    total_fixed += 1
-                except Exception as exc:
-                    print(f"  db write error: {exc}")
-                    total_failed += 1
+                pending_writes.append(result)
 
-    conn.close()
+    # Phase 3: serial DB writes on a fresh connection.
+    conn = _conn()
+    try:
+        for title_id, b64 in pending_writes:
+            try:
+                conn.execute(
+                    "UPDATE titles SET cover_b64 = ? WHERE id = ?",
+                    (b64, title_id),
+                )
+                conn.commit()
+                total_fixed += 1
+            except Exception as exc:
+                print(f"  db write error: {exc}")
+                total_failed += 1
+    finally:
+        conn.close()
+
     print(f"\nDone: {total_fixed} fixed, {total_failed} failed")
 
 
