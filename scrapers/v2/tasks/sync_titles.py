@@ -55,8 +55,9 @@ MAX_NEW_TITLES = 20  # Max new titles processed per sync (prevent stars with too
 MAX_FETCH_ATTEMPTS = 3  # Retries per star before declaring the fetch failed
 FETCH_RETRY_DELAYS = (1.0, 2.0)  # Backoff between attempts (seconds); tests patch to zeros
 RATE_LIMIT_RETRY_DELAY = 10.0  # Backoff after an HTTP 429 from sukebei
-RSS_MAX_CONCURRENCY = 2  # sukebei rate-limits aggressive bursts (429); keep it polite
-RSS_REQUEST_INTERVAL = 0.5  # Min seconds between RSS requests (held under the semaphore)
+RSS_MAX_CONCURRENCY = 4  # sukebei rate-limits aggressive bursts (429); retries absorb the occasional 429
+RSS_REQUEST_INTERVAL = 0.3  # Min seconds between RSS requests (held under the semaphore)
+COVER_DOWNLOAD_CONCURRENCY = 16  # Parallel cover downloads; DMM CDN / ijav images tolerate this
 
 SUKEBEI_RSS_URL = "https://sukebei.nyaa.si/?page=rss&q={q}&c=0_0&f=0&s=id&o=desc"
 
@@ -445,7 +446,7 @@ async def run(
         cover_items = [(it.code, it.cover_url or "") for it in all_sync_items]
         log.info(f"downloading {len(cover_items)} covers in batch...")
         await _emit("covers", count=len(cover_items))
-        cover_map = await download_covers_batch(cover_items, concurrency=8)
+        cover_map = await download_covers_batch(cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY)
         t1 = time.perf_counter()
         log.info(f"[timing] download covers: {(t1 - t0) * 1000:.1f}ms | downloaded={len(cover_map)}")
 
@@ -535,7 +536,7 @@ async def sync_star(
         return {"name": star.name, "count": 0, "titles": []}
 
     cover_items = [(it.code, it.cover_url or "") for it in new_items]
-    cover_map = await download_covers_batch(cover_items, concurrency=8)
+    cover_map = await download_covers_batch(cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY)
 
     sink = TitleSyncSink(star_id=star_id, star_code=star.code, star_name=star.name)
     new_codes_set = {it.code for it in new_items}

@@ -51,7 +51,7 @@ Per star, both sources are fetched concurrently (`fetch_star`):
 - **Degradation**: one source failing degrades the star to the other with a loud warning; the star fails only when BOTH fail
 - Diff against the in-memory set; keep only **new titles**
 
-**Rate limiting**: sukebei answers bursts with HTTP 429. RSS fetches are capped at `RSS_MAX_CONCURRENCY = 2` with `RSS_REQUEST_INTERVAL = 0.5 s` pacing; a 429 triggers a `RATE_LIMIT_RETRY_DELAY = 10 s` back-off.
+**Rate limiting**: sukebei answers bursts with HTTP 429. RSS fetches are capped at `RSS_MAX_CONCURRENCY = 4` with `RSS_REQUEST_INTERVAL = 0.3 s` pacing; a 429 triggers a `RATE_LIMIT_RETRY_DELAY = 10 s` back-off.
 
 **Field caveats for RSS-supplement titles** (codes that only sukebei returned):
 
@@ -71,7 +71,7 @@ Only download covers for new titles:
 
 ```python
 cover_items = [(it.code, it.cover_url or "") for it in new_items]
-cover_map = await download_covers_batch(cover_items, concurrency=8)
+cover_map = await download_covers_batch(cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY)  # 16
 ```
 
 - Daily sync drops from 400+ covers to 0–5 covers
