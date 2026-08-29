@@ -251,6 +251,7 @@ systemctl reload caddy
 ### 5.3 Git Commit Convention
 
 - **One change, one commit**: each bug fix, feature, or refactor is a separate commit
+- **Commit and push promptly**: commit right after each change is verified, then `git push`. Do not leave verified work sitting uncommitted or unpushed; remote is the backup
 - **Commit message format** (matches git history, e.g. `fix(engine): ...`, `feat: ...`, `perf: ...`, `docs: ...`):
   ```
   <type>: <short subject>  (<= 50 chars)
@@ -411,6 +412,15 @@ python3 -m core.db stats
 
 - **Before starting work**: query nmem first — `read_working_memory` for the daily briefing, `memory_search` for prior decisions, lessons, design specs, and handoffs relevant to the task.
 - **After producing durable knowledge** (root causes, design decisions, verified procedures, handoff state): write it to nmem with `memory_add` (proper `unit_type`: decision / procedure / learning / plan), and keep AGENTS.md + `docs/` in sync in the same change.
+- **nmem is a knowledge base, not a running log.** Do not dump chronological session notes ("今天改了 X,然后改了 Y"). Write structured documents: a clear one-line conclusion up front, then the why, the evidence, and the reusable rule. Update/supersede the existing memory on the same topic (`evolves_from_id` / `memory_supersede`) instead of appending a new diary entry.
+- **Use ASCII diagrams for design, flow, and relationships.** A memory describing architecture, pipelines, state machines, or dependencies should contain an ASCII graph, e.g.:
+
+  ```
+  ijavtorrent (primary) ──┐
+                          ├─→ merge (ijav wins, magnets union) → diff → covers → DuckDB
+  sukebei RSS (fallback) ─┘
+  ```
+
 - Do not rely on in-conversation context as the only record — if it is worth remembering, it goes to nmem.
 
 ---
