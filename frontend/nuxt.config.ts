@@ -13,6 +13,13 @@ export default defineNuxtConfig({
     },
   },
   modules: ['@pinia/nuxt', '@vite-pwa/nuxt'],
+  // Flat component auto-import: nested dirs (star/, ui/, cache/...) register
+  // WITHOUT the dir prefix, so <Skeleton> resolves ui/Skeleton.vue. With the
+  // default prefixing, ui/Skeleton.vue registers as UiSkeleton and <Skeleton>
+  // silently rendered as an empty comment — causing massive hydration
+  // mismatches (SSR comment vs client vnode) that intermittently left the
+  // first page load stuck on empty placeholders.
+  components: [{ path: '~/components', pathPrefix: false }],
   postcss: {
     plugins: {
       tailwindcss: {},
