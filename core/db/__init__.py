@@ -8,6 +8,7 @@ from .schema import init_schema, backfill_release_date_sort
 from .crud import (
     _managed_conn,
     upsert_star,
+    upsert_stars,
     title_exists,
     load_all_title_codes,
     load_title_codes_missing_metadata,
@@ -29,6 +30,7 @@ __all__ = [
     "init_schema",
     "backfill_release_date_sort",
     "upsert_star",
+    "upsert_stars",
     "title_exists",
     "load_all_title_codes",
     "load_title_codes_missing_metadata",

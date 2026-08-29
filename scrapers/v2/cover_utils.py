@@ -211,22 +211,34 @@ async def _download_one_cover(fetcher: HttpxFetcher, code: str, cover_url: str) 
     return ""
 
 
-async def download_covers_batch(items: list[tuple[str, str]], concurrency: int = 8) -> dict[str, str]:
+async def download_covers_batch(
+    items: list[tuple[str, str]],
+    concurrency: int = 8,
+    sem: asyncio.Semaphore | None = None,
+    fetcher: HttpxFetcher | None = None,
+) -> dict[str, str]:
     """Batch concurrent cover download, returns {code: base64_data_uri}.
 
     items: list of (code, cover_url)
-    concurrency: concurrent download limit
+    concurrency: concurrent download limit (ignored when `sem` is given)
+    sem: optional shared semaphore — lets per-star pipelines stay under one
+         global download cap
+    fetcher: optional shared HttpxFetcher — avoids one client per batch
     """
-    sem = asyncio.Semaphore(concurrency)
-    results: dict[str, str] = {}
+    async def _run(f: HttpxFetcher) -> dict[str, str]:
+        s = sem or asyncio.Semaphore(concurrency)
+        results: dict[str, str] = {}
 
-    async with HttpxFetcher() as fetcher:
         async def _fetch_one(code: str, cover_url: str) -> None:
-            async with sem:
-                b64 = await _download_one_cover(fetcher, code, cover_url)
+            async with s:
+                b64 = await _download_one_cover(f, code, cover_url)
                 if b64:
                     results[code] = b64
 
         await asyncio.gather(*[_fetch_one(code, url) for code, url in items])
+        return results
 
-    return results
+    if fetcher is not None:
+        return await _run(fetcher)
+    async with HttpxFetcher() as f:
+        return await _run(f)

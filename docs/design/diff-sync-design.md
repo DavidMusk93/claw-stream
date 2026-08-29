@@ -37,6 +37,20 @@ SELECT star_id, code FROM titles
 - Loads into an in-memory `set[tuple[int, str]]` for O(1) lookups
 - Implemented by `db.load_all_title_codes()`
 
+### Pipeline Structure (since 2026-08-29)
+
+Phases 1–3 run as a **per-star pipeline**, all stars overlapped: fetch → diff
+→ covers → write. A star's cover download and DB write proceed while later
+stars are still fetching, so cover/write time hides under fetch time:
+
+```
+star A:      fetch ── diff ── covers ── write
+star B:        fetch ── diff ── covers ── write
+star C:           fetch ── diff ── covers ── write
+                  └─ global caps: ijav sem=8, rss sem=4, covers sem=16,
+                     writes serialized by the DuckDB write queue ─┘
+```
+
 ### Phase 1: Incremental Page Fetching
 
 **Replace Playwright with pure HTTP (`HttpxFetcher`)**
@@ -71,7 +85,10 @@ Only download covers for new titles:
 
 ```python
 cover_items = [(it.code, it.cover_url or "") for it in new_items]
-cover_map = await download_covers_batch(cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY)  # 16
+cover_map = await download_covers_batch(
+    cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY,  # 16
+    sem=cover_sem, fetcher=fetcher,  # shared cap + shared HTTP client across stars
+)
 ```
 
 - Daily sync drops from 400+ covers to 0–5 covers

@@ -132,6 +132,30 @@ def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None
 
 
 @trace_db
+def upsert_stars(star_rows, conn=None):
+    """Batch upsert stars, returns {code: id}. Single connection + commit."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        mapping = {}
+        for row in star_rows:
+            mapping[row["code"]] = upsert_star(
+                name=row.get("name"),
+                jp_name=row.get("jp_name"),
+                handle=row.get("handle"),
+                code=row.get("code"),
+                type=row.get("type"),
+                note=row.get("note"),
+                conn=managed,
+            )
+        if should_close:
+            managed.commit()
+        return mapping
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
 def title_exists(star_id, code, conn=None):
     """Check if title already exists"""
     managed, should_close = _managed_conn(conn)

@@ -2,10 +2,11 @@
 
 Diff-Sync architecture (first principle: update as fast as possible):
 1. Batch upsert stars + preload all existing title codes (memory set)
-2. Pure HTTP concurrent fetching (HttpxFetcher, no browser overhead)
-3. In-memory diff: keep only new works
-4. Incremental cover download: only download covers for new works
-5. Incremental database write: only INSERT new works
+2. Per-star pipeline, all stars overlapped: fetch (pure HTTP, no browser) →
+   in-memory diff (keep only new works) → incremental cover download (new
+   works only, shared global semaphore) → incremental write (per-star UPSERT
+   through the serial DuckDB write queue). A star's covers/writes hide under
+   the remaining stars' fetch time.
 
 Hybrid source: **ijavtorrent is the primary source** (actress pages carry the
 rich metadata: retail dates, views, likes, cover_url, hhd800-tagged magnets).
@@ -317,7 +318,8 @@ async def run(
 
     ``on_progress`` (optional) is awaited with a phase dict at each stage so
     callers can stream live progress (e.g. SSE ``sync.progress`` events):
-    ``prepare`` → ``fetch`` (per star) → ``covers`` → ``write`` (per star).
+    ``prepare`` → per-star ``fetch``/``covers``/``write`` (pipelined — phases
+    from different stars interleave, counters are cumulative).
 
     Returns {"results": per-star sync summaries, "failed": per-star fetch
     failures}. Raises RuntimeError when every star page fetch fails — a total
@@ -340,17 +342,12 @@ async def run(
     stars = [StarConfig(**s) for s in raw.get("stars", [])]
     log.info(f"syncing {len(stars)} stars, fetch_concurrency={fetch_concurrency}")
 
-    # 1. Batch upsert stars and build code → star_id mapping
+    # 1. Batch upsert stars (single write-queue round trip), build code → star_id map
     t0 = time.perf_counter()
-    star_id_map: dict[str, int] = {}
-    for star in stars:
-        star_id = await db_write(
-            db.upsert_star,
-            name=star.name,
-            handle=star.handle,
-            code=star.code,
-        )
-        star_id_map[star.code] = star_id
+
+    star_id_map = await db_write(db.upsert_stars, [
+        {"name": s.name, "handle": s.handle, "code": s.code} for s in stars
+    ])
     t1 = time.perf_counter()
     log.info(f"[timing] upsert stars: {(t1 - t0) * 1000:.1f}ms")
 
@@ -361,73 +358,88 @@ async def run(
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
-    # 3. Concurrently fetch all stars: ijavtorrent primary + sukebei RSS supplement
+    # 3-5. Per-star pipeline: fetch → diff → covers → write, overlapped across
+    # stars. A star's covers download and its rows write while later stars are
+    # still fetching, hiding most cover/write time under fetch time. The
+    # DuckDB write queue serializes all writes anyway, so per-star writes
+    # don't change write-side safety.
     t0 = time.perf_counter()
     fetched = 0
+    failed: list[dict[str, str]] = []
+    clean: list[dict] = []
+    total_new = 0
+    total_updated = 0
 
     async with HttpxFetcher() as fetcher:
         ijav_sem = asyncio.Semaphore(fetch_concurrency)
         rss_sem = asyncio.Semaphore(min(fetch_concurrency, RSS_MAX_CONCURRENCY))
+        cover_sem = asyncio.Semaphore(COVER_DOWNLOAD_CONCURRENCY)
 
-        async def _fetch_one(star: StarConfig) -> list[VideoItem]:
-            nonlocal fetched
+        async def _process_star(star: StarConfig) -> None:
+            nonlocal fetched, total_new, total_updated
+
+            # Fetch: ijavtorrent primary + sukebei RSS supplement
             ok, count, err = True, 0, None
             try:
                 items = await fetch_star(fetcher, star, ijav_sem, rss_sem)
                 count = len(items)
-                return items
             except Exception as e:
                 ok, err = False, f"{type(e).__name__}: {e}"[:200]
-                raise
-            finally:
                 fetched += 1
-                await _emit(
-                    "fetch", star=star.name, done=fetched, total=len(stars),
-                    ok=ok, titles=count, error=err,
+                await _emit("fetch", star=star.name, done=fetched, total=len(stars),
+                            ok=ok, titles=count, error=err)
+                log.error(f"fetch exception for {star.name}: {e}")
+                failed.append({"name": star.name, "error": f"{type(e).__name__}: {e}"})
+                return
+            fetched += 1
+            await _emit("fetch", star=star.name, done=fetched, total=len(stars),
+                        ok=ok, titles=count)
+
+            # Diff: new works + existing works with missing metadata
+            star_id = star_id_map[star.code]
+            new_items = [it for it in items if (star_id, it.code) not in existing_codes]
+            if len(new_items) > MAX_NEW_TITLES:
+                log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
+                new_items = new_items[:MAX_NEW_TITLES]
+            backfill_items = [
+                it for it in items
+                if (star_id, it.code) in missing_codes and (star_id, it.code) in existing_codes
+            ]
+            sync_items = new_items + backfill_items
+            if not sync_items:
+                log.info(f"{star.name}: no new titles")
+                return
+            log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill")
+
+            # Covers for this star (shared global cap + shared HTTP client),
+            # then write — both overlap with other stars' fetches.
+            try:
+                cover_items = [(it.code, it.cover_url or "") for it in sync_items]
+                cover_map = await download_covers_batch(
+                    cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY,
+                    sem=cover_sem, fetcher=fetcher,
                 )
+                await _emit("covers", star=star.name, count=len(cover_items),
+                            downloaded=len(cover_map))
+
+                sink = TitleSyncSink(star_id=star_id, star_code=star.code, star_name=star.name)
+                new_codes = {it.code for it in new_items}
+                batch_result = await sink.write_batch(sync_items, new_codes, cover_map)
+            except Exception as e:
+                log.error(f"post-fetch failure for {star.name}: {e}")
+                failed.append({"name": star.name, "error": f"{type(e).__name__}: {e}"})
+                return
+            total_new += batch_result["new"]
+            total_updated += batch_result["updated"]
+            log.info(f"done: {star.name}: {batch_result['new']} new, {batch_result['updated']} backfill")
+            clean.append({"name": star.name, "titles": sync_items, "count": batch_result["new"]})
+            await _emit("write", star=star.name, done=len(clean), total=len(stars),
+                        new=batch_result["new"])
 
         await _emit("fetch", done=0, total=len(stars))
-        page_results = await asyncio.gather(
-            *[_fetch_one(star) for star in stars],
-            return_exceptions=True,
-        )
+        await asyncio.gather(*[_process_star(star) for star in stars])
     t1 = time.perf_counter()
-    log.info(f"[timing] fetch stars (ijav+rss): {(t1 - t0) * 1000:.1f}ms")
-
-    # 4. Diff: new works + existing works with missing metadata
-    sync_batches: list[tuple[int, str, list[VideoItem]]] = []
-    all_sync_items: list[VideoItem] = []
-    failed: list[dict[str, str]] = []
-
-    for star, page_result in zip(stars, page_results):
-        if isinstance(page_result, Exception):
-            log.error(f"fetch exception for {star.name}: {page_result}")
-            failed.append({
-                "name": star.name,
-                "error": f"{type(page_result).__name__}: {page_result}",
-            })
-            continue
-
-        star_id = star_id_map[star.code]
-        items = page_result
-
-        new_items = [it for it in items if (star_id, it.code) not in existing_codes]
-        if len(new_items) > MAX_NEW_TITLES:
-            log.info(f"{star.name}: {len(new_items)} new, limiting to {MAX_NEW_TITLES}")
-            new_items = new_items[:MAX_NEW_TITLES]
-
-        backfill_items = [
-            it for it in items
-            if (star_id, it.code) in missing_codes and (star_id, it.code) in existing_codes
-        ]
-
-        sync_items = new_items + backfill_items
-        if sync_items:
-            sync_batches.append((star_id, star.name, sync_items, new_items))
-            all_sync_items.extend(sync_items)
-            log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill")
-        else:
-            log.info(f"{star.name}: no new titles")
+    log.info(f"[timing] pipeline (fetch+covers+write): {(t1 - t0) * 1000:.1f}ms")
 
     # A total fetch failure means nothing was synced at all — surface it as an
     # error instead of reporting a fake "0 new titles" success.
@@ -438,40 +450,6 @@ async def run(
     if failed:
         log.warning(f"{len(failed)}/{len(stars)} star fetches failed: "
                     f"{', '.join(f['name'] for f in failed)}")
-
-    # 5. Incremental cover download: only download covers for works we will write
-    cover_map: dict[str, str] = {}
-    if all_sync_items:
-        t0 = time.perf_counter()
-        cover_items = [(it.code, it.cover_url or "") for it in all_sync_items]
-        log.info(f"downloading {len(cover_items)} covers in batch...")
-        await _emit("covers", count=len(cover_items))
-        cover_map = await download_covers_batch(cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY)
-        t1 = time.perf_counter()
-        log.info(f"[timing] download covers: {(t1 - t0) * 1000:.1f}ms | downloaded={len(cover_map)}")
-
-    # 6. Incremental database write: INSERT new + UPDATE missing metadata
-    t0 = time.perf_counter()
-    total_new = 0
-    total_updated = 0
-    clean: list[dict] = []
-
-    for i, (star_id, name, sync_items, new_items) in enumerate(sync_batches, 1):
-        star_cfg = next(s for s in stars if star_id_map[s.code] == star_id)
-        sink = TitleSyncSink(star_id=star_id, star_code=star_cfg.code, star_name=name)
-        new_codes = {it.code for it in new_items}
-        batch_result = await sink.write_batch(sync_items, new_codes, cover_map)
-
-        total_new += batch_result["new"]
-        total_updated += batch_result["updated"]
-        log.info(f"done: {name}: {batch_result['new']} new, {batch_result['updated']} backfill")
-        clean.append({"name": name, "titles": sync_items, "count": batch_result["new"]})
-        await _emit(
-            "write", star=name, done=i, total=len(sync_batches),
-            new=batch_result["new"],
-        )
-    t1 = time.perf_counter()
-    log.info(f"[timing] batch write all stars: {(t1 - t0) * 1000:.1f}ms")
 
     # Statistics
     t0 = time.perf_counter()

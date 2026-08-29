@@ -376,6 +376,13 @@ function dismissToast() {
 
 // Live sync progress pushed via SSE sync.progress events.
 // Phases: prepare → fetch (per star) → covers → write (per star).
+// Since fetch/covers/write are pipelined per star, events interleave —
+// keep the bar monotonic so it never jumps backwards mid-run.
+let syncPeakFraction = 0
+function syncBar(fraction: number): number {
+  syncPeakFraction = Math.max(syncPeakFraction, fraction)
+  return syncPeakFraction
+}
 function handleSyncProgress(data: any) {
   switch (data.phase) {
     case 'prepare':
@@ -387,18 +394,18 @@ function handleSyncProgress(data: any) {
       const detail = data.star
         ? (data.ok ? `${data.star} — ${data.titles} titles` : `${data.star} — fetch failed`)
         : 'Fetching ijavtorrent + sukebei RSS'
-      showRunningToast('Fetching stars', detail, `${done}/${total}`, total ? (done / total) * 0.8 : 0.02)
+      showRunningToast('Fetching stars', detail, `${done}/${total}`, syncBar(total ? (done / total) * 0.8 : 0.02))
       syncProgressText.value = total ? `${done}/${total}` : ''
       break
     }
     case 'covers':
-      showRunningToast('Downloading covers', `${data.count ?? 0} new covers`, '', 0.85)
+      showRunningToast('Downloading covers', `${data.count ?? 0} new covers`, '', syncBar(0.85))
       break
     case 'write': {
       const done = data.done ?? 0
       const total = data.total ?? 0
       const detail = data.star ? `${data.star}: +${data.new ?? 0} new` : ''
-      showRunningToast('Writing to database', detail, total ? `${done}/${total}` : '', 0.85 + (total ? (done / total) * 0.13 : 0))
+      showRunningToast('Writing to database', detail, total ? `${done}/${total}` : '', syncBar(0.85 + (total ? (done / total) * 0.13 : 0)))
       break
     }
   }
@@ -417,6 +424,7 @@ async function startSync() {
     if (res.status === 'started' || res.status === 'running') {
       syncRunning.value = true
       syncProgressText.value = ''
+      syncPeakFraction = 0
       showRunningToast('Syncing…', 'Starting sync')
     }
   } catch (e: any) {

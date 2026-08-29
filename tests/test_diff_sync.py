@@ -495,6 +495,8 @@ async def _stub_db_write(func, *args, **kwargs):
     name = getattr(func, "__name__", "")
     if name == "upsert_star":
         return 1
+    if name == "upsert_stars":
+        return {s["code"]: 1 for s in args[0]}
     if name in ("load_all_title_codes", "load_title_codes_missing_metadata"):
         return set()
     return [("CODE", "Star", 0)]  # _query_stats rows
@@ -543,7 +545,7 @@ async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
         async def write_batch(self, items, new_codes, cover_map):
             return {"new": len(items), "updated": 0}
 
-    async def _stub_covers(items, concurrency=8):
+    async def _stub_covers(items, **_kwargs):
         return {}
 
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
