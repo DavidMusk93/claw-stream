@@ -14,6 +14,10 @@ from .crud import (
     load_title_codes_missing_metadata,
     upsert_title,
     delete_star_by_code,
+    insert_sync_run,
+    finish_sync_run,
+    list_sync_runs,
+    insert_user_events,
 )
 from .write_queue import DuckDBWriteQueue, db_write, get_queue
 from .queries import (
@@ -36,6 +40,10 @@ __all__ = [
     "load_title_codes_missing_metadata",
     "upsert_title",
     "delete_star_by_code",
+    "insert_sync_run",
+    "finish_sync_run",
+    "list_sync_runs",
+    "insert_user_events",
     "get_all_titles_json",
     "export_report_json",
     "get_stats",

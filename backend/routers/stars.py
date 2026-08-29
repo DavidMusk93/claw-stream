@@ -88,7 +88,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 user_liked := COALESCE(r.user_liked, 0)
             ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
-        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 10
+        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 21
         GROUP BY s.id, s.code, s.name
         ORDER BY s.name
         """).fetchall()

@@ -89,6 +89,32 @@ def init_schema(conn=None):
                 UNIQUE(star_id, platform, content)
             )
         """)
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_sync_run_id START 1")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sync_runs (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_sync_run_id'),
+                trigger TEXT NOT NULL DEFAULT 'manual',
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP,
+                total_new INTEGER DEFAULT 0,
+                total_updated INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                error TEXT
+            )
+        """)
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_user_event_id START 1")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_events (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_user_event_id'),
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                event TEXT NOT NULL,
+                code TEXT,
+                star_code TEXT,
+                meta JSON
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_user_events_ts ON user_events(ts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_star ON titles(star_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_date ON titles(release_date_sort)")

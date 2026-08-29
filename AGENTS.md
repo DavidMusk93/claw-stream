@@ -56,7 +56,8 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `torrents_router` | `backend/routers/torrents.py` | `/torrent/add`, `/torrent/status/{hash}`, seek/progress/pause/resume |
 | `stars_router` | `backend/routers/stars.py` | `/api/stars` list/add/delete/like |
 | `cache_router` | `backend/routers/cache.py` | `/api/cache`, `/api/cache/metrics`, delete, gc-orphans |
-| `sync_router` | `backend/routers/sync.py` | `/api/stars/sync` — runs `scrapers.v2.tasks.sync_titles` in-process (async, no subprocess) |
+| `sync_router` | `backend/routers/sync.py` | `/api/stars/sync` — runs `scrapers.v2.tasks.sync_titles` in-process (async, no subprocess); 6h scheduler started in lifespan, runs recorded in `sync_runs` |
+| `track_router` | `backend/routers/track.py` | `/api/track` — batched user behavior events (埋点) → `user_events` table |
 | `auth_router` | `backend/routers/auth.py` | `/api/auth` (daily rotating password validation) |
 | `log_router` | `backend/routers/log.py` | `/api/log` log query endpoints |
 | `events_router` | `backend/routers/events.py` | `/api/events` SSE stream (heartbeat every 30s) |
@@ -89,7 +90,8 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 │   ├── layouts/default.vue  # Default layout
 │   ├── pages/               # index.vue (home), login.vue (login)
 │   ├── components/          # Vue components grouped: cache/, star/, title/, ui/, video/
-│   ├── composables/         # useApi, useStars, useVideoPlayer, useCachePreheat, useEventSource, useLogger
+│   ├── composables/         # useApi, useStars, useVideoPlayer, useCachePreheat, useEventSource, useLogger,
+│   │                        #   useTrack (behavior 埋点), useEventLog (event panel store)
 │   ├── middleware/          # auth.global.ts (cookie auth guard)
 │   ├── assets/css/main.css  # Global styles
 │   ├── types/api.ts         # TypeScript interface definitions
@@ -139,6 +141,8 @@ Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER T
 - `stars` — Actor base info (`name` UNIQUE, `jp_name`, `handle`, `code`, `type`, `note`)
 - `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`; `UNIQUE(star_id, code)`
 - `social_posts` — Social platform posts (`star_id`, `platform`, `content`, `post_url`, `posted_at`)
+- `sync_runs` — Sync run history (`trigger` manual/scheduled, `status`, `started_at`, `finished_at`, `total_new`, `total_updated`, `failed_count`, `error`)
+- `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSON`)
 
 There is **no separate `magnets` table** anymore — magnet data lives on `titles`.
 

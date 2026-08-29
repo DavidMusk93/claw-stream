@@ -75,7 +75,7 @@
           <button
             :disabled="!activeTitle.magnet"
             class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full bg-[#ff375f] text-white text-[15px] font-semibold transition-all hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.97] shrink-0"
-            @click="activeTitle.magnet && $emit('play', activeTitle.magnet)"
+            @click="onPlay"
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z"/>
@@ -168,6 +168,9 @@ const emit = defineEmits<{
   (e: 'deleted', code: string): void
 }>()
 
+const { track } = useTrack()
+const { add: addLog } = useEventLog()
+
 const id = computed(() => props.star.code.toLowerCase())
 const activeIndex = ref(0)
 const activeTitle = computed(() => props.star.titles?.[activeIndex.value] || null)
@@ -187,6 +190,13 @@ watch(activeIndex, () => {
   activeImgError.value = false
 })
 
+function onPlay() {
+  if (!activeTitle.value?.magnet) return
+  track('play', { code: activeTitle.value.code, star_code: props.star.code })
+  addLog({ kind: 'action', title: `Play ${activeTitle.value.code}`, detail: props.star.name, state: 'info' })
+  emit('play', activeTitle.value.magnet)
+}
+
 async function toggleLike() {
   if (liking.value || !activeTitle.value) return
   liking.value = true
@@ -195,8 +205,11 @@ async function toggleLike() {
     const newVal = !activeLiked.value
     await likeTitle(activeTitle.value.code, newVal)
     activeTitle.value.user_liked = newVal
+    track(newVal ? 'like' : 'unlike', { code: activeTitle.value.code, star_code: props.star.code })
+    addLog({ kind: 'action', title: `${newVal ? 'Liked' : 'Unliked'} ${activeTitle.value.code}`, detail: props.star.name, state: 'success' })
   } catch (e: any) {
     console.error('like failed:', e)
+    addLog({ kind: 'action', title: `Like failed: ${activeTitle.value?.code}`, detail: String(e?.message ?? e), state: 'error' })
   } finally {
     liking.value = false
   }
@@ -208,6 +221,7 @@ function copyMagnet() {
   navigator.clipboard.writeText(magnet).then(() => {
     copied.value = true
     setTimeout(() => copied.value = false, 1500)
+    track('copy_magnet', { code: activeTitle.value?.code, star_code: props.star.code })
   }).catch(() => {
     // ignore
   })

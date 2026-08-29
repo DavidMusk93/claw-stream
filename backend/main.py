@@ -20,7 +20,7 @@ import base64
 
 import duckdb
 
-from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, stars, test_router, events_router
+from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, track_router, stars, test_router, events_router
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
 
@@ -129,6 +129,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     asyncio.create_task(_resume_liked_after_preload())
 
+    # Start the 6h scheduled title sync (records runs in sync_runs table)
+    from backend.routers.sync import start_sync_scheduler
+    start_sync_scheduler()
+
     # Clean up orphan torrents on startup (caused by historical bugs or interrupted deletion flows)
     try:
         db_path = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
@@ -192,6 +196,7 @@ app.include_router(auth_router)
 app.include_router(log_router)
 app.include_router(stars.router)
 app.include_router(sync_router)
+app.include_router(track_router)
 app.include_router(test_router)
 app.include_router(events_router)
 

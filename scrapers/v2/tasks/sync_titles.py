@@ -463,7 +463,12 @@ async def run(
         total += count
     log.info(f"sync complete: {total_new} new, {total_updated} backfill, {total} total titles, {len(failed)} fetch failed | total elapsed={(time.perf_counter() - t_total) * 1000:.1f}ms")
 
-    return {"results": clean, "failed": failed}
+    return {
+        "results": clean,
+        "failed": failed,
+        "total_new": total_new,
+        "total_updated": total_updated,
+    }
 
 
 def _query_stats(conn=None):

@@ -340,3 +340,109 @@ def delete_star_by_code(code: str, conn=None) -> bool:
     finally:
         if should_close:
             managed.close()
+
+
+# ── Sync run history ────────────────────────────────────────────────
+
+@trace_db
+def insert_sync_run(trigger: str, conn=None) -> int:
+    """Start a sync run record, returns its id."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            "INSERT INTO sync_runs (trigger) VALUES (?)", (trigger,)
+        )
+        row = managed.execute("SELECT max(id) FROM sync_runs").fetchone()
+        if should_close:
+            managed.commit()
+        return row[0]
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def finish_sync_run(
+    run_id: int,
+    status: str,
+    total_new: int = 0,
+    total_updated: int = 0,
+    failed_count: int = 0,
+    error: str | None = None,
+    conn=None,
+) -> None:
+    """Mark a sync run finished/failed with its outcome."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            """
+            UPDATE sync_runs SET
+                status = ?, finished_at = now(), total_new = ?,
+                total_updated = ?, failed_count = ?, error = ?
+            WHERE id = ?
+            """,
+            (status, total_new, total_updated, failed_count, error, run_id),
+        )
+        if should_close:
+            managed.commit()
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def list_sync_runs(limit: int = 10, conn=None) -> list[dict]:
+    """Recent sync runs, newest first."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            """
+            SELECT id, trigger, status,
+                   strftime(started_at, '%Y-%m-%d %H:%M:%S'),
+                   strftime(finished_at, '%Y-%m-%d %H:%M:%S'),
+                   total_new, total_updated, failed_count, error
+            FROM sync_runs ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "id": r[0], "trigger": r[1], "status": r[2],
+                "started_at": r[3], "finished_at": r[4],
+                "total_new": r[5], "total_updated": r[6],
+                "failed_count": r[7], "error": r[8],
+            }
+            for r in rows
+        ]
+    finally:
+        if should_close:
+            managed.close()
+
+
+# ── User behavior events (埋点) ─────────────────────────────────────
+
+@trace_db
+def insert_user_events(events: list[dict], conn=None) -> int:
+    """Batch insert user behavior events. Returns inserted count."""
+    if not events:
+        return 0
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.executemany(
+            "INSERT INTO user_events (event, code, star_code, meta) VALUES (?, ?, ?, ?)",
+            [
+                (
+                    str(e.get("event", ""))[:64],
+                    (e.get("code") or None),
+                    (e.get("star_code") or None),
+                    json.dumps(e.get("meta")) if e.get("meta") is not None else None,
+                )
+                for e in events[:100]
+            ],
+        )
+        if should_close:
+            managed.commit()
+        return min(len(events), 100)
+    finally:
+        if should_close:
+            managed.close()

@@ -203,6 +203,7 @@
 
     <VideoModal v-model:open="modalOpen" :hash="activeHash" />
     <CachePanel :stars="displayStars" />
+    <EventPanel />
 
     <!-- Sync progress toast -->
     <SyncToast
@@ -280,6 +281,8 @@ function onStarDeleted(code: string) {
   deletedCodes.value.add(code)
   recentStars.value = recentStars.value.filter(s => s.code !== code)
   saveRecent()
+  track('delete_star', { code })
+  addLog({ kind: 'action', title: `Deleted star ${code}`, state: 'success' })
 }
 
 async function addStar() {
@@ -302,6 +305,8 @@ async function addStar() {
 
     addSuccess.value = `Added ${addedName} (${addedCode}), ${titlesFound} titles found, syncing in background...`
     newStarUrl.value = ''
+    track('add_star', { code: addedCode, meta: { name: addedName, titles_found: titlesFound } })
+    addLog({ kind: 'action', title: `Added star ${addedName}`, detail: `${titlesFound} titles found, syncing in background`, state: 'success' })
 
     recentStars.value.unshift({
       name: addedName,
@@ -315,6 +320,7 @@ async function addStar() {
   } catch (e: any) {
     const msg = e?.data?.detail || e?.message || 'Failed to add'
     addError.value = msg
+    addLog({ kind: 'action', title: 'Add star failed', detail: msg, state: 'error' })
   } finally {
     addingStar.value = false
   }
@@ -330,6 +336,8 @@ function openVideo(magnet: string) {
 
 const syncRunning = ref(false)
 const syncError = ref('')
+const { track } = useTrack()
+const { add: addLog } = useEventLog()
 const { getSyncStatus } = useApi()
 
 async function fetchSyncStatus(silent = false) {
@@ -524,6 +532,7 @@ onMounted(() => {
       const code = entry.target.getAttribute('data-code')
       if (code && entry.isIntersecting && !visibleCodes.value.has(code)) {
         visibleCodes.value.add(code)
+        track('star_view', { star_code: code })
       }
     })
   }, {
