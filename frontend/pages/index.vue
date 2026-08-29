@@ -234,7 +234,12 @@ const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: conf
 const { stars, pending, error } = useStars()
 
 const deletedCodes = ref<Set<string>>(new Set())
-const displayStars = computed(() => stars.value?.filter(s => !deletedCodes.value.has(s.code)) ?? [])
+// Display filter: hide VR / multi-star (共演/omnibus) works, cap per-star list
+const displayStars = computed(() =>
+  (stars.value ?? [])
+    .filter(s => !deletedCodes.value.has(s.code))
+    .map(s => ({ ...s, titles: filterDisplayTitles(s, stars.value ?? []) }))
+)
 
 const visibleCodes = ref<Set<string>>(new Set())
 const starRefs = ref<HTMLElement[]>([])
