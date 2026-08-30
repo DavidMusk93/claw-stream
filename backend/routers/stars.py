@@ -216,18 +216,27 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     h1 = tree.css_first("h1")
     name = h1.text().strip() if h1 else slug.replace("-", " ").title()
 
-    # Extract titles from page, use the first title's code as the star code
+    # Extract titles from page, use the first available title's code as the
+    # star code. Skip multi-star (omnibus) items — a 共演 title like CAWB-035
+    # is often the top item on several actress pages, so it collides with a
+    # code already taken by another actor.
     extractor = IJavTorrentExtractor()
     items = extractor.extract(html)
-    if items:
-        code = items[0].code
-    else:
-        code = f"PENDING-{star_id}"
+    solo_items = [it for it in items if it.star_count <= 1]
+    if not solo_items:
+        solo_items = items  # page may lack actress-link info; fall back to all
 
-    # Re-check code conflict
-    for s in stars:
-        if s.get("code") == code:
-            raise HTTPException(status_code=409, detail=f"code {code} already used by another actor")
+    # Pick the first code not already used by another actor
+    existing_codes = {s.get("code") for s in stars}
+    code = ""
+    for it in solo_items:
+        if it.code not in existing_codes:
+            code = it.code
+            break
+    if not code:
+        code = f"PENDING-{star_id}"
+        if code in existing_codes:
+            raise HTTPException(status_code=409, detail="Actor already exists")
 
     new_star = {
         "name": name,
