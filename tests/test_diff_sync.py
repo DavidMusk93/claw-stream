@@ -854,3 +854,74 @@ def test_ijav_extractor_drops_invalid_magnets():
 
     assert len(items) == 1
     assert items[0].magnets == []
+
+
+# ── Sink: cover_b64 preservation on conflict ─────────────────────────
+# The titles table stores large base64 cover blobs inline. The batch UPSERT
+# must not rewrite cover_b64 on conflict (multi-GB row-group churn → OOM on
+# the 4GB box) and must never wipe an existing cover with an empty value.
+
+def _make_titles_table(conn):
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_title_id START 1")
+    conn.execute("""
+        CREATE TABLE titles (
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_title_id'),
+            star_id INTEGER, star_code VARCHAR, star_name VARCHAR,
+            code VARCHAR, title VARCHAR,
+            release_date VARCHAR, release_date_sort VARCHAR,
+            views VARCHAR, likes VARCHAR, resolution VARCHAR,
+            cover_url VARCHAR, cover_b64 TEXT,
+            magnet VARCHAR, magnet_hash VARCHAR, all_magnets JSON,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(star_id, code)
+        )
+    """)
+
+
+@pytest.mark.asyncio
+async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
+    """ON CONFLICT without a fresh cover keeps the existing blob; with one, replaces it."""
+    import duckdb
+    from core import db
+    from scrapers.v2 import sinks
+
+    db_file = str(tmp_path / "test.duckdb")
+    setup = duckdb.connect(db_file)
+    _make_titles_table(setup)
+    setup.execute(
+        "INSERT INTO titles (id, star_id, code, title, cover_b64) VALUES (1, 1, 'ABC-001', 'old', 'EXISTING_B64')"
+    )
+    setup.close()
+
+    monkeypatch.setattr(db, "_conn", lambda **_: duckdb.connect(db_file))
+
+    async def _direct_write(fn):
+        return fn()
+
+    monkeypatch.setattr(sinks, "db_write", _direct_write)
+
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    item = VideoItem(code="ABC-001", title="new title", cover_url="https://img.test/1.jpg")
+
+    # Conflict, no fresh cover: existing blob must survive.
+    await sink.write_batch([item], set(), {})
+    conn = duckdb.connect(db_file)
+    row = conn.execute("SELECT cover_b64, title FROM titles WHERE code = 'ABC-001'").fetchone()
+    assert row[0] == "EXISTING_B64"
+    assert row[1] == "new title"
+    conn.close()
+
+    # Conflict with a fresh cover: blob is updated.
+    await sink.write_batch([item], set(), {"ABC-001": "NEW_B64"})
+    conn = duckdb.connect(db_file)
+    row = conn.execute("SELECT cover_b64 FROM titles WHERE code = 'ABC-001'").fetchone()
+    assert row[0] == "NEW_B64"
+    conn.close()
+
+    # Fresh insert carries its cover.
+    new_item = VideoItem(code="ABC-002", title="brand new", cover_url="https://img.test/2.jpg")
+    await sink.write_batch([new_item], {"ABC-002"}, {"ABC-002": "FRESH_B64"})
+    conn = duckdb.connect(db_file)
+    row = conn.execute("SELECT cover_b64 FROM titles WHERE code = 'ABC-002'").fetchone()
+    assert row[0] == "FRESH_B64"
+    conn.close()

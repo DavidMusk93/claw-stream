@@ -114,7 +114,13 @@ class TitleSyncSink:
                         v["magnet"], v["magnet_hash"], v["all_magnets"],
                     ])
 
-                # ON CONFLICT only updates metadata, preserving existing cover_b64
+                # ON CONFLICT only updates metadata. cover_b64 is deliberately
+                # excluded from the SET clause: the titles table carries large
+                # base64 blobs inline, so rewriting that column on every
+                # conflict forces DuckDB to churn blob row groups (multi-GB
+                # memory, MVCC bloat) — and an empty EXCLUDED.cover_b64 would
+                # wipe an existing cover. Fresh covers are applied separately
+                # below, only for rows that actually have one.
                 managed.execute(
                     f"""
                     INSERT INTO titles (
@@ -134,7 +140,6 @@ class TitleSyncSink:
                         likes = EXCLUDED.likes,
                         resolution = EXCLUDED.resolution,
                         cover_url = EXCLUDED.cover_url,
-                        cover_b64 = EXCLUDED.cover_b64,
                         magnet = EXCLUDED.magnet,
                         magnet_hash = EXCLUDED.magnet_hash,
                         all_magnets = EXCLUDED.all_magnets,
@@ -142,6 +147,17 @@ class TitleSyncSink:
                     """,
                     flat,
                 )
+
+                new_covers = [
+                    (v["cover_b64"], v["star_id"], v["code"])
+                    for v in values if v["cover_b64"]
+                ]
+                if new_covers:
+                    managed.executemany(
+                        "UPDATE titles SET cover_b64 = ?, updated_at = now()"
+                        " WHERE star_id = ? AND code = ?",
+                        new_covers,
+                    )
 
                 # Count insert vs update this round
                 # DuckDB has no built-in returning/row_count to distinguish insert/update;
