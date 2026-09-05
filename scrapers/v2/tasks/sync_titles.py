@@ -414,11 +414,22 @@ async def run(
                 it for it in items
                 if (star_id, it.code) in missing_codes and (star_id, it.code) in existing_codes
             ]
-            sync_items = new_items + backfill_items
+            # Titles whose cover is missing/unprocessed also re-enter the
+            # pipeline when a source lists them — otherwise they would never
+            # get a cover retry (they have full metadata, so the metadata
+            # backfill above never picks them up).
+            backfill_codes = {it.code for it in backfill_items}
+            cover_fix_items = [
+                it for it in items
+                if (star_id, it.code) in cover_missing
+                and (star_id, it.code) in existing_codes
+                and it.code not in backfill_codes
+            ]
+            sync_items = new_items + backfill_items + cover_fix_items
             if not sync_items:
                 log.info(f"{star.name}: no new titles")
                 return
-            log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill")
+            log.info(f"{star.name}: {len(new_items)} new, {len(backfill_items)} backfill, {len(cover_fix_items)} cover-fix")
 
             # Covers for this star (shared global cap + shared HTTP client),
             # then write — both overlap with other stars' fetches.
