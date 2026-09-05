@@ -140,7 +140,7 @@ docs/
 Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER TABLE` backfills):
 
 - `stars` — Actor base info (`name` UNIQUE, `jp_name`, `handle`, `code`, `type`, `note`)
-- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`; `UNIQUE(star_id, code)`
+- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `cover_w`, `cover_h` (pixels, for aspect-ratio placeholders), `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`; `UNIQUE(star_id, code)`
 - `social_posts` — Social platform posts (`star_id`, `platform`, `content`, `post_url`, `posted_at`)
 - `sync_runs` — Sync run history (`trigger` manual/scheduled, `status`, `started_at`, `finished_at`, `total_new`, `total_updated`, `failed_count`, `error`)
 - `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSON`)
