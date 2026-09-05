@@ -11,6 +11,7 @@
         :src="title.cover_thumb_url || `/api/cover/${title.code}?thumb=1`"
         :alt="title.code"
         class="w-full h-auto block bg-[#F2F2F7]"
+        :style="{ aspectRatio: coverAR }"
         loading="lazy"
         decoding="async"
         @error="imgError = true"
@@ -18,11 +19,13 @@
       />
       <Skeleton
         v-else-if="!imgError && !imgLoaded"
-        class="aspect-[2/3] w-full"
+        class="w-full"
+        :style="{ aspectRatio: coverAR }"
       />
       <div
         v-if="!title.cover_url || imgError"
-        class="aspect-[2/3] flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#2a2a2a] to-[#1a1a1a]"
+        class="flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#2a2a2a] to-[#1a1a1a]"
+        :style="{ aspectRatio: coverAR }"
       >
         <span class="text-[13px] font-semibold text-white/70">{{ title.code }}</span>
         <span class="mt-1 text-[11px] text-white/50 line-clamp-3">{{ title.title }}</span>
@@ -107,6 +110,14 @@ defineEmits<{
 
 const imgError = ref(false)
 const imgLoaded = ref(false)
+// Reserve the box at the cover's true aspect ratio so the layout never
+// jumps when bytes arrive. Fallback 3/2: virtually all covers are
+// ~800x537 landscape jackets, not 2:3 portraits.
+const coverAR = computed(() =>
+  props.title.cover_w && props.title.cover_h
+    ? `${props.title.cover_w} / ${props.title.cover_h}`
+    : '3 / 2'
+)
 const localLiked = computed(() => props.title.user_liked ?? false)
 const liking = ref(false)
 

@@ -36,13 +36,15 @@
           :src="activeTitle.cover_url"
           :alt="activeTitle.code"
           class="w-full h-auto block bg-[#F2F2F7]"
+          :style="{ aspectRatio: coverAR(activeTitle) }"
           loading="eager"
           decoding="async"
           @error="activeImgError = true"
         />
         <div
           v-else
-          class="aspect-[2/3] flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-[#F2F2F7] to-[#E5E5EA]"
+          class="flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-[#F2F2F7] to-[#E5E5EA]"
+          :style="{ aspectRatio: coverAR(activeTitle) }"
         >
           <span class="text-[19px] font-semibold text-foreground/60">{{ activeTitle.code }}</span>
           <span class="mt-1.5 text-[14px] text-foreground-muted/60 line-clamp-3">{{ activeTitle.title }}</span>
@@ -132,13 +134,15 @@
             :src="title.cover_thumb_url || `/api/cover/${title.code}?thumb=1`"
             :alt="title.code"
             class="w-full h-auto block bg-[#F2F2F7]"
+            :style="{ aspectRatio: coverAR(title) }"
             loading="lazy"
             decoding="async"
             @error="thumbErrors[title.code] = true"
           />
           <div
             v-else
-            class="aspect-[2/3] flex items-center justify-center p-2 text-center bg-gradient-to-br from-[#F2F2F7] to-[#E5E5EA]"
+            class="flex items-center justify-center p-2 text-center bg-gradient-to-br from-[#F2F2F7] to-[#E5E5EA]"
+            :style="{ aspectRatio: coverAR(title) }"
           >
             <span class="text-[11px] font-semibold text-foreground/60">{{ title.code }}</span>
           </div>
@@ -156,7 +160,7 @@
 </template>
 
 <script setup lang="ts">
-import type { Star } from '~/types/api'
+import type { Star, Title } from '~/types/api'
 
 const props = defineProps<{
   star: Star
@@ -177,6 +181,13 @@ const activeTitle = computed(() => props.star.titles?.[activeIndex.value] || nul
 
 const activeImgError = ref(false)
 const thumbErrors = ref<Record<string, boolean>>({})
+
+// Reserve each cover's box at its true aspect ratio so the layout never
+// jumps when bytes arrive. Fallback 3/2: virtually all covers are
+// ~800x537 landscape jackets, not 2:3 portraits.
+function coverAR(t: Title): string {
+  return t.cover_w && t.cover_h ? `${t.cover_w} / ${t.cover_h}` : '3 / 2'
+}
 const copied = ref(false)
 const liking = ref(false)
 const activeLiked = computed(() => activeTitle.value?.user_liked ?? false)

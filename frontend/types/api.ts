@@ -48,6 +48,8 @@ export interface Title {
   resolution?: string
   cover_url?: string
   cover_thumb_url?: string
+  cover_w?: number
+  cover_h?: number
   magnet?: string
   number?: number
   user_liked?: boolean

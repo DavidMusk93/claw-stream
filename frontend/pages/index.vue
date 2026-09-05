@@ -112,7 +112,7 @@
           >
             <Skeleton class="h-8 w-48 rounded-lg" />
             <div class="flex flex-col sm:flex-row gap-5">
-              <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[2/3] rounded-xl" />
+              <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[3/2] rounded-xl" />
               <div class="flex-1 space-y-3 py-4">
                 <Skeleton class="h-8 w-3/4 rounded-lg" />
                 <Skeleton class="h-4 w-full rounded" />
@@ -126,7 +126,7 @@
               </div>
             </div>
             <div class="flex gap-3 overflow-hidden">
-              <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[2/3] rounded-lg" />
+              <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[3/2] rounded-lg" />
             </div>
           </div>
         </div>
@@ -179,7 +179,7 @@
             <div v-else class="space-y-3">
               <Skeleton class="h-8 w-40 rounded-lg" />
               <div class="flex flex-col sm:flex-row gap-5">
-                <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[2/3] rounded-xl" />
+                <Skeleton class="w-full sm:w-[280px] md:w-[340px] lg:w-[400px] aspect-[3/2] rounded-xl" />
                 <div class="flex-1 space-y-3 py-4">
                   <Skeleton class="h-8 w-3/4 rounded-lg" />
                   <Skeleton class="h-4 w-full rounded" />
@@ -193,7 +193,7 @@
                 </div>
               </div>
               <div class="flex gap-3 overflow-hidden">
-                <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[2/3] rounded-lg" />
+                <Skeleton v-for="i in 6" :key="i" class="shrink-0 w-[100px] sm:w-[120px] md:w-[140px] aspect-[3/2] rounded-lg" />
               </div>
             </div>
           </div>
