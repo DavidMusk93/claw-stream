@@ -149,6 +149,13 @@ There is **no separate `magnets` table** anymore — magnet data lives on `title
 
 Database file at `data/claw.duckdb`, **excluded by `.gitignore`, never commit to git**.
 
+**Memory rule (4GB box, backend was OOM-killed over this)**: every DuckDB connection must come
+from `core.db._conn()`, which enforces `memory_limit='1GB'` + spill dir (override via
+`DUCKDB_MEMORY_LIMIT` / `DUCKDB_TEMP_DIR` env vars). Never call bare `duckdb.connect()` in app
+code. The `titles` table carries large base64 cover blobs inline, so queries/UPSERTs must not
+touch `cover_b64` unless a fresh cover actually exists — the sync sink updates it via a targeted
+`UPDATE` for new covers only, never in the `ON CONFLICT` clause.
+
 DB CLI: `python3 -m core.db` (init schema) · `python3 -m core.db backfill` · `python3 -m core.db stats`.
 
 ---
