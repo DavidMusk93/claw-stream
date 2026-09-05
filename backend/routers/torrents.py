@@ -13,6 +13,7 @@ from typing import Any
 from backend.models import TorrentStatus, TorrentAddRequest, TorrentAddResponse, SeekRequest, ProgressRequest
 from backend.routers.auth import require_auth
 from core import get_logger
+from core.db.connection import _conn as _db_conn
 
 router = APIRouter(prefix="/torrent", tags=["torrents"], dependencies=[Depends(require_auth)])
 log = get_logger("torrents-router")
@@ -28,7 +29,7 @@ def _is_primary_title(work_code: str) -> bool:
     if not work_code:
         return False
     try:
-        conn = duckdb.connect(DB_PATH)
+        conn = _db_conn()
         try:
             row = conn.execute("""
                 SELECT 1 FROM stars s
@@ -59,7 +60,7 @@ def _resolve_magnet(magnet: str) -> str:
     if "tr=" in magnet:
         return magnet
     try:
-        conn = duckdb.connect(DB_PATH)
+        conn = _db_conn()
         try:
             # Wide table: look up matching hash from titles.all_magnets JSON
             row = conn.execute("""

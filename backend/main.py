@@ -23,6 +23,7 @@ import duckdb
 from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, track_router, stars, test_router, events_router
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
+from core.db.connection import _conn as _db_conn
 
 log = get_logger("backend")
 access_log = get_logger("backend-access")
@@ -103,7 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Load user-liked titles into the engine protection set
     try:
-        conn = duckdb.connect(os.path.join(SCRIPT_DIR, "data", "claw.duckdb"))
+        conn = _db_conn()
         try:
             rows = conn.execute(
                 "SELECT magnet_hash FROM titles WHERE user_liked = 1 AND magnet_hash IS NOT NULL"
@@ -219,7 +220,7 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 # In-memory LRU cache: avoid repeatedly reading the same cover from disk.
 # Covers are immutable, so a modest cache dramatically reduces disk I/O.
 _cover_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
-_COVER_CACHE_MAX = 1000
+_COVER_CACHE_MAX = 200
 
 
 def _cover_disk_path(code_upper: str, thumb: bool = False) -> str:
@@ -261,7 +262,7 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
 
     # 2. Fallback to DuckDB base64 blob.
     try:
-        conn = duckdb.connect(DB_PATH)
+        conn = _db_conn()
         try:
             row = conn.execute(
                 "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",

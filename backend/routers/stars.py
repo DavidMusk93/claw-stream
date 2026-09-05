@@ -20,6 +20,7 @@ import duckdb
 
 from backend.routers.auth import require_auth
 from core import get_logger
+from core.db.connection import _conn as _db_conn
 from core.events import publish_event
 
 log = get_logger("stars-router")
@@ -86,7 +87,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
     config = _load_config()
     solo = [a for a in config.get("stars", []) if not a.get("type") or a.get("type") == "solo"]
 
-    conn = duckdb.connect(DB_PATH)
+    conn = _db_conn()
     try:
         title_rows = conn.execute("""
         SELECT
@@ -349,7 +350,7 @@ async def delete_star(
     engine = request.app.state.engine
     magnet_hashes: list[str] = []
     try:
-        conn = duckdb.connect(DB_PATH)
+        conn = _db_conn()
         try:
             rows = conn.execute("""
                 SELECT magnet_hash
@@ -399,7 +400,7 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
     code = request.code.strip().upper()
     liked = request.liked
 
-    conn = duckdb.connect(DB_PATH)
+    conn = _db_conn()
     try:
         row = conn.execute(
             "SELECT magnet, magnet_hash FROM titles WHERE code = ?",
@@ -412,7 +413,7 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
         conn.close()
 
     # Update database
-    conn = duckdb.connect(DB_PATH)
+    conn = _db_conn()
     try:
         conn.execute(
             "UPDATE titles SET user_liked = ? WHERE code = ?",

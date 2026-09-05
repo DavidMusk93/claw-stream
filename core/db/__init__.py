@@ -3,7 +3,7 @@
 统一导出所有数据库操作，保持 backward compatibility。
 """
 
-from .connection import DB_PATH, _conn, _date_to_sort
+from .connection import DB_PATH, _conn, _apply_pragmas, _date_to_sort
 from .schema import init_schema, backfill_release_date_sort
 from .crud import (
     _managed_conn,
@@ -29,6 +29,7 @@ from .queries import (
 __all__ = [
     "DB_PATH",
     "_conn",
+    "_apply_pragmas",
     "_date_to_sort",
     "_managed_conn",
     "init_schema",

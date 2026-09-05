@@ -1758,6 +1758,8 @@ class TorrentEngine:
         db_hashes: set[str] = set()
         try:
             conn = duckdb.connect(db_path)
+            from core.db.connection import _apply_pragmas
+            _apply_pragmas(conn)
             try:
                 rows = conn.execute(
                     "SELECT DISTINCT magnet_hash FROM titles WHERE magnet_hash IS NOT NULL"
