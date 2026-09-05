@@ -231,7 +231,7 @@ interface RecentStar {
 }
 
 const config = useRuntimeConfig()
-const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase })
+const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: config.public.apiBase, server: false })
 const { stars, pending, error } = useStars()
 
 const deletedCodes = ref<Set<string>>(new Set())
