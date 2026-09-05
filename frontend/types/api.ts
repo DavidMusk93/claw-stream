@@ -47,6 +47,7 @@ export interface Title {
   likes?: string
   resolution?: string
   cover_url?: string
+  cover_thumb_url?: string
   magnet?: string
   number?: number
   user_liked?: boolean
