@@ -163,6 +163,13 @@ class TitleSyncSink:
                         new_covers,
                     )
 
+                # Export fresh covers to disk (full + thumb) so the frontend
+                # gets direct static URLs right away instead of going through
+                # the /api/cover DB fallback until the next manual export.
+                for v in values:
+                    if v["cover_b64"]:
+                        db._write_cover_to_disk(v["code"], v["cover_b64"])
+
                 # Count insert vs update this round
                 # DuckDB has no built-in returning/row_count to distinguish insert/update;
                 # we approximate with new_codes (known new work count)

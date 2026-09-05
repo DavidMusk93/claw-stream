@@ -24,6 +24,7 @@ from backend.routers import stream_router, check_router, torrents_router, cache_
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
 from core.db.connection import _conn as _db_conn
+from core.db.crud import _write_cover_to_disk as _crud_write_cover
 
 log = get_logger("backend")
 access_log = get_logger("backend-access")
@@ -242,17 +243,6 @@ def _read_cover_from_disk(code_upper: str) -> tuple[bytes, str] | None:
     return None
 
 
-def _write_cover_to_disk(code_upper: str, image_bytes: bytes) -> None:
-    """Persist decoded cover bytes to the canonical disk path."""
-    file_path = _cover_disk_path(code_upper)
-    try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "wb") as f:
-            f.write(image_bytes)
-    except Exception:
-        pass
-
-
 def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
     """Synchronous function: read cover from disk first, then DuckDB, and backfill disk."""
     # 1. Prefer disk: covers exported by scripts/export_covers.py live here.
@@ -275,8 +265,9 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
                 try:
                     image_bytes = base64.b64decode(b64_data)
                     media_type = _guess_image_mime(image_bytes)
-                    # Backfill disk so subsequent requests avoid DuckDB entirely.
-                    _write_cover_to_disk(code_upper, image_bytes)
+                    # Backfill disk (normalized JPEG + thumb) so subsequent
+                    # requests avoid DuckDB entirely.
+                    _crud_write_cover(code_upper, row[0])
                     return image_bytes, media_type
                 except Exception:
                     pass
