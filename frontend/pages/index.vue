@@ -235,11 +235,15 @@ const { data: health } = useFetch<HealthResponse>('/api/health', { baseURL: conf
 const { stars, pending, error } = useStars()
 
 const deletedCodes = ref<Set<string>>(new Set())
-// Display filter: hide VR / multi-star (共演/omnibus) works, cap per-star list
+// Display filter: hide VR / multi-star (共演/omnibus) works, cap per-star list.
+// Sort by the latest *visible* work: the backend orders stars by their newest
+// title overall, which may be a hidden VR/omnibus release (e.g. miru's
+// MIRD-282), making the section order look wrong next to the visible cards.
 const displayStars = computed(() =>
   (stars.value ?? [])
     .filter(s => !deletedCodes.value.has(s.code))
     .map(s => ({ ...s, titles: filterDisplayTitles(s, stars.value ?? []) }))
+    .sort((a, b) => titleDateKey(b.titles[0]?.date).localeCompare(titleDateKey(a.titles[0]?.date)))
 )
 
 const visibleCodes = ref<Set<string>>(new Set())
