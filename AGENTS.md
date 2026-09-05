@@ -42,7 +42,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
 - **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` (plus a 400px-wide `{code}_thumb.jpg` for list/grid views, generated on write and by `export_covers.py`) are served as static files by Caddy. `/api/stars` emits these static URLs directly (`cover_url`/`cover_thumb_url`) when the files exist; `/api/cover/{code}[?thumb=1]` is the fallback for titles missing on disk (DB blob + disk backfill).
 - **Upload bandwidth cap**: libtorrent `upload_rate_limit = 2 MB/s` to reserve bandwidth for HTTP streaming.
-- **Diff-Sync hybrid source: ijavtorrent primary + sukebei.nyaa.si RSS supplement**: title sync fetches the ijavtorrent actress page (rich metadata: retail dates, views, cover_url, hhd800 magnets) and merges sukebei RSS search results (all query variants `sync_query`/`name`/`jp` unioned by code) to correct ijav's catalog gaps — ijav metadata wins, magnets unioned, RSS-only codes appended; multi-star (共演/omnibus) titles filtered via the card's actress-link count. A star fails only when BOTH sources fail. ijav lost much of its catalog in 2026-08 and still serves sparse listings (no pagination). See `docs/design/diff-sync-design.md`.
+- **Diff-Sync hybrid source: ijavtorrent primary + sukebei.nyaa.si RSS supplement**: title sync fetches the ijavtorrent actress page (rich metadata: retail dates, views, cover_url, hhd800 magnets) and merges sukebei RSS search results (all query variants `sync_query`/`name`/`jp` unioned by code) to correct ijav's catalog gaps — ijav metadata wins, magnets unioned, RSS-only codes appended; multi-star (共演/omnibus) and VR titles are filtered **at collection time** by `scrapers/v2/filters.py` (`star_count>1` actress-link count, 【VR】/[VR]/VR-label-prefix, 共演/オムニバス keywords, cast-list patterns, other-roster-star mention) — they never enter the DB. A star fails only when BOTH sources fail. ijav lost much of its catalog in 2026-08 and still serves sparse listings (no pagination). See `docs/design/diff-sync-design.md`.
 - **Auth on all API routers**: every router except `/api/auth` and `/api/test` uses `Depends(require_auth)` (cookie `claw_auth=ok`).
 
 ### 1.3 Core Components
@@ -101,10 +101,11 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 ├── scrapers/
 │   ├── search_news.py       # Compatibility shim → delegates to scrapers/v2/
 │   └── v2/                  # Pipeline: cli, pipeline, schemas, sources, fetchers, extractors,
-│                            #   sinks, cover_utils, tasks/sync_titles.py
+│                            #   sinks, cover_utils, filters.py, tasks/sync_titles.py
 ├── tests/                   # Regression tests (pytest + local BT fixture in tests/fixtures/)
 ├── scripts/                 # Ops scripts (run.sh, export_covers.py, fill_all_covers.py,
-│                            #   fix_bad_covers.py, fix_missing_covers.py)
+│                            #   fix_bad_covers.py, fix_missing_covers.py,
+│                            #   cleanup_multi_star.py, drop_hidden_titles.py)
 ├── deploy/                  # systemd unit files (star-archive-backend, star-archive-frontend)
 ├── config/
 │   └── mcporter.json        # MCP server config (exa) for AI agent tooling
