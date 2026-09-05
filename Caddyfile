@@ -24,7 +24,7 @@ cc.guohuasun.com {
     handle /images/* {
         root * /var/lib/caddy/claw-images
         uri strip_prefix /images
-        header Cache-Control "public, max-age=604800"
+        header Cache-Control "public, max-age=604800, immutable"
         file_server
     }
 

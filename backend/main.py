@@ -330,7 +330,7 @@ async def cover_image(code: str, thumb: int = 0):
             return RedirectResponse(
                 url=f"/images/titles/{code_lower}/{code_lower}_thumb.jpg",
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=604800"},
+                headers={"Cache-Control": "public, max-age=604800, immutable"},
             )
 
     # 1. Static file cache hit: let Caddy serve directly on the next request.
@@ -340,7 +340,7 @@ async def cover_image(code: str, thumb: int = 0):
         return RedirectResponse(
             url=static_path,
             status_code=307,
-            headers={"Cache-Control": "public, max-age=604800"},
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
     # 2. In-memory LRU cache hit.
@@ -350,7 +350,7 @@ async def cover_image(code: str, thumb: int = 0):
         return Response(
             content=image_bytes,
             media_type=media_type,
-            headers={"Cache-Control": "public, max-age=604800"},
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
     # 3. Fall back to DB and backfill disk for future requests.
@@ -361,7 +361,7 @@ async def cover_image(code: str, thumb: int = 0):
         return Response(
             content=image_bytes,
             media_type=media_type,
-            headers={"Cache-Control": "public, max-age=604800"},
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
     return JSONResponse(status_code=404, content={"detail": "Cover not found"})
