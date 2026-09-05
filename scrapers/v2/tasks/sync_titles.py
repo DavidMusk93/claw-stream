@@ -363,6 +363,7 @@ async def run(
     t0 = time.perf_counter()
     existing_codes = await db_write(db.load_all_title_codes)
     missing_codes = await db_write(db.load_title_codes_missing_metadata)
+    cover_missing = await db_write(db.load_title_codes_missing_cover)
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
@@ -421,8 +422,16 @@ async def run(
 
             # Covers for this star (shared global cap + shared HTTP client),
             # then write — both overlap with other stars' fetches.
+            # Only download covers we actually need: new titles, or existing
+            # ones whose cover is missing. Backfill rows (metadata/magnet
+            # refreshes) already have covers — re-downloading them every sync
+            # wasted ~500 downloads and rewrote the blob column each run.
             try:
-                cover_items = [(it.code, it.cover_url or "") for it in sync_items]
+                cover_items = [
+                    (it.code, it.cover_url or "") for it in sync_items
+                    if (star_id, it.code) not in existing_codes
+                    or (star_id, it.code) in cover_missing
+                ]
                 cover_map = await download_covers_batch(
                     cover_items, concurrency=COVER_DOWNLOAD_CONCURRENCY,
                     sem=cover_sem, fetcher=fetcher,

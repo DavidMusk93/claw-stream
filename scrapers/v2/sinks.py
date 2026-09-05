@@ -77,6 +77,8 @@ class TitleSyncSink:
                 for m in scored
             ]
 
+            cover_b64 = cover_map.get(item.code) or ""
+            cover_dims = db._cover_dims_from_b64(cover_b64)
             values.append({
                 "star_id": self.star_id,
                 "star_code": self.star_code,
@@ -89,7 +91,9 @@ class TitleSyncSink:
                 "likes": item.likes,
                 "resolution": primary.resolution if primary else "",
                 "cover_url": item.cover_url,
-                "cover_b64": cover_map.get(item.code) or "",
+                "cover_b64": cover_b64,
+                "cover_w": cover_dims[0] if cover_dims else None,
+                "cover_h": cover_dims[1] if cover_dims else None,
                 "magnet": primary.magnet if primary else None,
                 "magnet_hash": primary_hash,
                 "all_magnets": json.dumps(all_magnets) if all_magnets else None,
@@ -101,7 +105,7 @@ class TitleSyncSink:
             try:
                 # DuckDB UPSERT: INSERT ... ON CONFLICT DO UPDATE
                 placeholders = ", ".join([
-                    "(" + ", ".join(["?"] * 15) + ")"
+                    "(" + ", ".join(["?"] * 17) + ")"
                     for _ in values
                 ])
                 flat = []
@@ -110,7 +114,7 @@ class TitleSyncSink:
                         v["star_id"], v["star_code"], v["star_name"],
                         v["code"], v["title"], v["release_date"], v["release_date_sort"],
                         v["views"], v["likes"], v["resolution"],
-                        v["cover_url"], v["cover_b64"],
+                        v["cover_url"], v["cover_b64"], v["cover_w"], v["cover_h"],
                         v["magnet"], v["magnet_hash"], v["all_magnets"],
                     ])
 
@@ -126,7 +130,7 @@ class TitleSyncSink:
                     INSERT INTO titles (
                         star_id, star_code, star_name, code, title,
                         release_date, release_date_sort, views, likes,
-                        resolution, cover_url, cover_b64,
+                        resolution, cover_url, cover_b64, cover_w, cover_h,
                         magnet, magnet_hash, all_magnets
                     )
                     VALUES {placeholders}
@@ -149,13 +153,13 @@ class TitleSyncSink:
                 )
 
                 new_covers = [
-                    (v["cover_b64"], v["star_id"], v["code"])
+                    (v["cover_b64"], v["cover_w"], v["cover_h"], v["star_id"], v["code"])
                     for v in values if v["cover_b64"]
                 ]
                 if new_covers:
                     managed.executemany(
-                        "UPDATE titles SET cover_b64 = ?, updated_at = now()"
-                        " WHERE star_id = ? AND code = ?",
+                        "UPDATE titles SET cover_b64 = ?, cover_w = ?, cover_h = ?,"
+                        " updated_at = now() WHERE star_id = ? AND code = ?",
                         new_covers,
                     )
 

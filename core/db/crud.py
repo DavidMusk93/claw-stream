@@ -267,6 +267,24 @@ def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
 
 
 @trace_db
+def load_title_codes_missing_cover(conn=None) -> set[tuple[int, str]]:
+    """Load (star_id, code) for titles with no usable cover.
+
+    Uses cover_w IS NULL as a cheap proxy — scanning the cover_b64 column
+    itself pulls ~500MB+ of blob data into the buffer manager on this table.
+    """
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            "SELECT star_id, code FROM titles WHERE cover_w IS NULL"
+        ).fetchall()
+        return set(rows)
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
 def upsert_title(
     star_id,
     code,

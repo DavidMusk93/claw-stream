@@ -498,7 +498,8 @@ async def _stub_db_write(func, *args, **kwargs):
         return 1
     if name == "upsert_stars":
         return {s["code"]: 1 for s in args[0]}
-    if name in ("load_all_title_codes", "load_title_codes_missing_metadata"):
+    if name in ("load_all_title_codes", "load_title_codes_missing_metadata",
+                "load_title_codes_missing_cover"):
         return set()
     return [("CODE", "Star", 0)]  # _query_stats rows
 
@@ -870,7 +871,7 @@ def _make_titles_table(conn):
             code VARCHAR, title VARCHAR,
             release_date VARCHAR, release_date_sort VARCHAR,
             views VARCHAR, likes VARCHAR, resolution VARCHAR,
-            cover_url VARCHAR, cover_b64 TEXT,
+            cover_url VARCHAR, cover_b64 TEXT, cover_w INTEGER, cover_h INTEGER,
             magnet VARCHAR, magnet_hash VARCHAR, all_magnets JSON,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(star_id, code)
@@ -911,11 +912,21 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
     assert row[1] == "new title"
     conn.close()
 
-    # Conflict with a fresh cover: blob is updated.
-    await sink.write_batch([item], set(), {"ABC-001": "NEW_B64"})
+    # Conflict with a fresh cover: blob is updated, with real pixel dims.
+    import base64 as _b64
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (4, 2)).save(buf, "JPEG")
+    jpeg_b64 = _b64.b64encode(buf.getvalue()).decode()
+
+    await sink.write_batch([item], set(), {"ABC-001": jpeg_b64})
     conn = duckdb.connect(db_file)
-    row = conn.execute("SELECT cover_b64 FROM titles WHERE code = 'ABC-001'").fetchone()
-    assert row[0] == "NEW_B64"
+    row = conn.execute("SELECT cover_b64, cover_w, cover_h FROM titles WHERE code = 'ABC-001'").fetchone()
+    assert row[0] == jpeg_b64
+    assert row[1:] == (4, 2)
     conn.close()
 
     # Fresh insert carries its cover.
