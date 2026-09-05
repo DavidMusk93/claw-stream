@@ -89,14 +89,6 @@ def _build_stars_response() -> list[dict[str, Any]]:
     conn = duckdb.connect(DB_PATH)
     try:
         title_rows = conn.execute("""
-        WITH ranked AS (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY star_id
-                    ORDER BY release_date_sort DESC NULLS LAST
-                ) AS rn
-            FROM titles
-        )
         SELECT
             s.code,
             COALESCE(array_agg(struct_pack(
@@ -111,9 +103,10 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 charming_intro := IFNULL(r.charming_intro, ''),
                 magnet := IFNULL(r.magnet, ''),
                 user_liked := COALESCE(r.user_liked, 0)
-            ) ORDER BY r.rn) FILTER (WHERE r.code IS NOT NULL), []) AS titles
+            ) ORDER BY r.release_date_sort DESC NULLS LAST)
+            FILTER (WHERE r.code IS NOT NULL), []) AS titles
         FROM stars s
-        LEFT JOIN ranked r ON r.star_id = s.id AND r.rn <= 21
+        LEFT JOIN titles r ON r.star_id = s.id
         GROUP BY s.id, s.code, s.name
         ORDER BY s.name
         """).fetchall()

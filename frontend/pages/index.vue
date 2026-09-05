@@ -236,9 +236,9 @@ const { stars, pending, error } = useStars()
 
 const deletedCodes = ref<Set<string>>(new Set())
 // VR / multi-star works are filtered at collection time (scrapers/v2/
-// filters.py) and never reach the API; the backend caps each star at her
-// latest 21 titles and orders stars by newest work, so the API order is
-// the display order.
+// filters.py) and never reach the API; the backend returns every title
+// newest-first per star and orders stars by newest work, so the API order
+// is the display order.
 const displayStars = computed(() =>
   (stars.value ?? []).filter(s => !deletedCodes.value.has(s.code))
 )
