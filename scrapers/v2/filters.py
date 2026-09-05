@@ -25,6 +25,13 @@ import re
 from scrapers.v2.schemas import VideoItem
 
 VR_TITLE_RE = re.compile(r"(【VR】|\[VR\])", re.IGNORECASE)
+# VR-only label prefixes: the code itself is the signal for legacy rows whose
+# title/resolution are blank (e.g. "sivr-310" stored with title="sivr-310").
+VR_CODE_RE = re.compile(
+    r"^(SIVR|KAVR|DSVR|FAVR|PXVR|AJVR|MDVR|SAVR|TMAVR|VRKM|IPVR|KIWVR|NHVR"
+    r"|PRVR|BIBIVR|CRVR|URVRSP|EBVR|HNVR)[-0-9]",
+    re.IGNORECASE,
+)
 MULTI_KEYWORD_RE = re.compile(r"共演|オムニバス")
 
 # Latin cast list: two or more comma-separated "First Last" names.
@@ -53,6 +60,8 @@ def hidden_reason(
 
     text = item.title.strip()
     if text and VR_TITLE_RE.search(text):
+        return "vr"
+    if VR_CODE_RE.match(item.code):
         return "vr"
     if any("vr" in m.resolution.lower() for m in item.magnets):
         return "vr"

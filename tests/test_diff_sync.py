@@ -778,6 +778,14 @@ def test_filter_drops_vr_resolution_tag():
     assert hidden_reason(_vi("FAVR-002", "plain title", res="[8KVR]")) == "vr"
 
 
+def test_filter_drops_vr_label_prefix():
+    # Legacy rows may have no title/resolution at all — the code is the signal.
+    assert hidden_reason(_vi("SIVR-310", "sivr-310")) == "vr"
+    assert hidden_reason(_vi("VRKM-332")) == "vr"
+    # Non-VR labels that merely contain "vr" elsewhere must pass.
+    assert hidden_reason(_vi("SNOS-336", "plain solo")) is None
+
+
 def test_filter_drops_multi_star_count():
     assert hidden_reason(_vi("MIRD-282", "harem work", star_count=4)) == "star_count"
 
