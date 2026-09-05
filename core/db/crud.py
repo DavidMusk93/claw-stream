@@ -29,6 +29,20 @@ IMAGES_DIR = SCRIPT_DIR / "images" / "titles"
 JPEG_QUALITY = 90
 
 
+def _cover_dims_from_b64(b64_data: str | None) -> tuple[int, int] | None:
+    """Decode base64 cover and return (width, height), or None."""
+    if not b64_data:
+        return None
+    if b64_data.startswith("data:image/"):
+        b64_data = b64_data.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(b64_data)
+        with Image.open(io.BytesIO(raw)) as img:
+            return img.width, img.height
+    except Exception:
+        return None
+
+
 def _normalize_b64_to_jpeg(b64_data: str) -> bytes | None:
     """Decode base64 cover and normalize to JPEG bytes."""
     if not b64_data:
@@ -278,6 +292,9 @@ def upsert_title(
     all candidates stored via the all_magnets JSON column, magnet/magnet_hash stores the primary.
     """
     release_date_sort = _date_to_sort(release_date)
+    cover_dims = _cover_dims_from_b64(cover_b64)
+    cover_w = cover_dims[0] if cover_dims else None
+    cover_h = cover_dims[1] if cover_dims else None
     managed, should_close = _managed_conn(conn)
     try:
         row = managed.execute(
@@ -289,6 +306,10 @@ def upsert_title(
             # Preserve existing cover_b64 (do not overwrite during incremental refresh)
             if existing_cover and cover_b64 is None:
                 cover_b64 = existing_cover
+                if cover_dims is None:
+                    cover_dims = _cover_dims_from_b64(existing_cover)
+                    cover_w = cover_dims[0] if cover_dims else None
+                    cover_h = cover_dims[1] if cover_dims else None
             managed.execute("""
                 UPDATE titles SET
                     title = ?,
@@ -306,12 +327,15 @@ def upsert_title(
                     magnet = COALESCE(?, magnet),
                     magnet_hash = COALESCE(?, magnet_hash),
                     all_magnets = COALESCE(?, all_magnets),
+                    cover_w = COALESCE(?, cover_w),
+                    cover_h = COALESCE(?, cover_h),
                     updated_at = now()
                 WHERE id = ?
             """, (
                 title, release_date, release_date_sort, views, likes, resolution,
                 download_url, cover_url, cover_b64, cover_path,
-                star_code, star_name, magnet, magnet_hash, all_magnets, title_id
+                star_code, star_name, magnet, magnet_hash, all_magnets,
+                cover_w, cover_h, title_id
             ))
             result = title_id
         else:
@@ -319,13 +343,14 @@ def upsert_title(
                 INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
                                    views, likes, resolution, download_url, cover_url,
                                    cover_b64, cover_path, star_code, star_name,
-                                   magnet, magnet_hash, all_magnets)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   magnet, magnet_hash, all_magnets, cover_w, cover_h)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 star_id, code, title, release_date, release_date_sort, views, likes,
                 resolution, download_url, cover_url, cover_b64, cover_path,
                 star_code, star_name, magnet, magnet_hash,
                 json.dumps(all_magnets) if all_magnets is not None else None,
+                cover_w, cover_h,
             ))
             row = managed.execute(
                 "SELECT id FROM titles WHERE star_id = ? AND code = ?",

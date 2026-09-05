@@ -100,6 +100,8 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 resolution := IFNULL(r.resolution, ''),
                 download_url := IFNULL(r.download_url, ''),
                 cover_url := IFNULL(r.cover_url, ''),
+                cover_w := r.cover_w,
+                cover_h := r.cover_h,
                 charming_intro := IFNULL(r.charming_intro, ''),
                 magnet := IFNULL(r.magnet, ''),
                 user_liked := COALESCE(r.user_liked, 0)
