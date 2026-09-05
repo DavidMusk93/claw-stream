@@ -44,11 +44,15 @@ export default defineNuxtConfig({
       ],
     },
     workbox: {
-      navigateFallback: '/',
+      // Network-failed navigations (flaky mobile) fall back to a tiny
+      // auto-retrying offline page. It must point at a PRECACHED file — the
+      // old '/' target was never precached (HTML is excluded below), so the
+      // SW threw and the browser painted nothing: the refresh white screen.
+      navigateFallback: '/offline.html',
       // Do NOT precache HTML: Nuxt SSR pages are dynamic and must always be
       // fetched fresh. Precaching HTML caused old app shells to be served after
       // deploy, making "refresh" show stale or empty pages.
-      globPatterns: ['**/*.{js,css,png,svg,ico,woff,woff2,json}'],
+      globPatterns: ['**/*.{js,css,png,svg,ico,woff,woff2,json}', 'offline.html'],
       cleanupOutdatedCaches: true,
       clientsClaim: true,
       skipWaiting: true,

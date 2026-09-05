@@ -166,7 +166,7 @@
             v-for="(star, index) in displayStars"
             :id="`star-${star.code.toLowerCase()}`"
             :key="star.code"
-            ref="starRefs"
+            v-observe
             :data-code="star.code"
           >
             <StarCard
@@ -244,7 +244,6 @@ const displayStars = computed(() =>
 )
 
 const visibleCodes = ref<Set<string>>(new Set())
-const starRefs = ref<HTMLElement[]>([])
 
 const modalOpen = ref(false)
 const activeHash = ref('')
@@ -522,12 +521,12 @@ onMounted(() => {
   })
 })
 
-// Virtual rendering with IntersectionObserver
+// Virtual rendering with IntersectionObserver. Sections mount whenever the
+// client fetch delivers data, so ref-array + onMounted/watch wiring races
+// (and silently observes nothing when stars load after mount). A directive
+// observes each section at its own mount — immune to that timing.
 let observer: IntersectionObserver | null = null
-
-onMounted(() => {
-  if (!import.meta.client) return
-
+if (import.meta.client) {
   observer = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       const code = entry.target.getAttribute('data-code')
@@ -540,17 +539,12 @@ onMounted(() => {
     rootMargin: '600px',
     threshold: 0,
   })
+}
 
-  nextTick(() => {
-    starRefs.value.forEach((el) => observer?.observe(el))
-  })
-})
-
-watch(() => displayStars.value, () => {
-  nextTick(() => {
-    starRefs.value.forEach((el) => observer?.observe(el))
-  })
-})
+const vObserve = {
+  mounted(el: HTMLElement) { observer?.observe(el) },
+  unmounted(el: HTMLElement) { observer?.unobserve(el) },
+}
 
 onUnmounted(() => {
   if (observer) observer.disconnect()

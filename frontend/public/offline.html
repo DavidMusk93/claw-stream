@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Star Archive</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #F5F5F7; font-family: -apple-system, "PingFang SC", sans-serif; color: #1d1d1f; }
+  .box { text-align: center; padding: 24px; }
+  .spin { width: 28px; height: 28px; margin: 0 auto 16px; border: 3px solid rgba(0,0,0,.1);
+          border-top-color: #1d1d1f; border-radius: 50%; animation: r 0.8s linear infinite; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  p { color: rgba(0,0,0,.5); font-size: 14px; }
+  button { margin-top: 12px; padding: 10px 24px; border: 0; border-radius: 999px;
+           background: #1d1d1f; color: #fff; font-size: 14px; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="spin"></div>
+    <p>网络连接中…</p>
+    <button onclick="location.reload()">重试</button>
+  </div>
+  <script>
+    addEventListener('online', () => location.reload());
+    setTimeout(() => location.reload(), 5000);
+  </script>
+</body>
+</html>
