@@ -254,14 +254,17 @@ async def add_star(request: AddStarRequest) -> AddStarResponse:
     name = h1.text().strip() if h1 else slug.replace("-", " ").title()
 
     # Extract titles from page, use the first available title's code as the
-    # star code. Skip multi-star (omnibus) items — a 共演 title like CAWB-035
+    # star code. Skip hidden (VR/multi-star) items — a 共演 title like CAWB-035
     # is often the top item on several actress pages, so it collides with a
     # code already taken by another actor.
+    from scrapers.v2.filters import hidden_reason
+
+    roster_names = [n for s in stars for n in (s.get("name"), s.get("jp")) if n]
     extractor = IJavTorrentExtractor()
     items = extractor.extract(html)
-    solo_items = [it for it in items if it.star_count <= 1]
+    solo_items = [it for it in items if not hidden_reason(it, [name], roster_names)]
     if not solo_items:
-        solo_items = items  # page may lack actress-link info; fall back to all
+        solo_items = [it for it in items if it.star_count <= 1] or items  # page may lack actress-link info; fall back
 
     # Pick the first code not already used by another actor
     existing_codes = {s.get("code") for s in stars}

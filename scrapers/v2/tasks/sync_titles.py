@@ -48,6 +48,7 @@ from scrapers.v2.extractors import IJavTorrentExtractor, SukebeiRssExtractor
 from scrapers.v2.sinks import TitleSyncSink
 from scrapers.v2.schemas import VideoItem, StarConfig
 from scrapers.v2.cover_utils import download_covers_batch
+from scrapers.v2.filters import drop_hidden
 
 log = get_logger("sync-titles")
 
@@ -260,20 +261,24 @@ def merge_sources(
     return items
 
 
-def _drop_multi_star(items: list[VideoItem], star_name: str = "") -> list[VideoItem]:
-    """Filter out multi-star (共演/omnibus) titles.
+def _drop_hidden(
+    items: list[VideoItem],
+    star: StarConfig,
+    roster_names: list[str],
+) -> list[VideoItem]:
+    """Filter out works that must not enter the library (see filters.py).
 
     IJavTorrentExtractor counts the /actress/ links on each card into
     star_count — solo works have exactly 1. RSS-supplement items have
-    star_count=0 (unknown) and pass through; omnibus compilations rarely
-    mention the star in the RSS title anyway, so the noise filter already
-    drops most of them there.
+    star_count=0 (unknown); the VR/keyword/cast-list/roster rules catch
+    their VR and omnibus leaks instead.
     """
-    solo = [it for it in items if it.star_count <= 1]
-    dropped = len(items) - len(solo)
+    kept, dropped = drop_hidden(items, [star.name, star.jp], roster_names)
     if dropped:
-        log.info(f"{star_name}: filtered {dropped} multi-star titles")
-    return solo
+        codes = ", ".join(f"{c}({r})" for c, r in dropped[:10])
+        more = f" +{len(dropped) - 10} more" if len(dropped) > 10 else ""
+        log.info(f"{star.name}: filtered {len(dropped)} hidden titles: {codes}{more}")
+    return kept
 
 
 async def fetch_star(
@@ -281,13 +286,15 @@ async def fetch_star(
     star: StarConfig,
     ijav_sem: asyncio.Semaphore,
     rss_sem: asyncio.Semaphore,
+    roster_names: list[str] | None = None,
 ) -> list[VideoItem]:
     """Hybrid per-star fetch: ijavtorrent primary + sukebei RSS supplement.
 
     One source failing degrades to the other with a loud warning; the star
-    fails only when BOTH sources fail. Multi-star (共演/omnibus) titles are
-    filtered out of the result.
+    fails only when BOTH sources fail. VR and multi-star (共演/omnibus)
+    titles are filtered out of the result.
     """
+    roster_names = roster_names or []
     ijav_res, rss_res = await asyncio.gather(
         fetch_star_page(fetcher, star, ijav_sem),
         fetch_star_rss(fetcher, star, rss_sem),
@@ -299,11 +306,11 @@ async def fetch_star(
         raise IncompletePageError(f"both sources failed: ijav={ijav_err}; rss={rss_err}")
     if ijav_err is not None:
         log.warning(f"{star.name}: ijavtorrent unavailable ({ijav_err}), sukebei-only degraded sync")
-        return _drop_multi_star(rss_res, star.name)
+        return _drop_hidden(rss_res, star, roster_names)
     if rss_err is not None:
         log.warning(f"{star.name}: sukebei rss unavailable ({rss_err}), ijavtorrent-only degraded sync")
-        return _drop_multi_star(ijav_res, star.name)
-    return _drop_multi_star(merge_sources(ijav_res, rss_res, star.name), star.name)
+        return _drop_hidden(ijav_res, star, roster_names)
+    return _drop_hidden(merge_sources(ijav_res, rss_res, star.name), star, roster_names)
 
 
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -340,6 +347,7 @@ async def run(
         raw = json.load(f)
 
     stars = [StarConfig(**s) for s in raw.get("stars", [])]
+    roster_names = [n for s in stars for n in (s.name, s.jp) if n]
     log.info(f"syncing {len(stars)} stars, fetch_concurrency={fetch_concurrency}")
 
     # 1. Batch upsert stars (single write-queue round trip), build code → star_id map
@@ -381,7 +389,7 @@ async def run(
             # Fetch: ijavtorrent primary + sukebei RSS supplement
             ok, count, err = True, 0, None
             try:
-                items = await fetch_star(fetcher, star, ijav_sem, rss_sem)
+                items = await fetch_star(fetcher, star, ijav_sem, rss_sem, roster_names)
                 count = len(items)
             except Exception as e:
                 ok, err = False, f"{type(e).__name__}: {e}"[:200]
@@ -504,8 +512,16 @@ async def sync_star(
     )
 
     existing_codes = await db_write(db.load_all_title_codes)
+    try:
+        with open("config.json", encoding="utf-8") as f:
+            roster_names = [
+                n for s in json.load(f).get("stars", [])
+                for n in (s.get("name"), s.get("jp")) if n
+            ]
+    except OSError:
+        roster_names = []
     items = await fetch_star(
-        fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1)
+        fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1), roster_names
     )
     if not items:
         return {"name": star.name, "count": 0, "titles": []}

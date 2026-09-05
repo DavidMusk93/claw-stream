@@ -31,6 +31,7 @@ from scrapers.v2.tasks.sync_titles import (
     run,
 )
 from scrapers.v2.schemas import MagnetCandidate, VideoItem, StarConfig
+from scrapers.v2.filters import hidden_reason
 
 
 @pytest.fixture(autouse=True)
@@ -756,6 +757,55 @@ async def test_fetch_star_filters_multi_star_titles(monkeypatch):
     result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
 
     assert [it.code for it in result] == ["SOLO-001"]
+
+
+# ── Collection-stage visibility filter (scrapers/v2/filters.py) ──────
+# VR and multi-star works are dropped at sync time, not at display time:
+# a hidden title must never enter the DB, where it would drive /api/stars
+# ordering and every other consumer.
+
+def _vi(code: str, title: str = "", star_count: int = 0, res: str = "") -> VideoItem:
+    magnets = [MagnetCandidate(magnet=f"magnet:?xt=urn:btih:{'0' * 40}", resolution=res)] if res else []
+    return VideoItem(code=code, title=title, star_count=star_count, magnets=magnets)
+
+
+def test_filter_drops_vr_title():
+    assert hidden_reason(_vi("SIVR-489", "[VR] Some VR work")) == "vr"
+    assert hidden_reason(_vi("DSVR-1669", "【VR】全日文標題")) == "vr"
+
+
+def test_filter_drops_vr_resolution_tag():
+    assert hidden_reason(_vi("FAVR-002", "plain title", res="[8KVR]")) == "vr"
+
+
+def test_filter_drops_multi_star_count():
+    assert hidden_reason(_vi("MIRD-282", "harem work", star_count=4)) == "star_count"
+
+
+def test_filter_drops_multi_star_keyword():
+    assert hidden_reason(_vi("DLDSS-508", "最高の初共演 something")) == "keyword"
+    assert hidden_reason(_vi("MIRD-284", "ドリーム大共演 25周年")) == "keyword"
+
+
+def test_filter_drops_cast_list():
+    assert hidden_reason(_vi("SONE-560", "Ai Hongo, Miyu Kiyohara, Nana Miho, Kiho Kanematsu")) == "cast"
+    assert hidden_reason(_vi("LAFBD-47", "LaForet Girl 47 : Miku Ohashi, Ruka Ichinose")) == "cast"
+
+
+def test_filter_drops_other_roster_star_mention():
+    item = _vi("SONE-560", "Orgy special feat. Hana Kuraki and others")
+    assert hidden_reason(item, own_names=["Some Star"], roster_names=["Hana Kuraki"]) == "roster"
+
+
+def test_filter_keeps_own_name_mention():
+    # Uploaders routinely tag torrents with the synced star's own name.
+    item = _vi("MEYD-994", "Yumemi Kanae 111 Minutes Of Non-stop")
+    assert hidden_reason(item, own_names=["夢実かなえ", "Yumemi Kanae"], roster_names=["Yumemi Kanae"]) is None
+
+
+def test_filter_keeps_plain_solo():
+    item = _vi("SNOS-336", "Yu Tano, The Meltingly Sexy L-cup Maid", star_count=1, res="[4K]")
+    assert hidden_reason(item, ["Yu Tano"], ["Hana Kuraki", "miru"]) is None
 
 
 # ── Magnet HTML-entity regression (2026-08-25) ───────────────────────
