@@ -30,6 +30,7 @@ CODE_PATTERN = r"^[A-Za-z0-9_-]+$"
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
+IMAGES_DIR = os.path.join(SCRIPT_DIR, "images")
 
 
 # ── Config helpers ──────────────────────────────────────────────────
@@ -56,6 +57,30 @@ def invalidate_stars_cache() -> None:
 
 
 # ── Response builder ────────────────────────────────────────────────
+
+def _scan_cover_files() -> dict[str, tuple[bool, bool]]:
+    """Scan images/titles/ once and map code -> (has_full, has_thumb).
+
+    Lets /api/stars emit direct static cover URLs (served by Caddy with
+    long-lived cache headers) instead of forcing every client through the
+    /api/cover 307 redirect hop. One listdir pass replaces ~3.5k stat calls.
+    """
+    titles_dir = os.path.join(IMAGES_DIR, "titles")
+    found: dict[str, tuple[bool, bool]] = {}
+    try:
+        codes = os.listdir(titles_dir)
+    except OSError:
+        return found
+    for code_dir in codes:
+        try:
+            files = set(os.listdir(os.path.join(titles_dir, code_dir)))
+        except OSError:
+            continue
+        found[code_dir.upper()] = (
+            f"{code_dir}.jpg" in files,
+            f"{code_dir}_thumb.jpg" in files,
+        )
+    return found
 
 def _build_stars_response() -> list[dict[str, Any]]:
     config = _load_config()
@@ -97,6 +122,8 @@ def _build_stars_response() -> list[dict[str, Any]]:
         for row in title_rows:
             db_data[row[0]] = {"titles": row[1]}
 
+        cover_files = _scan_cover_files()
+
         result = []
         for a in solo:
             code = a["code"]
@@ -104,7 +131,17 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
             titles = data.get("titles", [])
             for t in titles:
-                t["cover_url"] = f"/api/cover/{t['code']}"
+                # Prefer direct static URLs so clients skip the /api/cover 307
+                # hop entirely; fall back to /api/cover (DB + disk backfill)
+                # when the exported file is missing.
+                code_lower = t["code"].lower()
+                has_full, has_thumb = cover_files.get(t["code"].upper(), (False, False))
+                if has_full:
+                    t["cover_url"] = f"/images/titles/{code_lower}/{code_lower}.jpg"
+                else:
+                    t["cover_url"] = f"/api/cover/{t['code']}"
+                if has_thumb:
+                    t["cover_thumb_url"] = f"/images/titles/{code_lower}/{code_lower}_thumb.jpg"
                 t["user_liked"] = bool(t.get("user_liked", 0))
 
             result.append({
