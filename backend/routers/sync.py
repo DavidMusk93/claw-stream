@@ -92,6 +92,15 @@ async def _run_sync_bg(trigger: str) -> None:
             "failed": [f["name"] for f in failed],
             "elapsed": round(time.time() - started_at, 1) if started_at else 0,
         })
+
+        # Sync may have resurrected dead primaries (ON CONFLICT overwrites
+        # magnet/all_magnets with fresh scrape data) — validate new/changed
+        # primary magnets right away. No-op while a check is running.
+        try:
+            from backend.routers.magnets import trigger_check
+            await trigger_check("changed")
+        except Exception:
+            log.exception("failed to trigger post-sync magnet check")
     except Exception as e:
         async with _sync_lock:
             _sync_state["last_error"] = str(e)
