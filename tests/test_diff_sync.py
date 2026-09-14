@@ -902,7 +902,11 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
     monkeypatch.setattr(sinks, "db_write", _direct_write)
 
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
-    item = VideoItem(code="ABC-001", title="new title", cover_url="https://img.test/1.jpg")
+    # The sink skips titles without magnets by design — give the item one.
+    item = VideoItem(
+        code="ABC-001", title="new title", cover_url="https://img.test/1.jpg",
+        magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "aa" * 20)],
+    )
 
     # Conflict, no fresh cover: existing blob must survive.
     await sink.write_batch([item], set(), {})
@@ -930,9 +934,42 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
     conn.close()
 
     # Fresh insert carries its cover.
-    new_item = VideoItem(code="ABC-002", title="brand new", cover_url="https://img.test/2.jpg")
+    new_item = VideoItem(
+        code="ABC-002", title="brand new", cover_url="https://img.test/2.jpg",
+        magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "bb" * 20)],
+    )
     await sink.write_batch([new_item], {"ABC-002"}, {"ABC-002": "FRESH_B64"})
     conn = duckdb.connect(db_file)
     row = conn.execute("SELECT cover_b64 FROM titles WHERE code = 'ABC-002'").fetchone()
     assert row[0] == "FRESH_B64"
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sink_skips_titles_without_magnets(tmp_path, monkeypatch):
+    """Titles without magnets are never recorded in the DB."""
+    import duckdb
+    from core import db
+    from scrapers.v2 import sinks
+
+    db_file = str(tmp_path / "test.duckdb")
+    setup = duckdb.connect(db_file)
+    _make_titles_table(setup)
+    setup.close()
+
+    monkeypatch.setattr(db, "_conn", lambda **_: duckdb.connect(db_file))
+
+    async def _direct_write(fn):
+        return fn()
+
+    monkeypatch.setattr(sinks, "db_write", _direct_write)
+
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    item = VideoItem(code="ABC-003", title="no magnet", cover_url="https://img.test/3.jpg")
+    result = await sink.write_batch([item], {"ABC-003"}, {})
+
+    assert result["skipped_no_magnet"] == 1
+    assert result["new"] == 0
+    conn = duckdb.connect(db_file)
+    assert conn.execute("SELECT count(*) FROM titles").fetchone()[0] == 0
     conn.close()

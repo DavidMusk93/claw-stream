@@ -52,11 +52,18 @@ class TitleSyncSink:
         import time as _time
 
         if not items:
-            return {"new": 0, "updated": 0}
+            return {"new": 0, "updated": 0, "skipped_no_magnet": 0}
 
         t0 = _time.perf_counter()
         values = []
+        skipped_no_magnet = 0
         for item in items:
+            # Never record titles without a magnet: they are unplayable and
+            # only clutter the catalog. A source listing the code with magnets
+            # later will insert it then.
+            if not item.magnets:
+                skipped_no_magnet += 1
+                continue
             scored = sorted(
                 item.magnets,
                 key=lambda m: TitleSyncSink._score_magnet(m),
@@ -178,14 +185,25 @@ class TitleSyncSink:
 
                 if should_close:
                     managed.commit()
-                return {"new": max(0, new_count), "updated": max(0, updated_count)}
+                return {
+                    "new": max(0, new_count),
+                    "updated": max(0, updated_count),
+                    "skipped_no_magnet": skipped_no_magnet,
+                }
             finally:
                 if should_close:
                     managed.close()
 
+        if not values:
+            log.info(f"write_batch: {self.star_name}: all {len(items)} items skipped (no magnet)")
+            return {"new": 0, "updated": 0, "skipped_no_magnet": skipped_no_magnet}
+
         result = await db_write(_upsert)
         elapsed = (_time.perf_counter() - t0) * 1000
-        log.info(f"write_batch: {self.star_name}: {len(items)} items in {elapsed:.1f}ms")
+        log.info(
+            f"write_batch: {self.star_name}: {len(values)} items in {elapsed:.1f}ms"
+            + (f" (skipped {skipped_no_magnet} without magnet)" if skipped_no_magnet else "")
+        )
         return result
 
     @staticmethod
