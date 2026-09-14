@@ -64,6 +64,10 @@ export default defineNuxtConfig({
           handler: 'NetworkFirst',
           options: {
             cacheName: 'stars-cache',
+            // Fall back to cache after 3s instead of waiting for the network
+            // to settle (a hung backend otherwise means skeletons until the
+            // 30s proxy timeout, despite a fresh cache entry).
+            networkTimeoutSeconds: 3,
             expiration: { maxEntries: 5, maxAgeSeconds: 1 },
           },
         },
