@@ -91,8 +91,8 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 │   ├── app.vue              # Nuxt root component
 │   ├── layouts/default.vue  # Default layout
 │   ├── pages/               # index.vue (home), login.vue (login)
-│   ├── components/          # Vue components grouped: cache/, star/, title/, ui/, video/
-│   ├── composables/         # useApi, useStars, useVideoPlayer, useCachePreheat, useEventSource, useLogger,
+│   ├── components/          # Vue components grouped: cache/, star/, ui/, video/
+│   ├── composables/         # useApi, useStars, useVideoPlayer, useEventSource, useLogger,
 │   │                        #   useTrack (behavior 埋点), useEventLog (event panel store)
 │   ├── middleware/          # auth.global.ts (cookie auth guard)
 │   ├── assets/css/main.css  # Global styles

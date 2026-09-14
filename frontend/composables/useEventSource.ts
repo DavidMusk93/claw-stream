@@ -51,7 +51,8 @@ function connect() {
   }
 
   es.onmessage = (e) => {
-    if (!e.data || e.data.startsWith(':heartbeat')) return
+    // Comment lines (":heartbeat") never fire onmessage, so no filter needed.
+    if (!e.data) return
     try {
       const payload = JSON.parse(e.data)
       const handlers = getListeners(payload.event)

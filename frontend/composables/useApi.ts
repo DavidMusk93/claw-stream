@@ -7,24 +7,6 @@ function _headers() {
 export function useApi() {
   const config = useRuntimeConfig()
 
-  async function checkStream(hash: string) {
-    const res = await $fetch.raw(`/api/check/${hash}`, {
-      baseURL: config.public.apiBase,
-      headers: _headers(),
-    })
-    syncTraceIdFromResponse(res)
-    return res._data
-  }
-
-  async function getTorrentStatus(hash: string) {
-    const res = await $fetch.raw(`/torrent/status/${hash}`, {
-      baseURL: config.public.apiBase,
-      headers: _headers(),
-    })
-    syncTraceIdFromResponse(res)
-    return res._data
-  }
-
   async function addTorrent(magnet: string) {
     const res = await $fetch.raw('/torrent/add', {
       baseURL: config.public.apiBase,
@@ -95,8 +77,6 @@ export function useApi() {
   }
 
   return {
-    checkStream,
-    getTorrentStatus,
     addTorrent,
     getCacheMetrics,
     getCacheItems,

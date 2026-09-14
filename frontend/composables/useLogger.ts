@@ -39,10 +39,6 @@ export function setTraceId(tid: string) {
   _setStored(tid)
 }
 
-export function makeLogHeaders(): Record<string, string> {
-  return { 'x-trace-id': getTraceId() }
-}
-
 /** Read trace_id from response headers and sync */
 export function syncTraceIdFromResponse(response: Response | undefined) {
   const tid = response?.headers?.get('x-trace-id')
