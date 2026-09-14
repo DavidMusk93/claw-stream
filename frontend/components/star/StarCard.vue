@@ -78,23 +78,13 @@
           {{ fmtDate(activeTitle.date) }}
         </p>
 
-        <!-- Action buttons -->
+        <!-- Action buttons (Copy is the real primary action: 49 copies vs
+             1 in-browser play in the first two weeks of tracking) -->
         <div class="flex items-center gap-2.5 sm:gap-3 mt-7 shrink-0">
           <button
             :disabled="!activePlayable"
-            class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full bg-[#ff375f] text-white text-[15px] font-semibold transition-all hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.97] shrink-0"
-            @click="onPlay"
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z"/>
-            </svg>
-            <span>{{ activeTitle.magnet_status === 'dead' ? '链接失效' : 'Play' }}</span>
-          </button>
-
-          <button
-            :disabled="!activePlayable"
-            class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full border border-black/[0.08] text-foreground text-[15px] font-medium transition-all hover:bg-black/[0.03] active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-            :class="copied ? '!border-[#30d158] !text-[#30d158]' : ''"
+            class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full bg-[#ff375f] text-white text-[15px] font-semibold transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+            :class="copied ? '!bg-[#30d158]' : ''"
             @click="copyMagnet"
           >
             <svg v-if="!copied" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -105,6 +95,17 @@
               <polyline points="20 6 9 17 4 12"/>
             </svg>
             <span>{{ copied ? 'Copied' : 'Copy' }}</span>
+          </button>
+
+          <button
+            :disabled="!activePlayable"
+            class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full border border-black/[0.08] text-foreground text-[15px] font-medium transition-all hover:bg-black/[0.03] disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.97] shrink-0"
+            @click="onPlay"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+            <span>{{ activeTitle.magnet_status === 'dead' ? '链接失效' : 'Play' }}</span>
           </button>
 
           <button
@@ -131,13 +132,32 @@
         <button
           v-for="(title, idx) in star.titles"
           :key="title.code"
-          class="relative shrink-0 w-[120px] sm:w-[150px] md:w-[180px] rounded-xl overflow-hidden bg-black transition-all duration-200 snap-start active:scale-[0.97]"
+          class="group/thumb relative shrink-0 w-[120px] sm:w-[150px] md:w-[180px] rounded-xl overflow-hidden bg-black transition-all duration-200 snap-start active:scale-[0.97]"
           :class="[
             activeIndex === idx ? 'ring-2 ring-[#ff375f] opacity-100' : 'opacity-70 hover:opacity-100',
             title.magnet_status === 'dead' ? 'grayscale opacity-50' : '',
           ]"
           @click="activeIndex = idx"
         >
+          <!-- One-click magnet copy: the real primary workflow (select+copy
+               required two clicks before) -->
+          <span
+            v-if="title.magnet"
+            role="button"
+            tabindex="-1"
+            class="absolute top-1.5 right-1.5 z-10 w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition hover:bg-[#ff375f]"
+            :class="{ '!opacity-100 !bg-[#30d158]': copiedCode === title.code }"
+            title="Copy magnet"
+            @click.stop="copyTitleMagnet(title)"
+          >
+            <svg v-if="copiedCode !== title.code" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </span>
           <img
             v-if="title.cover_url && !thumbErrors[title.code]"
             :src="title.cover_thumb_url || `/api/cover/${title.code}?thumb=1`"
@@ -250,6 +270,21 @@ function copyMagnet() {
     copied.value = true
     setTimeout(() => copied.value = false, 1500)
     track('copy_magnet', { code: activeTitle.value?.code, star_code: props.star.code })
+  }).catch(() => {
+    // ignore
+  })
+}
+
+const copiedCode = ref('')
+
+function copyTitleMagnet(title: Title) {
+  if (!title.magnet) return
+  navigator.clipboard.writeText(title.magnet).then(() => {
+    copiedCode.value = title.code
+    setTimeout(() => {
+      if (copiedCode.value === title.code) copiedCode.value = ''
+    }, 1500)
+    track('copy_magnet', { code: title.code, star_code: props.star.code, meta: { source: 'thumbnail' } })
   }).catch(() => {
     // ignore
   })
