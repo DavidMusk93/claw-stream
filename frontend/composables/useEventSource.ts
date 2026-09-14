@@ -10,7 +10,7 @@
  * Auto-reconnects on disconnect with exponential backoff.
  */
 
-import { logInfo, logError } from './useLogger'
+import { logInfo, logError, logWarn } from './useLogger'
 
 type EventHandler = (data: any) => void
 
@@ -19,6 +19,10 @@ let es: EventSource | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
 let manuallyClosed = false
+// logError reports to /api/log over HTTP — during a backend restart every
+// reconnect attempt would POST to the very backend that is down. Report the
+// first failure as an error, subsequent retries as local-only warnings.
+let errorReported = false
 const MAX_RECONNECT_DELAY = 30000
 
 function getListeners(event: string): Set<EventHandler> {
@@ -48,6 +52,7 @@ function connect() {
   es.onopen = () => {
     logInfo('sse', 'connected')
     reconnectDelay = 1000
+    errorReported = false
   }
 
   es.onmessage = (e) => {
@@ -66,7 +71,12 @@ function connect() {
 
   es.onerror = () => {
     if (manuallyClosed) return
-    logError('sse', `connection error, reconnecting in ${reconnectDelay}ms`)
+    if (errorReported) {
+      logWarn('sse', `still disconnected, reconnecting in ${reconnectDelay}ms`)
+    } else {
+      logError('sse', `connection error, reconnecting in ${reconnectDelay}ms`)
+      errorReported = true
+    }
     es?.close()
     es = null
     if (reconnectTimer) clearTimeout(reconnectTimer)
