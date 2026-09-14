@@ -19,7 +19,7 @@ import os
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,8 @@ log = get_logger("magnet-check")
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(SCRIPT_DIR, "cache", "torrent")
 CHECK_WORK_DIR = os.path.join(SCRIPT_DIR, "cache", "magnet-check")
+IMAGES_DIR = os.path.join(SCRIPT_DIR, "images", "titles")
+DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 _checker: MagnetChecker | None = None
 _check_lock = asyncio.Lock()
@@ -238,3 +240,59 @@ async def get_check_status() -> dict[str, Any]:
         if _check_state["started_at"]:
             elapsed = round(time.time() - _check_state["started_at"], 1)
         return {**_check_state, "elapsed": elapsed}
+
+
+@router.post("/purge-dead")
+async def purge_dead(request: Request) -> dict[str, Any]:
+    """Delete unplayable titles (dead-checked magnets or no magnet at all).
+
+    Liked titles (user_liked=1) are never deleted. Cached torrents of deleted
+    rows become orphans and are garbage-collected right away; cover image
+    directories are removed as well.
+    """
+    from backend.routers.stars import invalidate_stars_cache
+
+    async with _check_lock:
+        if _check_state["running"]:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "magnet check is running; purge after it finishes"},
+            )
+
+    unplayable = await db_write(db.list_unplayable_titles)
+    liked = [t for t in unplayable if t["user_liked"]]
+    deletable = [t for t in unplayable if not t["user_liked"]]
+
+    deleted = await db_write(db.delete_titles_by_ids, [t["id"] for t in deletable])
+
+    def _remove_covers() -> int:
+        import shutil
+        removed = 0
+        for t in deletable:
+            cover_dir = os.path.join(IMAGES_DIR, t["code"].lower())
+            if os.path.isdir(cover_dir):
+                shutil.rmtree(cover_dir, ignore_errors=True)
+                removed += 1
+        return removed
+
+    covers_removed = await asyncio.to_thread(_remove_covers)
+
+    orphans_removed = 0
+    engine = getattr(request.app.state, "engine", None)
+    if engine is not None:
+        try:
+            orphans_removed = await asyncio.to_thread(engine.gc_orphaned_torrents, DB_PATH)
+        except Exception:
+            log.exception("gc_orphaned_torrents failed after purge")
+
+    invalidate_stars_cache()
+    summary = {
+        "deleted": deleted,
+        "liked_kept": len(liked),
+        "liked_codes": [t["code"] for t in liked],
+        "covers_removed": covers_removed,
+        "orphans_removed": orphans_removed,
+    }
+    log.info(f"purged unplayable titles: {summary}")
+    await publish_event("magnets.purged", summary)
+    return summary

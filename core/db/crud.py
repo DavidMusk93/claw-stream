@@ -612,3 +612,37 @@ def swap_primary_magnet(title_id: int, new_magnet: str, new_hash: str, conn=None
     finally:
         if should_close:
             managed.close()
+
+
+@trace_db
+def list_unplayable_titles(conn=None) -> list[dict]:
+    """Titles that can never play: dead-checked magnets or no magnet at all."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            """
+            SELECT id, code, COALESCE(user_liked, 0) FROM titles
+            WHERE magnet_status = 'dead' OR magnet IS NULL OR magnet = ''
+            """
+        ).fetchall()
+        return [{"id": r[0], "code": r[1], "user_liked": r[2]} for r in rows]
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def delete_titles_by_ids(ids: list[int], conn=None) -> int:
+    """Delete title rows by id. Returns deleted count."""
+    if not ids:
+        return 0
+    managed, should_close = _managed_conn(conn)
+    try:
+        placeholders = ", ".join(["?"] * len(ids))
+        managed.execute(f"DELETE FROM titles WHERE id IN ({placeholders})", ids)
+        if should_close:
+            managed.commit()
+        return len(ids)
+    finally:
+        if should_close:
+            managed.close()

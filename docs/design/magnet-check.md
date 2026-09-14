@@ -76,3 +76,21 @@ scope 语义（`crud.load_titles_for_magnet_check`）：
 
 `/api/stars` 透出 `magnet_status`；`dead` 的 title 在 TitleCard/StarCard
 置灰 + 「链接失效」角标，禁止播放。
+
+## 清理（purge）
+
+`POST /api/magnets/purge-dead`（或 `scripts/check_magnets.py --purge`）删除
+不可播放的 title：`magnet_status='dead'` 或根本没有 magnet 的行。
+`user_liked=1` 的永删不掉（单独报告）。删除同时清理封面目录
+（`images/titles/{code}`）并对孤儿 cache 跑 `gc_orphaned_torrents`。
+与进行中的校验互斥（409）。
+
+sink 侧预防：`scrapers/v2/sinks.py:write_batch` 跳过无 magnet 的 item
+（`skipped_no_magnet` 计数），源站将来补上 magnet 时该 code 会作为新作品
+正常录入。
+
+## 首次全量结果（2026-09-14）
+
+2265 个有 magnet 的历史作品：alive 1885 / swapped 132（死主链自动换活候选）
+/ dead 379（全部候选无救）。另有 274 个从未有 magnet 的作品，purge 时一并
+删除。

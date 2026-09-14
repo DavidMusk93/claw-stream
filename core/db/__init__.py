@@ -25,6 +25,8 @@ from .crud import (
     update_magnet_check_ok,
     update_magnet_check_dead,
     swap_primary_magnet,
+    list_unplayable_titles,
+    delete_titles_by_ids,
 )
 from .write_queue import DuckDBWriteQueue, db_write, get_queue
 from .queries import (
@@ -59,6 +61,8 @@ __all__ = [
     "update_magnet_check_ok",
     "update_magnet_check_dead",
     "swap_primary_magnet",
+    "list_unplayable_titles",
+    "delete_titles_by_ids",
     "get_all_titles_json",
     "export_report_json",
     "get_stats",
