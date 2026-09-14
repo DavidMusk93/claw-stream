@@ -204,8 +204,13 @@ const activePlayable = computed(() =>
   !!activeTitle.value?.magnet && activeTitle.value?.magnet_status !== 'dead'
 )
 
-watch(() => props.star.titles, () => {
-  activeIndex.value = 0
+watch(() => props.star.titles, (titles, prev) => {
+  // Full-catalog refetches (sync.completed / star.ready / resync) replace
+  // the titles array; keep the user's picked thumbnail if it still exists
+  // instead of snapping every row back to #1 and reloading the hero image.
+  const current = prev?.[activeIndex.value]?.code
+  const kept = current ? titles?.findIndex(t => t.code === current) : -1
+  activeIndex.value = kept != null && kept >= 0 ? kept : 0
   activeImgError.value = false
 })
 
