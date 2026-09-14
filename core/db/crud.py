@@ -514,3 +514,101 @@ def insert_user_events(events: list[dict], conn=None) -> int:
     finally:
         if should_close:
             managed.close()
+
+
+# ── Magnet liveness check ───────────────────────────────────────────
+
+@trace_db
+def load_titles_for_magnet_check(scope: str = "changed", conn=None) -> list[dict]:
+    """Load titles whose primary magnet needs a liveness check.
+
+    scope:
+      - unchecked: never checked, or primary hash changed since the last check
+      - dead:      currently marked dead (retry)
+      - all:       every title with a magnet (full historical sweep)
+      - changed:   unchecked OR dead (post-sync default)
+    """
+    where = "magnet IS NOT NULL AND magnet != ''"
+    hash_changed = "magnet_hash IS DISTINCT FROM magnet_checked_hash"
+    if scope == "unchecked":
+        where += f" AND (magnet_checked_at IS NULL OR {hash_changed})"
+    elif scope == "dead":
+        where += " AND magnet_status = 'dead'"
+    elif scope == "changed":
+        where += f" AND (magnet_checked_at IS NULL OR {hash_changed} OR magnet_status = 'dead')"
+    elif scope != "all":
+        raise ValueError(f"unknown magnet check scope: {scope}")
+
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            f"SELECT id, code, magnet, magnet_hash, all_magnets FROM titles WHERE {where}"
+        ).fetchall()
+        return [
+            {"id": r[0], "code": r[1], "magnet": r[2], "magnet_hash": r[3], "all_magnets": r[4]}
+            for r in rows
+        ]
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def update_magnet_check_ok(title_id: int, checked_hash: str, conn=None) -> None:
+    """Mark a title's primary magnet alive. Never touches cover_b64."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            """
+            UPDATE titles SET magnet_status = 'ok', magnet_checked_at = now(),
+                magnet_checked_hash = ?, updated_at = now()
+            WHERE id = ?
+            """,
+            (checked_hash, title_id),
+        )
+        if should_close:
+            managed.commit()
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def update_magnet_check_dead(title_id: int, checked_hash: str | None, conn=None) -> None:
+    """Mark a title's primary magnet dead (no live candidate found)."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            """
+            UPDATE titles SET magnet_status = 'dead', magnet_checked_at = now(),
+                magnet_checked_hash = ?, updated_at = now()
+            WHERE id = ?
+            """,
+            (checked_hash, title_id),
+        )
+        if should_close:
+            managed.commit()
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def swap_primary_magnet(title_id: int, new_magnet: str, new_hash: str, conn=None) -> None:
+    """Promote a live candidate from all_magnets to the primary magnet."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            """
+            UPDATE titles SET magnet = ?, magnet_hash = ?,
+                magnet_status = 'ok', magnet_checked_at = now(),
+                magnet_checked_hash = ?, updated_at = now()
+            WHERE id = ?
+            """,
+            (new_magnet, new_hash, new_hash, title_id),
+        )
+        if should_close:
+            managed.commit()
+    finally:
+        if should_close:
+            managed.close()

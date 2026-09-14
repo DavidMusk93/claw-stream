@@ -21,6 +21,10 @@ from .crud import (
     finish_sync_run,
     list_sync_runs,
     insert_user_events,
+    load_titles_for_magnet_check,
+    update_magnet_check_ok,
+    update_magnet_check_dead,
+    swap_primary_magnet,
 )
 from .write_queue import DuckDBWriteQueue, db_write, get_queue
 from .queries import (
@@ -51,6 +55,10 @@ __all__ = [
     "finish_sync_run",
     "list_sync_runs",
     "insert_user_events",
+    "load_titles_for_magnet_check",
+    "update_magnet_check_ok",
+    "update_magnet_check_dead",
+    "swap_primary_magnet",
     "get_all_titles_json",
     "export_report_json",
     "get_stats",

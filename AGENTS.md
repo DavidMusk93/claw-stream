@@ -61,8 +61,10 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `auth_router` | `backend/routers/auth.py` | `/api/auth` (daily rotating password validation) |
 | `log_router` | `backend/routers/log.py` | `/api/log` log query endpoints |
 | `events_router` | `backend/routers/events.py` | `/api/events` SSE stream (heartbeat every 30s) |
+| `magnets_router` | `backend/routers/magnets.py` | `/api/magnets/check` — magnet liveness check (bg task, auto after sync) |
 | `test_router` | `backend/routers/test_helper.py` | Test helper endpoints (debug only, no auth) |
 | `EventBus` | `core/events.py` | In-process async pub/sub for SSE |
+| `MagnetChecker` | `backend/services/magnet_checker.py` | Dead-magnet detection via own lt.session (metadata-arrival test), auto-swap to live candidates |
 | `DuckDBWriteQueue` | `core/db/write_queue.py` | Serializes all DuckDB writes in-process |
 | Scraper pipeline | `scrapers/v2/` | `tasks/sync_titles.py` orchestrates sources → fetchers (httpx/Playwright) → extractors → sinks (DuckDB) |
 
@@ -104,7 +106,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 │                            #   sinks, cover_utils, filters.py, tasks/sync_titles.py
 ├── tests/                   # Regression tests (pytest + local BT fixture in tests/fixtures/)
 ├── scripts/                 # Ops scripts (run.sh, export_covers.py, fill_all_covers.py,
-│                            #   fix_bad_covers.py, fix_missing_covers.py,
+│                            #   fix_bad_covers.py, fix_missing_covers.py, check_magnets.py,
 │                            #   cleanup_multi_star.py, drop_hidden_titles.py)
 ├── deploy/                  # systemd unit files (star-archive-backend, star-archive-frontend)
 ├── config/
@@ -126,7 +128,7 @@ docs/
 ├── README.md                # Documentation index (domain-organized)
 ├── design/                  # architecture, cache-architecture, tiered-cache, bootstrap-first,
 │                            #   piece-tracker, deletion-design, diff-sync-design,
-│                            #   sse-push-architecture, ui-design
+│                            #   sse-push-architecture, ui-design, magnet-check
 ├── ops/                     # process-lifecycle, https-setup, tracing-logging
 ├── analysis/                # safari-code4, finished-deadlock-allzero-false-positive,
 │                            #   piece-tracker-optimization, timeout-debug
@@ -140,7 +142,7 @@ docs/
 Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER TABLE` backfills):
 
 - `stars` — Actor base info (`name` UNIQUE, `jp_name`, `handle`, `code`, `type`, `note`)
-- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `cover_w`, `cover_h` (pixels, for aspect-ratio placeholders), `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`; `UNIQUE(star_id, code)`
+- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `cover_w`, `cover_h` (pixels, for aspect-ratio placeholders), `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`, `magnet_status` (NULL/`ok`/`dead`), `magnet_checked_at`, `magnet_checked_hash` (magnet liveness check, see `docs/design/magnet-check.md`); `UNIQUE(star_id, code)`
 - `social_posts` — Social platform posts (`star_id`, `platform`, `content`, `post_url`, `posted_at`)
 - `sync_runs` — Sync run history (`trigger` manual/scheduled, `status`, `started_at`, `finished_at`, `total_new`, `total_updated`, `failed_count`, `error`)
 - `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSON`)
@@ -288,6 +290,7 @@ systemctl reload caddy
 | `tests/test_torrent_engine_arch.py` | TorrentEngine architecture tests (bootstrap-first, cache-warming) | No real download, uses mock |
 | `tests/test_disk_truth_source.py` | "Disk is the single source of truth" regression (mocked libtorrent handle) | No network |
 | `tests/test_diff_sync.py` | Diff-Sync incremental sync regression (sukebei RSS fetch, diff filtering, incremental covers, truncated-RSS/429 retry) | Mocked fetcher |
+| `tests/test_magnet_checker.py` | MagnetChecker liveness (local-seed alive, dead hash, swap/CRUD scopes) | Local BT seed + temp DuckDB |
 | `tests/conftest.py` | Shared fixtures (`local_seed`, `real_video_engine`) | Local BT seed |
 | `tests/local_bt_fixture.py` + `tests/fixtures/` | Local seeder fixture (`test_video.mp4` + `test_video.torrent`) | — |
 | `backend/regression/test_piece_tracker.py` | Internal piece tracker regression | — |
@@ -385,6 +388,9 @@ stat --format="logical=%s actual=%b*%B=%B" /root/claw-stream/cache/torrent/<hash
 # View cache metrics
 curl -s http://localhost:8765/api/cache/metrics | python3 -m json.tool
 
+# Trigger / inspect magnet liveness check (historical sweep)
+.venv/bin/python scripts/check_magnets.py --scope all
+
 # Health check
 curl -s http://localhost:8765/api/health
 
@@ -414,6 +420,7 @@ python3 -m core.db stats
 | UI Design | `docs/design/ui-design.md` | Frontend design spec |
 | Deletion Design | `docs/design/deletion-design.md` | Safe actor deletion flow |
 | Diff-Sync | `docs/design/diff-sync-design.md` | Incremental sync algorithm design |
+| Magnet Check | `docs/design/magnet-check.md` | Magnet liveness check, auto-swap, dead marking |
 | Project Refactor | `docs/skill/project-refactor.md` | Layout migration, terminology, english-ification log |
 
 ---

@@ -57,6 +57,9 @@ def init_schema(conn=None):
                 all_magnets JSON,
                 cover_w INTEGER,
                 cover_h INTEGER,
+                magnet_status TEXT,
+                magnet_checked_at TIMESTAMP,
+                magnet_checked_hash TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(star_id, code)
@@ -74,6 +77,9 @@ def init_schema(conn=None):
             ("user_liked", "INTEGER DEFAULT 0"),
             ("cover_w", "INTEGER"),
             ("cover_h", "INTEGER"),
+            ("magnet_status", "TEXT"),
+            ("magnet_checked_at", "TIMESTAMP"),
+            ("magnet_checked_hash", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE titles ADD COLUMN {col[0]} {col[1]}")

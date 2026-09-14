@@ -9,6 +9,7 @@ from .sync import router as sync_router
 from .track import router as track_router
 from .test_helper import router as test_router
 from .events import router as events_router
+from .magnets import router as magnets_router
 
 __all__ = [
     "stream_router",
@@ -21,4 +22,5 @@ __all__ = [
     "track_router",
     "test_router",
     "events_router",
+    "magnets_router",
 ]
