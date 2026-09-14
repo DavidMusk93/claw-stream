@@ -37,7 +37,7 @@
           :alt="activeTitle.code"
           class="w-full h-auto block bg-[#F2F2F7]"
           :style="{ aspectRatio: coverAR(activeTitle) }"
-          loading="eager"
+          loading="lazy"
           decoding="async"
           @error="activeImgError = true"
         />
