@@ -42,6 +42,31 @@ function scrollToStar(code: string) {
 }
 
 let observer: IntersectionObserver | null = null
+// Codes whose section element is currently observed. Stars load client-side
+// after mount and the roster churns (adds/deletes), so observations must be
+// diffed on every refresh: observe new sections, unobserve removed ones
+// (a deleted star's detached element would otherwise stay observed).
+const observed = new Set<string>()
+
+function syncObserved() {
+  if (!observer) return
+  const current = new Set(props.stars.map(s => s.code))
+  for (const code of observed) {
+    if (!current.has(code)) {
+      const el = document.getElementById(`star-${code.toLowerCase()}`)
+      if (el) observer.unobserve(el)
+      observed.delete(code)
+    }
+  }
+  for (const star of props.stars) {
+    if (observed.has(star.code)) continue
+    const el = document.getElementById(`star-${star.code.toLowerCase()}`)
+    if (el) {
+      observer.observe(el)
+      observed.add(star.code)
+    }
+  }
+}
 
 onMounted(() => {
   observer = new IntersectionObserver(
@@ -55,24 +80,15 @@ onMounted(() => {
     },
     { rootMargin: '-30% 0px -60% 0px' }
   )
-
-  props.stars.forEach((star) => {
-    const el = document.getElementById(`star-${star.code.toLowerCase()}`)
-    if (el) observer?.observe(el)
-  })
+  syncObserved()
 })
 
 onUnmounted(() => {
   if (observer) observer.disconnect()
+  observed.clear()
 })
 
 watch(() => props.stars, () => {
-  nextTick(() => {
-    if (!observer) return
-    props.stars.forEach((star) => {
-      const el = document.getElementById(`star-${star.code.toLowerCase()}`)
-      if (el) observer?.observe(el)
-    })
-  })
+  nextTick(syncObserved)
 })
 </script>
