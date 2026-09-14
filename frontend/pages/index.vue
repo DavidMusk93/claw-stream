@@ -168,6 +168,7 @@
             :key="star.code"
             v-observe
             :data-code="star.code"
+            class="star-section"
           >
             <StarCard
               v-if="visibleCodes.has(star.code)"
@@ -551,3 +552,18 @@ onUnmounted(() => {
 })
 
 </script>
+
+<style scoped>
+/*
+ * Virtual rendering mounts sections as they approach the viewport but never
+ * unmounts them — after a full-catalog scroll thousands of <img> nodes stay
+ * live. content-visibility lets the browser skip layout/paint for off-screen
+ * sections; contain-intrinsic-size reserves an approximate box so the
+ * scrollbar doesn't jump. The real height is remembered after first render
+ * ("auto" prefix), so this estimate only applies to never-rendered sections.
+ */
+.star-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
+}
+</style>
