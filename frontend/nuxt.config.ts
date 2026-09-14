@@ -91,6 +91,13 @@ export default defineNuxtConfig({
           },
         },
         {
+          // SSE stream must never enter a cache handler: Workbox clones every
+          // matched response for cache.put, and a never-ending event stream
+          // makes that clone buffer grow for as long as the page is open.
+          urlPattern: /^\/api\/events/,
+          handler: 'NetworkOnly',
+        },
+        {
           urlPattern: /^\/api\/.*/,
           handler: 'NetworkFirst',
           options: {
