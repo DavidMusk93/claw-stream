@@ -1,11 +1,14 @@
 <template>
   <div
     class="group relative shrink-0 w-[140px] sm:w-[160px] md:w-[180px] lg:w-[200px] cursor-pointer select-none"
-    :class="{ 'pointer-events-none': !title.magnet }"
-    @click="title.magnet && $emit('play', title.magnet)"
+    :class="{ 'pointer-events-none': !playable }"
+    @click="playable && $emit('play', title.magnet!)"
   >
     <!-- Poster -->
-    <div class="relative rounded-lg overflow-hidden bg-[#1a1a1a] shadow-md transition-all duration-300 group-hover:shadow-2xl group-hover:scale-105 group-hover:z-10">
+    <div
+      class="relative rounded-lg overflow-hidden bg-[#1a1a1a] shadow-md transition-all duration-300 group-hover:shadow-2xl group-hover:scale-105 group-hover:z-10"
+      :class="{ 'opacity-40 grayscale': isDead }"
+    >
       <img
         v-if="title.cover_url && !imgError"
         :src="title.cover_thumb_url || `/api/cover/${title.code}?thumb=1`"
@@ -38,10 +41,18 @@
 
       <!-- HD badge -->
       <div
-        v-if="title.resolution?.toLowerCase().includes('1080') || title.resolution?.toLowerCase().includes('4k')"
+        v-if="!isDead && (title.resolution?.toLowerCase().includes('1080') || title.resolution?.toLowerCase().includes('4k'))"
         class="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded bg-[#e50914] text-white text-[9px] font-bold"
       >
         HD
+      </div>
+
+      <!-- Dead magnet badge -->
+      <div
+        v-if="isDead"
+        class="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded bg-black/80 text-white/80 text-[9px] font-bold"
+      >
+        链接失效
       </div>
 
       <!-- Netflix-style hover overlay -->
@@ -50,9 +61,9 @@
       >
         <div class="flex items-center gap-2 mb-2">
           <button
-            :disabled="!title.magnet"
+            :disabled="!playable"
             class="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center transition hover:bg-white/90 active:scale-95 disabled:opacity-30"
-            @click.stop="title.magnet && $emit('play', title.magnet)"
+            @click.stop="playable && $emit('play', title.magnet!)"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z"/>
@@ -119,6 +130,8 @@ const coverAR = computed(() =>
     : '3 / 2'
 )
 const localLiked = computed(() => props.title.user_liked ?? false)
+const isDead = computed(() => props.title.magnet_status === 'dead')
+const playable = computed(() => !!props.title.magnet && !isDead.value)
 const liking = ref(false)
 
 async function toggleLike() {

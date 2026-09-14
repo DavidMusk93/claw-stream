@@ -51,6 +51,7 @@ export interface Title {
   cover_w?: number
   cover_h?: number
   magnet?: string
+  magnet_status?: string
   number?: number
   user_liked?: boolean
 }

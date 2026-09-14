@@ -105,6 +105,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 cover_h := r.cover_h,
                 charming_intro := IFNULL(r.charming_intro, ''),
                 magnet := IFNULL(r.magnet, ''),
+                magnet_status := IFNULL(r.magnet_status, ''),
                 user_liked := COALESCE(r.user_liked, 0)
             ) ORDER BY r.release_date_sort DESC NULLS LAST)
             FILTER (WHERE r.code IS NOT NULL), []) AS titles

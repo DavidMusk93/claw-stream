@@ -56,10 +56,16 @@
         <div class="flex items-center gap-2 mb-3">
           <span class="px-2 py-0.5 rounded bg-black text-white text-[11px] font-bold">#{{ activeTitle.number || activeIndex + 1 }}</span>
           <span
-            v-if="activeTitle.resolution?.toLowerCase().includes('1080') || activeTitle.resolution?.toLowerCase().includes('4k')"
+            v-if="activeTitle.magnet_status !== 'dead' && (activeTitle.resolution?.toLowerCase().includes('1080') || activeTitle.resolution?.toLowerCase().includes('4k'))"
             class="px-1.5 py-0.5 rounded bg-black/[0.06] text-foreground text-[11px] font-bold"
           >
             HD
+          </span>
+          <span
+            v-if="activeTitle.magnet_status === 'dead'"
+            class="px-1.5 py-0.5 rounded bg-black/[0.08] text-foreground-muted text-[11px] font-bold"
+          >
+            链接失效
           </span>
         </div>
         <h3 class="text-[28px] sm:text-[36px] font-bold text-foreground leading-[1.1] tracking-tight">
@@ -75,18 +81,18 @@
         <!-- Action buttons -->
         <div class="flex items-center gap-2.5 sm:gap-3 mt-7 shrink-0">
           <button
-            :disabled="!activeTitle.magnet"
+            :disabled="!activePlayable"
             class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full bg-[#ff375f] text-white text-[15px] font-semibold transition-all hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.97] shrink-0"
             @click="onPlay"
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z"/>
             </svg>
-            <span>Play</span>
+            <span>{{ activeTitle.magnet_status === 'dead' ? '链接失效' : 'Play' }}</span>
           </button>
 
           <button
-            :disabled="!activeTitle.magnet"
+            :disabled="!activePlayable"
             class="flex items-center gap-2 px-5 sm:px-6 py-2.5 rounded-full border border-black/[0.08] text-foreground text-[15px] font-medium transition-all hover:bg-black/[0.03] active:scale-[0.97] disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
             :class="copied ? '!border-[#30d158] !text-[#30d158]' : ''"
             @click="copyMagnet"
@@ -126,7 +132,10 @@
           v-for="(title, idx) in star.titles"
           :key="title.code"
           class="relative shrink-0 w-[120px] sm:w-[150px] md:w-[180px] rounded-xl overflow-hidden bg-black transition-all duration-200 snap-start active:scale-[0.97]"
-          :class="activeIndex === idx ? 'ring-2 ring-[#ff375f] opacity-100' : 'opacity-70 hover:opacity-100'"
+          :class="[
+            activeIndex === idx ? 'ring-2 ring-[#ff375f] opacity-100' : 'opacity-70 hover:opacity-100',
+            title.magnet_status === 'dead' ? 'grayscale opacity-50' : '',
+          ]"
           @click="activeIndex = idx"
         >
           <img
@@ -191,6 +200,9 @@ function coverAR(t: Title): string {
 const copied = ref(false)
 const liking = ref(false)
 const activeLiked = computed(() => activeTitle.value?.user_liked ?? false)
+const activePlayable = computed(() =>
+  !!activeTitle.value?.magnet && activeTitle.value?.magnet_status !== 'dead'
+)
 
 watch(() => props.star.titles, () => {
   activeIndex.value = 0
@@ -202,7 +214,7 @@ watch(activeIndex, () => {
 })
 
 function onPlay() {
-  if (!activeTitle.value?.magnet) return
+  if (!activePlayable.value) return
   track('play', { code: activeTitle.value.code, star_code: props.star.code })
   addLog({ kind: 'action', title: `Play ${activeTitle.value.code}`, detail: props.star.name, state: 'info' })
   emit('play', activeTitle.value.magnet)
