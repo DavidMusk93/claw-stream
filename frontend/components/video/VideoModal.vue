@@ -498,9 +498,7 @@ const statusText = computed(() => {
   return 'Ready | Waiting for data'
 })
 
-watch([() => props.hash, isOpen], async ([hash, open]) => {
-  if (!hash || !open) return
-  if (videoRef.value?.src && videoRef.value.src.includes(hash)) return
+async function openPlayback(hash: string) {
   errorMsg.value = ''
   canplayFired.value = false
   buffering.value = true
@@ -527,6 +525,12 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
   }, 200)
 
   startPolling(hash)
+}
+
+watch([() => props.hash, isOpen], async ([hash, open]) => {
+  if (!hash || !open) return
+  if (videoRef.value?.src && videoRef.value.src.includes(hash)) return
+  await openPlayback(hash)
 })
 
 watch(isOpen, (open) => {
@@ -561,13 +565,9 @@ function close() {
 }
 
 function doRetry() {
-  errorMsg.value = ''
-  retryCount.value = 0
-  const v = videoRef.value
-  if (v) {
-    v.src = streamUrl.value
-    v.load()
-  }
+  // After a timeout the <video> element is unmounted (v-if on errorMsg), so
+  // re-run the full open sequence instead of poking a missing videoRef.
+  if (props.hash) openPlayback(props.hash)
 }
 
 function onLoadedMetadata() {
