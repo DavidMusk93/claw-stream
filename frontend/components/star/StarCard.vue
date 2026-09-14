@@ -197,7 +197,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'play', magnet: string): void
+  (e: 'play', magnet: string, code: string, starCode: string): void
   (e: 'deleted', code: string): void
 }>()
 
@@ -242,7 +242,7 @@ function onPlay() {
   if (!activePlayable.value) return
   track('play', { code: activeTitle.value.code, star_code: props.star.code })
   addLog({ kind: 'action', title: `Play ${activeTitle.value.code}`, detail: props.star.name, state: 'info' })
-  emit('play', activeTitle.value.magnet)
+  emit('play', activeTitle.value.magnet!, activeTitle.value.code, props.star.code)
 }
 
 async function toggleLike() {
@@ -269,7 +269,7 @@ function copyMagnet() {
   navigator.clipboard.writeText(magnet).then(() => {
     copied.value = true
     setTimeout(() => copied.value = false, 1500)
-    track('copy_magnet', { code: activeTitle.value?.code, star_code: props.star.code })
+    track('copy_magnet', { code: activeTitle.value?.code, star_code: props.star.code, meta: { source: 'hero' } })
   }).catch(() => {
     // ignore
   })

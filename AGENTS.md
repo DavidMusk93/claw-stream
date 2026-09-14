@@ -57,7 +57,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `stars_router` | `backend/routers/stars.py` | `/api/stars` list/add/delete/like |
 | `cache_router` | `backend/routers/cache.py` | `/api/cache`, `/api/cache/metrics`, delete, gc-orphans |
 | `sync_router` | `backend/routers/sync.py` | `/api/stars/sync` — runs `scrapers.v2.tasks.sync_titles` in-process (async, no subprocess); 6h scheduler started in lifespan, runs recorded in `sync_runs` |
-| `track_router` | `backend/routers/track.py` | `/api/track` — batched user behavior events (埋点) → `user_events` table |
+| `track_router` | `backend/routers/track.py` | `/api/track` — batched user behavior events (埋点) → `user_events` table. Events: `star_view`, `play`, `play_ready`, `play_timeout`, `play_error`, `play_watch`, `copy_magnet` (meta.source: hero/thumbnail), `like`/`unlike`, `add_star`, `delete_star` |
 | `auth_router` | `backend/routers/auth.py` | `/api/auth` (daily rotating password validation) |
 | `log_router` | `backend/routers/log.py` | `/api/log` log query endpoints |
 | `events_router` | `backend/routers/events.py` | `/api/events` SSE stream (heartbeat every 30s) |

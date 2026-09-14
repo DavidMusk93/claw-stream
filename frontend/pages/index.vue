@@ -202,7 +202,7 @@
       </div>
     </main>
 
-    <VideoModal v-model:open="modalOpen" :hash="activeHash" />
+    <VideoModal v-model:open="modalOpen" :hash="activeHash" :code="activeCode" :star-code="activeStarCode" />
     <CachePanel :stars="displayStars" />
     <EventPanel />
 
@@ -248,6 +248,8 @@ const visibleCodes = ref<Set<string>>(new Set())
 
 const modalOpen = ref(false)
 const activeHash = ref('')
+const activeCode = ref('')
+const activeStarCode = ref('')
 
 const newStarUrl = ref('')
 const addingStar = ref(false)
@@ -327,10 +329,12 @@ async function addStar() {
   }
 }
 
-function openVideo(magnet: string) {
+function openVideo(magnet: string, code = '', starCode = '') {
   const match = magnet.match(/xt=urn:btih:([a-f0-9]{40})/i)
   if (match) {
     activeHash.value = match[1].toLowerCase()
+    activeCode.value = code
+    activeStarCode.value = starCode
     modalOpen.value = true
   }
 }

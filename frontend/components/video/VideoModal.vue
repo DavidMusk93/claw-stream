@@ -233,7 +233,9 @@ import { nextTick } from 'vue'
 import { logInfo, logError } from '~/composables/useLogger'
 
 const isOpen = defineModel<boolean>('open', { default: false })
-const props = defineProps<{ hash?: string }>()
+const props = defineProps<{ hash?: string; code?: string; starCode?: string }>()
+
+const { track } = useTrack()
 
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
@@ -505,12 +507,27 @@ async function openPlayback(hash: string) {
   retryCount.value = 0
   logInfo('player', `open video hash=${hash.slice(0, 12)}`)
 
+  const openStart = Date.now()
   const ready = await waitForHeadReady(hash)
   if (!ready) {
     errorMsg.value = error.value || 'Load failed'
     logError('player', `load failed hash=${hash.slice(0, 12)}: ${errorMsg.value}`)
+    track('play_timeout', {
+      code: props.code, star_code: props.starCode,
+      meta: {
+        hash, error: errorMsg.value,
+        peers: status.value?.peers ?? 0,
+        state: status.value?.state ?? '',
+        waited_sec: Math.round((Date.now() - openStart) / 1000),
+      },
+    })
     return
   }
+
+  track('play_ready', {
+    code: props.code, star_code: props.starCode,
+    meta: { hash, elapsed_ms: Date.now() - openStart },
+  })
 
   await nextTick()
   safeSetTimeout(() => {
@@ -535,6 +552,18 @@ watch([() => props.hash, isOpen], async ([hash, open]) => {
 
 watch(isOpen, (open) => {
   if (!open) {
+    // Engagement metric: how much of the video was actually watched.
+    if (duration.value > 0 && currentTime.value > 0) {
+      track('play_watch', {
+        code: props.code, star_code: props.starCode,
+        meta: {
+          hash: props.hash,
+          watched_sec: Math.round(currentTime.value),
+          duration_sec: Math.round(duration.value),
+          percent: Math.min(100, Math.round((currentTime.value / duration.value) * 100)),
+        },
+      })
+    }
     saveProgress()
     stopPolling()
     clearAllTimers()
@@ -741,6 +770,10 @@ function onError() {
 
   if (code === 4) {
     errorMsg.value = 'Playback failed, unsupported format or corrupted data'
+    track('play_error', {
+      code: props.code, star_code: props.starCode,
+      meta: { hash: props.hash, video_error: code, message, retries: retryCount.value },
+    })
     stopPolling()
     return
   }
@@ -760,6 +793,10 @@ function onError() {
   }
 
   errorMsg.value = 'Playback failed, file may be incomplete'
+  track('play_error', {
+    code: props.code, star_code: props.starCode,
+    meta: { hash: props.hash, video_error: code, message, retries: retryCount.value },
+  })
   stopPolling()
 }
 
