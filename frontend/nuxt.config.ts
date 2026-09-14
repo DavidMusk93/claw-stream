@@ -91,7 +91,8 @@ export default defineNuxtConfig({
           handler: 'StaleWhileRevalidate',
           options: {
             cacheName: 'static-api-cache',
-            expiration: { maxEntries: 5, maxAgeSeconds: 2592000 },
+            // 30 days let the status dot show a month-old "healthy".
+            expiration: { maxEntries: 5, maxAgeSeconds: 60 },
           },
         },
         {
