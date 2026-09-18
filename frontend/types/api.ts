@@ -92,6 +92,7 @@ export interface SearchResultItem {
   size?: string
   seeds?: number
   in_library: boolean
+  source?: 'ijav' | 'sukebei'
   stars: SearchResultStar[]
 }
 

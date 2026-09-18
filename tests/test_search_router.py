@@ -123,6 +123,72 @@ def test_search_code_query_keeps_exact_match_only(client):
     assert [it["code"] for it in res.json()["items"]] == ["SOLO-002"]
 
 
+def test_search_exact_code_skips_collection_filters(client):
+    """An explicit code lookup is user intent: multi-star works are shown."""
+    res = client.get("/api/search", params={"q": "ORGY-003"})
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert [it["code"] for it in items] == ["ORGY-003"]
+    assert items[0]["source"] == "ijav"
+    assert len(items[0]["stars"]) == 2
+
+
+_RSS = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<rss version="2.0" xmlns:nyaa="https://sukebei.nyaa.si/xmlns/nyaa"><channel>'
+    "<item>"
+    f"<title>+++ [FHD] MFYD-182 Some Work</title>"
+    f"<nyaa:infoHash>{'b' * 40}</nyaa:infoHash>"
+    "<nyaa:seeders>12</nyaa:seeders><nyaa:leechers>3</nyaa:leechers>"
+    "<nyaa:downloads>100</nyaa:downloads><nyaa:size>5.2 GiB</nyaa:size>"
+    "<pubDate>Wed, 17 Sep 2026 12:00:00 +0000</pubDate>"
+    "</item>"
+    "<item>"
+    f"<title>UNRELATED-999 Other Work</title>"
+    f"<nyaa:infoHash>{'c' * 40}</nyaa:infoHash>"
+    "<nyaa:seeders>1</nyaa:seeders><nyaa:leechers>0</nyaa:leechers>"
+    "<nyaa:downloads>5</nyaa:downloads><nyaa:size>1.0 GiB</nyaa:size>"
+    "<pubDate>Wed, 17 Sep 2026 11:00:00 +0000</pubDate>"
+    "</item>"
+    "</channel></rss>"
+)
+
+
+def test_search_falls_back_to_sukebei_when_ijav_lacks_code(client, monkeypatch):
+    """ijavtorrent's catalog is sparse since 2026-08: exact code lookups fall
+    back to the sukebei RSS source (no cover / actress links)."""
+    async def _fetch(url: str) -> str:
+        if "page=rss" in url:
+            return _RSS
+        return _SEARCH_PAGE
+
+    monkeypatch.setattr("scrapers.v2.fetchers.HttpxFetcher.fetch", AsyncMock(side_effect=_fetch))
+
+    res = client.get("/api/search", params={"q": "MFYD-182"})
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert [it["code"] for it in items] == ["MFYD-182"]  # unrelated RSS hits dropped
+    assert items[0]["source"] == "sukebei"
+    assert items[0]["stars"] == []
+    assert items[0]["cover_url"] is None
+    assert items[0]["in_library"] is False
+    assert items[0]["seeds"] == 12
+
+
+def test_search_sukebei_failure_degrades_to_empty(client, monkeypatch):
+    """ijav up but no match + sukebei down: empty result, not a 502."""
+    async def _fetch(url: str) -> str:
+        if "page=rss" in url:
+            raise TimeoutError("sukebei down")
+        return _SEARCH_PAGE
+
+    monkeypatch.setattr("scrapers.v2.fetchers.HttpxFetcher.fetch", AsyncMock(side_effect=_fetch))
+
+    res = client.get("/api/search", params={"q": "MFYD-182"})
+    assert res.status_code == 200
+    assert res.json()["count"] == 0
+
+
 def test_search_rejects_short_query(client):
     assert client.get("/api/search", params={"q": "x"}).status_code == 422
 

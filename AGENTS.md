@@ -62,7 +62,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `log_router` | `backend/routers/log.py` | `/api/log` log query endpoints |
 | `events_router` | `backend/routers/events.py` | `/api/events` SSE stream (heartbeat every 30s) |
 | `magnets_router` | `backend/routers/magnets.py` | `/api/magnets/check` — magnet liveness check (bg task, auto after sync) |
-| `search_router` | `backend/routers/search.py` | `/api/search?q=` — ijavtorrent catalog search (60s TTL cache, sync-consistent VR/multi-star/no-magnet filtering, exact code match for code-like queries, `in_library` + per-actress `followed` enrichment). Powers the frontend `/search` page; follow button reuses `POST /api/stars/add` |
+| `search_router` | `backend/routers/search.py` | `/api/search?q=` — catalog search (60s TTL cache). Keyword queries: ijavtorrent + sync-consistent VR/multi-star/no-magnet filtering. Code-like queries: exact match, filters skipped (explicit intent), sukebei RSS fallback when ijav lacks the code (`source='sukebei'`, no cover/actress). `in_library` + per-actress `followed` enrichment. Powers the frontend `/search` page; follow button reuses `POST /api/stars/add` |
 | `test_router` | `backend/routers/test_helper.py` | Test helper endpoints (debug only, no auth) |
 | `EventBus` | `core/events.py` | In-process async pub/sub for SSE |
 | `MagnetChecker` | `backend/services/magnet_checker.py` | Dead-magnet detection via own lt.session (metadata-arrival test), auto-swap to live candidates |

@@ -104,6 +104,7 @@
                   <span class="text-[15px] font-semibold text-foreground tracking-tight">{{ item.code }}</span>
                   <span v-if="item.resolution" class="px-2 py-0.5 rounded-full bg-[#F2F2F7] text-[11px] font-medium text-foreground-muted">{{ item.resolution }}</span>
                   <span v-if="item.size" class="px-2 py-0.5 rounded-full bg-[#F2F2F7] text-[11px] font-medium text-foreground-muted">{{ item.size }}</span>
+                  <span v-if="item.source === 'sukebei'" class="px-2 py-0.5 rounded-full bg-[#FF9F0A]/10 text-[#FF9F0A] text-[11px] font-medium">sukebei</span>
                 </div>
                 <p v-if="item.title" class="mt-1.5 text-[13px] text-foreground-muted leading-snug line-clamp-2">{{ item.title }}</p>
                 <p class="mt-1 text-[12px] text-foreground-muted/70">
