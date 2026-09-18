@@ -857,6 +857,28 @@ def test_ijav_extractor_drops_invalid_magnets():
     assert items[0].magnets == []
 
 
+def test_ijav_extractor_extracts_star_links():
+    """Cards expose actress name + absolute page URL; star_count stays len(links)."""
+    from scrapers.v2.extractors import IJavTorrentExtractor
+
+    items = IJavTorrentExtractor().extract(_MULTI_STAR_PAGE)
+    by_code = {it.code: it for it in items}
+
+    solo = by_code["SOLO-001"]
+    assert solo.star_count == 1
+    assert [(s.name, s.url) for s in solo.star_links] == [
+        ("Test Star", "https://ijavtorrent.com/actress/test-star-1")
+    ]
+
+    orgy = by_code["ORGY-002"]
+    assert orgy.star_count == 3
+    assert [s.url for s in orgy.star_links] == [
+        "https://ijavtorrent.com/actress/test-star-1",
+        "https://ijavtorrent.com/actress/other-2",
+        "https://ijavtorrent.com/actress/third-3",
+    ]
+
+
 # ── Sink: cover_b64 preservation on conflict ─────────────────────────
 # The titles table stores large base64 cover blobs inline. The batch UPSERT
 # must not rewrite cover_b64 on conflict (multi-GB row-group churn → OOM on

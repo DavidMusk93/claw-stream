@@ -19,6 +19,13 @@ class MagnetCandidate(BaseModel):
     is_hhd800: bool = False  # Whether it is an hhd800.com@ HD source
 
 
+class StarLink(BaseModel):
+    """Actress link found on an ijavtorrent work card"""
+
+    name: str
+    url: str  # Absolute URL, e.g. https://ijavtorrent.com/actress/xxx-123
+
+
 class VideoItem(BaseModel):
     """ijavtorrent work card"""
 
@@ -29,6 +36,7 @@ class VideoItem(BaseModel):
     likes: int | None = None
     cover_url: str | None = None
     star_count: int = 0
+    star_links: list[StarLink] = []  # Actress names + page URLs (ijavtorrent cards only)
     magnets: list[MagnetCandidate] = []
     all_magnet_urls: list[str] = []
 

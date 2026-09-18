@@ -16,9 +16,11 @@ from typing import Protocol
 from selectolax.parser import HTMLParser
 
 from core import get_logger
-from scrapers.v2.schemas import VideoItem, MagnetCandidate
+from scrapers.v2.schemas import VideoItem, MagnetCandidate, StarLink
 
 log = get_logger("extractors")
+
+IJAV_BASE_URL = "https://ijavtorrent.com"
 
 
 class Extractor(Protocol):
@@ -96,7 +98,8 @@ class IJavTorrentExtractor:
             views = self._extract_views(node)
             downloads = self._extract_downloads(node)
             cover_url = self._extract_cover(node)
-            star_count = self._extract_star_count(node)
+            star_links = self._extract_star_links(node)
+            star_count = len(star_links)
             magnets, sizes, seeds, leeches, resolutions, hhd800_flags = self._extract_magnets(node)
 
             candidates = []
@@ -129,6 +132,7 @@ class IJavTorrentExtractor:
                     likes=downloads,
                     cover_url=cover_url,
                     star_count=star_count,
+                    star_links=star_links,
                     magnets=candidates,
                     all_magnet_urls=all_urls,
                 )
@@ -198,14 +202,18 @@ class IJavTorrentExtractor:
         return None
 
     @staticmethod
-    def _extract_star_count(node) -> int:
-        # Count /actress/ links within the mb-1 region
+    def _extract_star_links(node) -> list[StarLink]:
+        # Actress links live in the mb-1 region (up to the magnet table)
         html_snippet = node.html
-        # Find mb-1 region (up to table)
         m = re.search(r'<div class="mb-1">(.*?)</table', html_snippet, re.DOTALL)
-        if m:
-            return len(re.findall(r'href="/actress/[^"]+"', m.group(1)))
-        return 0
+        if not m:
+            return []
+        links: list[StarLink] = []
+        for a in re.finditer(r'href="(/actress/[^"]+)"[^>]*>(.*?)</a>', m.group(1), re.DOTALL):
+            url = IJAV_BASE_URL + a.group(1)
+            name = re.sub(r"<[^>]+>", "", a.group(2)).strip()
+            links.append(StarLink(name=name, url=url))
+        return links
 
     @staticmethod
     def _extract_magnets(node) -> tuple[list[str], list[str], list[str], list[str], list[str], list[bool]]:
