@@ -13,7 +13,18 @@
             :class="health?.status === 'ok' ? 'bg-[#30d158]' : 'bg-[#ff453a]'"
           />
         </div>
-        <button
+        <div class="flex items-center gap-2">
+          <NuxtLink
+            to="/search"
+            class="flex items-center gap-2 h-10 px-4 rounded-full text-[14px] font-medium bg-black/[0.04] text-foreground hover:bg-black/[0.08] transition-all active:scale-[0.97]"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span class="hidden sm:inline">Search</span>
+          </NuxtLink>
+          <button
           class="flex items-center gap-2 h-10 px-4 rounded-full text-[14px] font-medium transition-all duration-200 active:scale-[0.97] disabled:cursor-default"
           :class="syncRunning
             ? 'bg-black/[0.04] text-foreground-muted'
@@ -38,6 +49,7 @@
           <span v-if="syncRunning" class="tabular-nums">{{ syncProgressText || 'Syncing…' }}</span>
           <span v-else class="hidden sm:inline">Refresh</span>
         </button>
+        </div>
       </div>
     </header>
 

@@ -74,3 +74,29 @@ export interface Star {
   titles: Title[]
   posts: Post[]
 }
+
+export interface SearchResultStar {
+  name: string
+  url: string
+  followed: boolean
+}
+
+export interface SearchResultItem {
+  code: string
+  title?: string
+  release_date?: string
+  views?: number
+  likes?: number
+  cover_url?: string
+  resolution?: string
+  size?: string
+  seeds?: number
+  in_library: boolean
+  stars: SearchResultStar[]
+}
+
+export interface SearchResponse {
+  query: string
+  count: number
+  items: SearchResultItem[]
+}
