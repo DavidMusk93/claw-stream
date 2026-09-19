@@ -31,7 +31,7 @@ def _is_primary_title(work_code: str) -> bool:
                     SELECT star_id, code,
                         ROW_NUMBER() OVER (
                             PARTITION BY star_id
-                            ORDER BY release_date_sort DESC NULLS LAST
+                            ORDER BY release_date_sort DESC NULLS LAST, code DESC
                         ) AS rn
                     FROM titles
                 ) t ON t.star_id = s.id AND t.rn = 1

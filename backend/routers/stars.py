@@ -104,7 +104,7 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 'magnet', COALESCE(r.magnet, ''),
                 'magnet_status', COALESCE(r.magnet_status, ''),
                 'user_liked', COALESCE(r.user_liked, 0)
-            ) ORDER BY r.release_date_sort DESC NULLS LAST)
+            ) ORDER BY r.release_date_sort DESC NULLS LAST, r.code DESC)
             FILTER (WHERE r.code IS NOT NULL), '[]'::jsonb) AS titles
         FROM stars s
         LEFT JOIN titles r ON r.star_id = s.id

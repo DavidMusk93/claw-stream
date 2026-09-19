@@ -1,11 +1,13 @@
 [Unit]
 Description=claw-stream Backend (FastAPI + BitTorrent)
-After=network.target
+After=network.target postgresql.service
+Requires=postgresql.service
 
 [Service]
 Type=simple
 WorkingDirectory=/root/claw-stream
 Environment=PYTHONPATH=/root/claw-stream
+EnvironmentFile=/etc/star-archive.env
 ExecStart=/root/claw-stream/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --log-level info
 Restart=on-failure
 RestartSec=5s
