@@ -176,7 +176,7 @@ async def _run_check_bg(scope: str) -> None:
 
         def on_result(item: dict[str, Any], outcome: dict[str, Any]) -> None:
             future = asyncio.run_coroutine_threadsafe(_persist_outcome(item, outcome), loop)
-            pending.append(asyncio.wrap_future(future))
+            pending.append(asyncio.wrap_future(future, loop=loop))
 
         if network_items:
             await asyncio.to_thread(
