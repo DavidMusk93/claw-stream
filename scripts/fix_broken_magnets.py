@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scripts/fix_broken_magnets.py — Repair HTML-escaped magnets in DuckDB.
+"""scripts/fix_broken_magnets.py — Repair HTML-escaped magnets in the database.
 
 Root cause: ijavtorrent embeds magnet hrefs double-escaped (`&amp;amp;dn=`),
 and the extractor used to unescape only once, persisting `&amp;`-joined
@@ -24,21 +24,21 @@ def fix_broken_magnets() -> int:
     db.init_schema()
     conn = db._conn()
     try:
+        # all_magnets is JSONB: cast to text for the substring match/replace
         broken = conn.execute(
             "SELECT count(*) FROM titles "
-            "WHERE magnet LIKE '%&amp;%' OR all_magnets LIKE '%&amp;%'"
+            "WHERE magnet LIKE '%&amp;%' OR all_magnets::text LIKE '%&amp;%'"
         ).fetchone()[0]
         if broken:
             conn.execute(
                 """
                 UPDATE titles
                 SET magnet = replace(magnet, '&amp;', '&'),
-                    all_magnets = replace(all_magnets, '&amp;', '&'),
+                    all_magnets = replace(all_magnets::text, '&amp;', '&')::jsonb,
                     updated_at = now()
-                WHERE magnet LIKE '%&amp;%' OR all_magnets LIKE '%&amp;%'
+                WHERE magnet LIKE '%&amp;%' OR all_magnets::text LIKE '%&amp;%'
                 """
             )
-            conn.commit()
         return broken
     finally:
         conn.close()

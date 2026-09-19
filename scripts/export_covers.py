@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""scripts/export_covers.py — Export title covers from DuckDB to disk.
+"""scripts/export_covers.py — Export title covers from PostgreSQL to disk.
 
 First-principle rationale:
-Covers are immutable static assets. Keeping them as base64 blobs inside DuckDB
-forces every cover request to execute SQL, read the blob, and base64-decode it.
-Exporting them to disk lets the web server serve files directly and lets the
-browser cache them efficiently.
+Covers are immutable static assets. Keeping them as base64 blobs inside the
+database forces every cover request to execute SQL, read the blob, and
+base64-decode it. Exporting them to disk lets the web server serve files
+directly and lets the browser cache them efficiently.
 
 Output layout:
     images/titles/{code_lower}/{code_lower}.jpg
@@ -71,7 +71,7 @@ def _make_thumb_jpeg(img: Image.Image) -> bytes:
 
 def _ensure_thumb(code_lower: str, b64_data: str) -> bool:
     """Generate {code}_thumb.jpg if missing. Source: existing full-size JPEG,
-    falling back to the DuckDB blob. Returns True when the thumb exists."""
+    falling back to the DB blob. Returns True when the thumb exists."""
     thumb_path = IMAGES_DIR / code_lower / f"{code_lower}_thumb.jpg"
     if thumb_path.exists() and thumb_path.stat().st_size > 0:
         return True
@@ -92,10 +92,10 @@ def _ensure_thumb(code_lower: str, b64_data: str) -> bool:
 
 
 def export_covers() -> dict[str, int]:
-    """Export all covers from DuckDB to disk as JPEG.
+    """Export all covers from the title_covers table to disk as JPEG.
 
     Blobs are fetched one code at a time: loading every cover_b64 up front
-    OOM-kills the process on small machines (observed on a 4 GB host).
+    needlessly balloons memory on small machines.
     """
     db.init_schema()
     conn = db._conn()
@@ -104,10 +104,11 @@ def export_covers() -> dict[str, int]:
             row[0]
             for row in conn.execute(
                 """
-                SELECT code
-                FROM titles
-                WHERE cover_b64 IS NOT NULL AND cover_b64 != ''
-                ORDER BY code
+                SELECT t.code
+                FROM titles t
+                JOIN title_covers c ON c.title_id = t.id
+                WHERE c.cover_b64 IS NOT NULL AND c.cover_b64 != ''
+                ORDER BY t.code
                 """
             ).fetchall()
         ]
@@ -137,7 +138,12 @@ def export_covers() -> dict[str, int]:
                 continue
 
             row = conn.execute(
-                "SELECT cover_b64 FROM titles WHERE code = ?", (code,)
+                """
+                SELECT c.cover_b64 FROM title_covers c
+                JOIN titles t ON t.id = c.title_id
+                WHERE t.code = %s
+                """,
+                (code,),
             ).fetchone()
             b64_data = row[0] if row else None
             if not b64_data:

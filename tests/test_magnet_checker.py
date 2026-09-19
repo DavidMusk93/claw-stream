@@ -3,10 +3,11 @@
 
 - check_one against the local BT seed -> alive
 - check_one against a random hash -> dead (short timeout, no peers)
-- swap_primary_magnet / update_magnet_check_* CRUD against a temp DuckDB
+- swap_primary_magnet / update_magnet_check_* CRUD against the claw_test PG database
 
 Uses the shared local_seed fixture; skips automatically when the local seed
-cannot start (consistent with the rest of the suite).
+cannot start (consistent with the rest of the suite). DB-backed tests skip
+when CLAW_PG_DSN is unset or claw_test is unreachable.
 """
 from __future__ import annotations
 
@@ -19,6 +20,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from backend.services.magnet_checker import MagnetChecker, extract_hash
 from core import db
+from psycopg.types.json import Jsonb
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("CLAW_PG_DSN"),
+    reason="CLAW_PG_DSN not set — DB tests need the claw_test database",
+)
 
 
 @pytest.fixture()
@@ -56,36 +63,29 @@ def test_extract_hash():
 
 
 @pytest.fixture()
-def temp_db(tmp_path):
-    """Temp DuckDB with schema + one title (dead primary, one live candidate)."""
-    import duckdb
-
-    db_path = str(tmp_path / "test.duckdb")
-    conn = duckdb.connect(db_path)
-    db.init_schema(conn)
-    conn.execute(
-        """
-        INSERT INTO stars (name) VALUES ('Test Star')
-        """
-    )
+def temp_db(pg_test_db):
+    """claw_test with schema + one title (dead primary, one live candidate)."""
+    conn = pg_test_db
+    conn.execute("INSERT INTO stars (name) VALUES ('Test Star')")
     star_id = conn.execute("SELECT id FROM stars WHERE name = 'Test Star'").fetchone()[0]
     dead_hash = "cd" * 20
     live_hash = "ef" * 20
     conn.execute(
         """
         INSERT INTO titles (star_id, code, magnet, magnet_hash, all_magnets)
-        VALUES (?, 'TEST-001', ?, ?, ?)
+        VALUES (%s, 'TEST-001', %s, %s, %s)
         """,
         (
             star_id,
             f"magnet:?xt=urn:btih:{dead_hash}",
             dead_hash,
-            f'[{{"hash": "{dead_hash}", "magnet": "magnet:?xt=urn:btih:{dead_hash}"}},'
-            f' {{"hash": "{live_hash}", "magnet": "magnet:?xt=urn:btih:{live_hash}"}}]',
+            Jsonb([
+                {"hash": dead_hash, "magnet": f"magnet:?xt=urn:btih:{dead_hash}"},
+                {"hash": live_hash, "magnet": f"magnet:?xt=urn:btih:{live_hash}"},
+            ]),
         ),
     )
-    yield conn, star_id, dead_hash, live_hash
-    conn.close()
+    return conn, star_id, dead_hash, live_hash
 
 
 def test_update_magnet_check_ok(temp_db):
@@ -93,7 +93,7 @@ def test_update_magnet_check_ok(temp_db):
     title_id = conn.execute("SELECT id FROM titles WHERE code = 'TEST-001'").fetchone()[0]
     db.update_magnet_check_ok(title_id, dead_hash, conn=conn)
     row = conn.execute(
-        "SELECT magnet_status, magnet_checked_hash FROM titles WHERE id = ?", (title_id,)
+        "SELECT magnet_status, magnet_checked_hash FROM titles WHERE id = %s", (title_id,)
     ).fetchone()
     assert row == ("ok", dead_hash)
 
@@ -103,7 +103,7 @@ def test_update_magnet_check_dead(temp_db):
     title_id = conn.execute("SELECT id FROM titles WHERE code = 'TEST-001'").fetchone()[0]
     db.update_magnet_check_dead(title_id, dead_hash, conn=conn)
     row = conn.execute(
-        "SELECT magnet_status, magnet_hash FROM titles WHERE id = ?", (title_id,)
+        "SELECT magnet_status, magnet_hash FROM titles WHERE id = %s", (title_id,)
     ).fetchone()
     assert row == ("dead", dead_hash)
 
@@ -113,7 +113,7 @@ def test_swap_primary_magnet(temp_db):
     title_id = conn.execute("SELECT id FROM titles WHERE code = 'TEST-001'").fetchone()[0]
     db.swap_primary_magnet(title_id, f"magnet:?xt=urn:btih:{live_hash}", live_hash, conn=conn)
     row = conn.execute(
-        "SELECT magnet, magnet_hash, magnet_status, magnet_checked_hash FROM titles WHERE id = ?",
+        "SELECT magnet, magnet_hash, magnet_status, magnet_checked_hash FROM titles WHERE id = %s",
         (title_id,),
     ).fetchone()
     assert row == (f"magnet:?xt=urn:btih:{live_hash}", live_hash, "ok", live_hash)
@@ -136,7 +136,7 @@ def test_load_titles_for_magnet_check_scopes(temp_db):
     assert len(db.load_titles_for_magnet_check("all", conn=conn)) == 1
 
     # Hash changed (sync promoted a new primary) -> back in unchecked / changed
-    conn.execute("UPDATE titles SET magnet_hash = ? WHERE id = ?", (live_hash, title_id))
+    conn.execute("UPDATE titles SET magnet_hash = %s WHERE id = %s", (live_hash, title_id))
     assert len(db.load_titles_for_magnet_check("unchecked", conn=conn)) == 1
     assert len(db.load_titles_for_magnet_check("changed", conn=conn)) == 1
 

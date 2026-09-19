@@ -43,8 +43,7 @@ async def main() -> None:
         config = json.load(f)
 
     # Phase 1: collect everything needed from the DB, then close the
-    # connection. Holding a DuckDB connection open across async network I/O
-    # OOM-killed this script on a 4 GB host (DuckDB Allocation failure).
+    # connection. Don't hold a pooled connection open across async network I/O.
     conn = _conn()
     try:
         stars_to_fix = []
@@ -57,7 +56,8 @@ async def main() -> None:
                 """
                 SELECT t.id, t.code FROM titles t
                 JOIN stars s ON s.id = t.star_id
-                WHERE s.code = ? AND (t.cover_b64 IS NULL OR t.cover_b64 = '')
+                LEFT JOIN title_covers c ON c.title_id = t.id
+                WHERE s.code = %s AND (c.cover_b64 IS NULL OR c.cover_b64 = '')
                 """,
                 (code,),
             ).fetchall()
@@ -115,16 +115,27 @@ async def main() -> None:
                     continue
                 pending_writes.append(result)
 
-    # Phase 3: serial DB writes on a fresh connection.
+    # Phase 3: serial DB writes on a fresh pooled connection.
+    from core import db
+
     conn = _conn()
     try:
         for title_id, b64 in pending_writes:
             try:
                 conn.execute(
-                    "UPDATE titles SET cover_b64 = ? WHERE id = ?",
-                    (b64, title_id),
+                    """
+                    INSERT INTO title_covers (title_id, cover_b64) VALUES (%s, %s)
+                    ON CONFLICT (title_id) DO UPDATE SET
+                        cover_b64 = EXCLUDED.cover_b64, updated_at = now()
+                    """,
+                    (title_id, b64),
                 )
-                conn.commit()
+                dims = db._cover_dims_from_b64(b64)
+                if dims:
+                    conn.execute(
+                        "UPDATE titles SET cover_w = %s, cover_h = %s, updated_at = now() WHERE id = %s",
+                        (dims[0], dims[1], title_id),
+                    )
                 total_fixed += 1
             except Exception as exc:
                 print(f"  db write error: {exc}")

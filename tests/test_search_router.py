@@ -7,15 +7,20 @@ in-library and followed enrichment.
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock
 
-import duckdb
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import search as search_router
 from backend.routers.auth import require_auth
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("CLAW_PG_DSN"),
+    reason="CLAW_PG_DSN not set — DB tests need the claw_test database",
+)
 
 
 def _card(code: str, actresses: list[tuple[str, str]], magnet: bool = True) -> str:
@@ -72,7 +77,7 @@ def _clear_cache():
 
 
 @pytest.fixture
-def client(monkeypatch, tmp_path):
+def client(monkeypatch, pg_test_db):
     # Remote fetch → sample page
     monkeypatch.setattr(
         "scrapers.v2.fetchers.HttpxFetcher.fetch",
@@ -80,15 +85,9 @@ def client(monkeypatch, tmp_path):
     )
     # Config → one followed star
     monkeypatch.setattr(search_router, "_load_config", lambda: _FAKE_CONFIG)
-    # DB → temp file with SOLO-001 in titles
-    db_file = tmp_path / "t.duckdb"
-    conn = duckdb.connect(str(db_file))
-    conn.execute("CREATE TABLE titles (code VARCHAR)")
-    conn.execute("INSERT INTO titles VALUES ('SOLO-001')")
-    conn.close()
-    monkeypatch.setattr(
-        search_router, "_db_conn", lambda *a, **kw: duckdb.connect(str(db_file))
-    )
+    # DB → claw_test with SOLO-001 in titles (pool already points there
+    # via the pg_test_db fixture)
+    pg_test_db.execute("INSERT INTO titles (star_id, code) VALUES (1, 'SOLO-001')")
 
     app = FastAPI()
     app.dependency_overrides[require_auth] = lambda: None

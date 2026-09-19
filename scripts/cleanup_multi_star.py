@@ -10,10 +10,9 @@ Usage:
     .venv/bin/python scripts/cleanup_multi_star.py           # dry-run report
     .venv/bin/python scripts/cleanup_multi_star.py --apply   # delete rows
 
---apply opens the DB read-write: stop star-archive-backend first (DuckDB
-allows a single writer process). Liked titles (user_liked=1) are never
-deleted — they are reported separately. Cached torrents of deleted rows
-become orphans; run POST /api/cache/gc-orphans after restarting the backend.
+Liked titles (user_liked=1) are never deleted — they are reported separately.
+Cached torrents of deleted rows become orphans; run POST /api/cache/gc-orphans
+to clear them.
 """
 
 from __future__ import annotations
@@ -25,14 +24,12 @@ import shutil
 import sys
 from pathlib import Path
 
-import duckdb
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.db import _conn
 from scrapers.v2.extractors import IJavTorrentExtractor
 from scrapers.v2.fetchers import HttpxFetcher
 
-DB_PATH = Path("data/claw.duckdb")
 IMAGES_DIR = Path("images/titles")
 FETCH_CONCURRENCY = 4
 
@@ -79,7 +76,7 @@ async def main() -> None:
     if skipped:
         print(f"SKIPPED (no deletion): {', '.join(skipped)}")
 
-    conn = duckdb.connect(str(DB_PATH), read_only=not args.apply)
+    conn = _conn()
     try:
         # A title that is multi-star is 混演 no matter whose library it sits
         # in: ijav listings are sparse, so a compilation may only show on one
@@ -88,7 +85,7 @@ async def main() -> None:
         if not all_multi:
             print("no multi-star codes found")
             return
-        placeholders = ", ".join(["?"] * len(all_multi))
+        placeholders = ", ".join(["%s"] * len(all_multi))
         rows = conn.execute(
             f"SELECT star_code, code, title, user_liked FROM titles "
             f"WHERE code IN ({placeholders}) ORDER BY star_code, code",
@@ -109,7 +106,7 @@ async def main() -> None:
 
         if args.apply and deletable:
             del_codes = sorted({r[1] for r in deletable})
-            del_placeholders = ", ".join(["?"] * len(del_codes))
+            del_placeholders = ", ".join(["%s"] * len(del_codes))
             conn.execute(
                 f"DELETE FROM titles WHERE user_liked = 0 AND code IN ({del_placeholders})",
                 del_codes,
@@ -121,9 +118,8 @@ async def main() -> None:
                     shutil.rmtree(cover_dir, ignore_errors=True)
                     covers_removed += 1
         if args.apply:
-            conn.commit()
             print(f"deleted {total_delete} multi-star titles, removed {covers_removed} cover dirs")
-            print("restart the backend, then POST /api/cache/gc-orphans to clear orphaned caches")
+            print("run POST /api/cache/gc-orphans to clear orphaned caches")
         else:
             print(f"dry-run: {len(deletable)} rows would be deleted; pass --apply to execute")
         if liked_kept:

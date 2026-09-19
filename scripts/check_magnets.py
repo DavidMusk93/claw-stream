@@ -2,7 +2,7 @@
 """scripts/check_magnets.py — Trigger a magnet liveness check on the running backend.
 
 Thin HTTP wrapper around POST /api/magnets/check: all DB writes go through the
-backend's serial write queue, avoiding cross-process DuckDB write locks.
+backend's serial write queue, keeping DB access single-process.
 Requires the backend (star-archive-backend) to be running.
 
 Usage:

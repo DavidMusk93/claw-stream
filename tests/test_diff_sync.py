@@ -492,7 +492,7 @@ class _StubFetcher:
 
 
 async def _stub_db_write(func, *args, **kwargs):
-    """In-memory stand-in for the DuckDB serial write queue."""
+    """In-memory stand-in for the serial DB write queue."""
     name = getattr(func, "__name__", "")
     if name == "upsert_star":
         return 1
@@ -880,48 +880,38 @@ def test_ijav_extractor_extracts_star_links():
 
 
 # ── Sink: cover_b64 preservation on conflict ─────────────────────────
-# The titles table stores large base64 cover blobs inline. The batch UPSERT
-# must not rewrite cover_b64 on conflict (multi-GB row-group churn → OOM on
-# the 4GB box) and must never wipe an existing cover with an empty value.
-
-def _make_titles_table(conn):
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_title_id START 1")
-    conn.execute("""
-        CREATE TABLE titles (
-            id INTEGER PRIMARY KEY DEFAULT nextval('seq_title_id'),
-            star_id INTEGER, star_code VARCHAR, star_name VARCHAR,
-            code VARCHAR, title VARCHAR,
-            release_date VARCHAR, release_date_sort VARCHAR,
-            views VARCHAR, likes VARCHAR, resolution VARCHAR,
-            cover_url VARCHAR, cover_b64 TEXT, cover_w INTEGER, cover_h INTEGER,
-            magnet VARCHAR, magnet_hash VARCHAR, all_magnets JSON,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(star_id, code)
-        )
-    """)
+# Cover blobs live in the separate title_covers table (1:1 with titles).
+# The batch UPSERT must not touch title_covers on conflict without a fresh
+# cover and must never wipe an existing cover with an empty value.
 
 
-@pytest.mark.asyncio
-async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
-    """ON CONFLICT without a fresh cover keeps the existing blob; with one, replaces it."""
-    import duckdb
+@pytest.fixture()
+def sink_db(pg_test_db, monkeypatch):
+    """claw_test + direct (unqueued) sink writes + no disk cover export."""
     from core import db
     from scrapers.v2 import sinks
-
-    db_file = str(tmp_path / "test.duckdb")
-    setup = duckdb.connect(db_file)
-    _make_titles_table(setup)
-    setup.execute(
-        "INSERT INTO titles (id, star_id, code, title, cover_b64) VALUES (1, 1, 'ABC-001', 'old', 'EXISTING_B64')"
-    )
-    setup.close()
-
-    monkeypatch.setattr(db, "_conn", lambda **_: duckdb.connect(db_file))
 
     async def _direct_write(fn):
         return fn()
 
     monkeypatch.setattr(sinks, "db_write", _direct_write)
+    # Keep the repo's images/titles/ clean: cover disk export is covered
+    # elsewhere; here only the DB rows matter.
+    monkeypatch.setattr(db, "_write_cover_to_disk", lambda *a, **k: None)
+    return pg_test_db
+
+
+@pytest.mark.asyncio
+async def test_sink_conflict_preserves_cover_b64(sink_db):
+    """ON CONFLICT without a fresh cover keeps the existing blob; with one, replaces it."""
+    from scrapers.v2 import sinks
+
+    sink_db.execute(
+        "INSERT INTO titles (id, star_id, code, title) VALUES (1, 1, 'ABC-001', 'old')"
+    )
+    sink_db.execute(
+        "INSERT INTO title_covers (title_id, cover_b64) VALUES (1, 'EXISTING_B64')"
+    )
 
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
     # The sink skips titles without magnets by design — give the item one.
@@ -932,11 +922,12 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
 
     # Conflict, no fresh cover: existing blob must survive.
     await sink.write_batch([item], set(), {})
-    conn = duckdb.connect(db_file)
-    row = conn.execute("SELECT cover_b64, title FROM titles WHERE code = 'ABC-001'").fetchone()
+    row = sink_db.execute(
+        "SELECT c.cover_b64, t.title FROM titles t "
+        "JOIN title_covers c ON c.title_id = t.id WHERE t.code = 'ABC-001'"
+    ).fetchone()
     assert row[0] == "EXISTING_B64"
     assert row[1] == "new title"
-    conn.close()
 
     # Conflict with a fresh cover: blob is updated, with real pixel dims.
     import base64 as _b64
@@ -949,11 +940,12 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
     jpeg_b64 = _b64.b64encode(buf.getvalue()).decode()
 
     await sink.write_batch([item], set(), {"ABC-001": jpeg_b64})
-    conn = duckdb.connect(db_file)
-    row = conn.execute("SELECT cover_b64, cover_w, cover_h FROM titles WHERE code = 'ABC-001'").fetchone()
+    row = sink_db.execute(
+        "SELECT c.cover_b64, t.cover_w, t.cover_h FROM titles t "
+        "JOIN title_covers c ON c.title_id = t.id WHERE t.code = 'ABC-001'"
+    ).fetchone()
     assert row[0] == jpeg_b64
     assert row[1:] == (4, 2)
-    conn.close()
 
     # Fresh insert carries its cover.
     new_item = VideoItem(
@@ -961,30 +953,17 @@ async def test_sink_conflict_preserves_cover_b64(tmp_path, monkeypatch):
         magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "bb" * 20)],
     )
     await sink.write_batch([new_item], {"ABC-002"}, {"ABC-002": "FRESH_B64"})
-    conn = duckdb.connect(db_file)
-    row = conn.execute("SELECT cover_b64 FROM titles WHERE code = 'ABC-002'").fetchone()
+    row = sink_db.execute(
+        "SELECT c.cover_b64 FROM titles t "
+        "JOIN title_covers c ON c.title_id = t.id WHERE t.code = 'ABC-002'"
+    ).fetchone()
     assert row[0] == "FRESH_B64"
-    conn.close()
 
 
 @pytest.mark.asyncio
-async def test_sink_skips_titles_without_magnets(tmp_path, monkeypatch):
+async def test_sink_skips_titles_without_magnets(sink_db):
     """Titles without magnets are never recorded in the DB."""
-    import duckdb
-    from core import db
     from scrapers.v2 import sinks
-
-    db_file = str(tmp_path / "test.duckdb")
-    setup = duckdb.connect(db_file)
-    _make_titles_table(setup)
-    setup.close()
-
-    monkeypatch.setattr(db, "_conn", lambda **_: duckdb.connect(db_file))
-
-    async def _direct_write(fn):
-        return fn()
-
-    monkeypatch.setattr(sinks, "db_write", _direct_write)
 
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
     item = VideoItem(code="ABC-003", title="no magnet", cover_url="https://img.test/3.jpg")
@@ -992,6 +971,4 @@ async def test_sink_skips_titles_without_magnets(tmp_path, monkeypatch):
 
     assert result["skipped_no_magnet"] == 1
     assert result["new"] == 0
-    conn = duckdb.connect(db_file)
-    assert conn.execute("SELECT count(*) FROM titles").fetchone()[0] == 0
-    conn.close()
+    assert sink_db.execute("SELECT count(*) FROM titles").fetchone()[0] == 0

@@ -10,10 +10,9 @@ Usage:
     .venv/bin/python scripts/drop_hidden_titles.py           # dry-run report
     .venv/bin/python scripts/drop_hidden_titles.py --apply   # delete rows
 
---apply opens the DB read-write: stop star-archive-backend first (DuckDB
-allows a single writer process). Liked titles (user_liked=1) are never
-deleted — they are reported separately. Cached torrents of deleted rows
-become orphans; run POST /api/cache/gc-orphans after restarting the backend.
+Liked titles (user_liked=1) are never deleted — they are reported separately.
+Cached torrents of deleted rows become orphans; run POST /api/cache/gc-orphans
+to clear them.
 """
 
 from __future__ import annotations
@@ -24,14 +23,12 @@ import shutil
 import sys
 from pathlib import Path
 
-import duckdb
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.db import _conn
 from scrapers.v2.filters import hidden_reason
 from scrapers.v2.schemas import VideoItem
 
-DB_PATH = Path("data/claw.duckdb")
 CONFIG_PATH = Path("config.json")
 IMAGES_DIR = Path("images/titles")
 
@@ -52,7 +49,7 @@ def main() -> None:
         for s in roster
     }
 
-    conn = duckdb.connect(str(DB_PATH), read_only=not args.apply)
+    conn = _conn()
     try:
         star_names = {
             r[0]: [n for n in (r[1], r[2]) if n]
@@ -89,9 +86,8 @@ def main() -> None:
         deletable = [h for h in hits if not h[5]]
         if args.apply and deletable:
             del_ids = [h[0] for h in deletable]
-            placeholders = ", ".join(["?"] * len(del_ids))
+            placeholders = ", ".join(["%s"] * len(del_ids))
             conn.execute(f"DELETE FROM titles WHERE id IN ({placeholders})", del_ids)
-            conn.commit()
             covers_removed = 0
             for _, code, *_ in deletable:
                 cover_dir = IMAGES_DIR / code.lower()
@@ -99,7 +95,7 @@ def main() -> None:
                     shutil.rmtree(cover_dir, ignore_errors=True)
                     covers_removed += 1
             print(f"deleted {len(deletable)} hidden titles, removed {covers_removed} cover dirs")
-            print("restart the backend, then POST /api/cache/gc-orphans to clear orphaned caches")
+            print("run POST /api/cache/gc-orphans to clear orphaned caches")
         else:
             print(f"dry-run: {len(deletable)} rows would be deleted; pass --apply to execute")
     finally:
