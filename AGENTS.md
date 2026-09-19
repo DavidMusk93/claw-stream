@@ -397,6 +397,14 @@ curl -s http://localhost:8765/api/health
 
 # DB stats
 python3 -m core.db stats
+
+# Shrink a bloated claw.duckdb (DuckDB never reclaims space from UPDATEs;
+# the file grew 1.8G→15G in 3 months with only ~450MB real data).
+# Stop the backend first, then rebuild into a fresh file and swap:
+systemctl stop star-archive-backend
+.venv/bin/python scripts/rebuild_db.py   # verifies row counts, prints swap commands
+# ... run the printed mv commands, then:
+systemctl start star-archive-backend
 ```
 
 ---
