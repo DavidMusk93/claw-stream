@@ -1,5 +1,9 @@
 # Magnet 可用性校验（Magnet Liveness Check）
 
+> **注（2026-09-19）**：存储已从 DuckDB 迁移到 PostgreSQL 18。文中的
+> `db_write` 串行写队列仍然保留（API 未变），但 DuckDB 单写者锁的限制
+> 已不存在 —— PG 原生支持并发写入。机制与流程不变。
+
 ## 问题
 
 Diff-Sync 选"最佳 magnet"（`scrapers/v2/sinks.py:_score_magnet`）纯按元数据打分

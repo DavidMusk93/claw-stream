@@ -48,8 +48,10 @@ star A:      fetch ── diff ── covers ── write
 star B:        fetch ── diff ── covers ── write
 star C:           fetch ── diff ── covers ── write
                   └─ global caps: ijav sem=8, rss sem=4, covers sem=16,
-                     writes serialized by the DuckDB write queue ─┘
+                     writes serialized by the DB write queue ─┘
 ```
+
+> **Note (2026-09-19):** storage migrated from DuckDB to PostgreSQL 18. The serial write queue (`core/db/write_queue.py`) is kept for API compatibility, but the DuckDB single-writer lock constraint it solved no longer applies — PG handles concurrent writers natively.
 
 ### Phase 1: Incremental Page Fetching
 

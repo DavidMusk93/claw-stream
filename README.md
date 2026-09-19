@@ -6,7 +6,7 @@
 
 基于 BitTorrent 的本地视频流式播放系统。
 
-**技术栈**：Python 3.11 + FastAPI + libtorrent 2.0.x / Nuxt 3 + Vue 3 / DuckDB / systemd + Caddy
+**技术栈**：Python 3.11 + FastAPI + libtorrent 2.0.x / Nuxt 3 + Vue 3 / PostgreSQL 18 / systemd + Caddy
 
 **核心特性**：按需下载 · 分级缓存 · Bootstrap-first 验证 · PieceStateTracker · Safari 兼容
 

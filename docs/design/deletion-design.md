@@ -1,5 +1,7 @@
 # Actor Deletion Design — Safe and Robust Data and Cache Cleanup
 
+> **Note (2026-09-19):** storage migrated from DuckDB to PostgreSQL 18. Code samples below predate the migration — placeholders are now `%s`, connections come from the `core.db` pool (`_conn()`), and `gc_orphaned_torrents()` no longer takes a `db_path`. The flow and ordering guarantees are unchanged.
+
 ## 1. Problem Background
 
 Deleting an actor (star) triggers changes across multiple data layers:
@@ -7,7 +9,7 @@ Deleting an actor (star) triggers changes across multiple data layers:
 | Layer | Data | Location |
 |---|---|---|
 | Config | Star entries in `config.json` | File system |
-| Database | `stars` / `titles` / `social_posts` | `data/claw.duckdb` |
+| Database | `stars` / `titles` / `social_posts` | PostgreSQL `claw` database |
 | Cache | Downloaded torrent files (video + `.torrent`) | `cache/torrent/<hash>/` |
 | Memory | Handles / trackers in `TorrentEngine.torrents` | Process memory |
 

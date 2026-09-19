@@ -18,7 +18,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 |---|---|---|
 | Backend | Python 3.11+ | FastAPI + uvicorn |
 | BitTorrent | libtorrent 2.0.x (2.0.11 in `.venv`) | Session management, piece download, sparse files |
-| Database | DuckDB 1.5.2+ | Single-file `data/claw.duckdb`, stores metadata and cover blobs |
+| Database | PostgreSQL 18 (PGDG apt) | psycopg3 + psycopg_pool; DSN from `CLAW_PG_DSN` env (in `/etc/star-archive.env`); DBs `claw` + `claw_test` |
 | Frontend | Nuxt 3.16+ / Vue 3.5+ | TypeScript + Tailwind CSS + Pinia |
 | PWA | `@vite-pwa/nuxt` | Service Worker + manifest + runtime caching |
 | Scraping | httpx + Playwright + selectolax | `scrapers/v2/` pipeline; Playwright only as fallback |
@@ -38,8 +38,9 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 - **On-demand download**: Only download head + tail + current window (±30 pieces); all other pieces priority = 0.
 - **Thread pool expansion**: Default thread pool expanded to 32 workers in `backend/main.py` lifespan to prevent blocking I/O from overwhelming the event loop.
 - **SSE push replaces polling**: `core/events.py` in-process event bus + `GET /api/events` SSE stream (`sync.status`, `sync.progress` (per-phase sync progress: prepare/fetch/covers/write), `sync.resync_required`, `torrent.status`, `torrent.progress` (2s throttled, in-memory only), `cache.update`, `star.ready`); frontend consumes via `useEventSource.ts` with zero polling timers. Slow clients are coalesced (queue drain + `sync.resync_required`), never silently disconnected. See `docs/design/sse-push-architecture.md`.
-- **DuckDB serial write queue**: all DB writes go through `core/db/write_queue.py` (single worker coroutine), eliminating DuckDB's one-writer lock conflicts.
-- **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSON`) — no stars-titles-magnets triple JOIN.
+- **Serial DB write queue (legacy)**: all DB writes go through `core/db/write_queue.py` (single worker coroutine). It dates from the DuckDB one-writer era; PostgreSQL handles concurrent writers, so this is a serialization choice kept to avoid touching many call sites, not a correctness requirement.
+- **Storage migrated to PostgreSQL (2026-09-19)**: DuckDB's delete+append UPDATE semantics × inline ~200KB cover blobs caused ~700× write amplification (1.8G→15G in 3 months, disk full). PG stores blobs out of line (TOAST) and reclaims space via autovacuum. The old `data/claw.duckdb` is kept as a rollback archive.
+- **Wide-table schema**: `titles` inlines `star_code`/`star_name`/magnet info (`magnet`, `magnet_hash`, `all_magnets JSONB`) — no stars-titles-magnets triple JOIN.
 - **Disk-first cover pipeline**: covers exported to `images/titles/{code}/{code}.jpg` (plus a 400px-wide `{code}_thumb.jpg` for list/grid views, generated on write and by `export_covers.py`) are served as static files by Caddy. `/api/stars` emits these static URLs directly (`cover_url`/`cover_thumb_url`) when the files exist; `/api/cover/{code}[?thumb=1]` is the fallback for titles missing on disk (DB blob + disk backfill).
 - **Upload bandwidth cap**: libtorrent `upload_rate_limit = 2 MB/s` to reserve bandwidth for HTTP streaming.
 - **Diff-Sync hybrid source: ijavtorrent primary + sukebei.nyaa.si RSS supplement**: title sync fetches the ijavtorrent actress page (rich metadata: retail dates, views, cover_url, hhd800 magnets) and merges sukebei RSS search results (all query variants `sync_query`/`name`/`jp` unioned by code) to correct ijav's catalog gaps — ijav metadata wins, magnets unioned, RSS-only codes appended; multi-star (共演/omnibus) and VR titles are filtered **at collection time** by `scrapers/v2/filters.py` (`star_count>1` actress-link count, 【VR】/[VR]/VR-label-prefix, 共演/オムニバス keywords, cast-list patterns, other-roster-star mention) — they never enter the DB. Titles without any magnet are skipped at the sink (`scrapers/v2/sinks.py`): unplayable rows are never recorded. A star fails only when BOTH sources fail. ijav lost much of its catalog in 2026-08 and still serves sparse listings (no pagination). See `docs/design/diff-sync-design.md`.
@@ -66,8 +67,8 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `test_router` | `backend/routers/test_helper.py` | Test helper endpoints (debug only, no auth) |
 | `EventBus` | `core/events.py` | In-process async pub/sub for SSE |
 | `MagnetChecker` | `backend/services/magnet_checker.py` | Dead-magnet detection via own lt.session (metadata-arrival test), auto-swap to live candidates |
-| `DuckDBWriteQueue` | `core/db/write_queue.py` | Serializes all DuckDB writes in-process |
-| Scraper pipeline | `scrapers/v2/` | `tasks/sync_titles.py` orchestrates sources → fetchers (httpx/Playwright) → extractors → sinks (DuckDB) |
+| `DBWriteQueue` | `core/db/write_queue.py` | Serializes all DB writes in-process (legacy from the DuckDB era; API kept) |
+| Scraper pipeline | `scrapers/v2/` | `tasks/sync_titles.py` orchestrates sources → fetchers (httpx/Playwright) → extractors → sinks (PostgreSQL) |
 
 ---
 
@@ -86,7 +87,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 │   ├── logger.py            # Shared logging (RotatingFileHandler + JSON/text format + trace_id)
 │   ├── log_viewer.py        # Log query CLI (tail / grep / follow)
 │   ├── events.py            # In-process event bus for SSE push
-│   └── db/                  # DuckDB: connection, schema, crud, queries, write_queue, ops_log
+│   └── db/                  # PostgreSQL: connection (pool), schema, crud, queries, write_queue, ops_log
 │                            # CLI: python3 -m core.db [backfill|stats]
 ├── frontend/
 │   ├── app.vue              # Nuxt root component
@@ -108,7 +109,8 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 ├── tests/                   # Regression tests (pytest + local BT fixture in tests/fixtures/)
 ├── scripts/                 # Ops scripts (run.sh, export_covers.py, fill_all_covers.py,
 │                            #   fix_bad_covers.py, fix_missing_covers.py, check_magnets.py,
-│                            #   cleanup_multi_star.py, drop_hidden_titles.py)
+│                            #   cleanup_multi_star.py, drop_hidden_titles.py,
+│                            #   migrate_duckdb_to_pg.py — one-shot, done 2026-09-19)
 ├── deploy/                  # systemd unit files (star-archive-backend, star-archive-frontend)
 ├── config/
 │   └── mcporter.json        # MCP server config (exa) for AI agent tooling
@@ -116,7 +118,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 │                            #   Personal preference — git-ignored, never commit
 ├── pyproject.toml           # Python dependencies (uv managed) — libtorrent NOT included, see §1.1
 ├── Caddyfile                # Reverse proxy config (443 → backend:8765 / frontend:3000)
-├── refresh.sh               # One-shot data refresh: scrapers/search_news.py → DuckDB + stats
+├── refresh.sh               # One-shot data refresh: scrapers/search_news.py → PostgreSQL + stats
 ├── fetch-covers.sh          # Parallel cover download from DMM/FANZA CDN → /tmp/star-covers
 ├── b64-encode.sh            # Cover images → base64 text files
 ├── _test_ddg.py             # Ad-hoc duckduckgo-search smoke script (not part of test suite)
@@ -138,26 +140,25 @@ docs/
 
 ---
 
-## 3. Database Schema (DuckDB)
+## 3. Database Schema (PostgreSQL)
 
-Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER TABLE` backfills):
+Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER TABLE ... IF NOT EXISTS` backfills):
 
 - `stars` — Actor base info (`name` UNIQUE, `jp_name`, `handle`, `code`, `type`, `note`)
-- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_b64`, `cover_path`, `cover_w`, `cover_h` (pixels, for aspect-ratio placeholders), `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSON`, `user_liked INTEGER DEFAULT 0`, `magnet_status` (NULL/`ok`/`dead`), `magnet_checked_at`, `magnet_checked_hash` (magnet liveness check, see `docs/design/magnet-check.md`); `UNIQUE(star_id, code)`
+- `titles` — Title metadata, inlines star and magnet info: `star_id`, `star_code`, `star_name`, `code`, `title`, `release_date`, `release_date_sort`, `views`, `likes`, `resolution`, `cover_url`, `cover_path`, `cover_w`, `cover_h` (pixels, for aspect-ratio placeholders), `charming_intro`, `jable_m3u8`, `magnet`, `magnet_hash`, `all_magnets JSONB`, `user_liked INTEGER DEFAULT 0`, `magnet_status` (NULL/`ok`/`dead`), `magnet_checked_at`, `magnet_checked_hash` (magnet liveness check, see `docs/design/magnet-check.md`); `UNIQUE(star_id, code)`
+- `title_covers` — Cover blobs, 1:1 with titles: `title_id PK REFERENCES titles(id) ON DELETE CASCADE`, `cover_b64 TEXT`, `updated_at`. Kept out of `titles` so hot-table metadata updates never churn multi-hundred-KB blobs.
 - `social_posts` — Social platform posts (`star_id`, `platform`, `content`, `post_url`, `posted_at`)
 - `sync_runs` — Sync run history (`trigger` manual/scheduled, `status`, `started_at`, `finished_at`, `total_new`, `total_updated`, `failed_count`, `error`)
-- `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSON`)
+- `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSONB`)
 
 There is **no separate `magnets` table** anymore — magnet data lives on `titles`.
 
-Database file at `data/claw.duckdb`, **excluded by `.gitignore`, never commit to git**.
-
-**Memory rule (4GB box, backend was OOM-killed over this)**: every DuckDB connection must come
-from `core.db._conn()`, which enforces `memory_limit='1GB'` + spill dir (override via
-`DUCKDB_MEMORY_LIMIT` / `DUCKDB_TEMP_DIR` env vars). Never call bare `duckdb.connect()` in app
-code. The `titles` table carries large base64 cover blobs inline, so queries/UPSERTs must not
-touch `cover_b64` unless a fresh cover actually exists — the sync sink updates it via a targeted
-`UPDATE` for new covers only, never in the `ON CONFLICT` clause.
+All DB access goes through the psycopg pool in `core/db/connection.py` (`_conn()`, min 1 / max 10,
+`autocommit=True`, `close()` returns the connection to the pool). Never open ad-hoc connections.
+Pool connections autocommit single statements; multi-statement writes must wrap themselves in
+`with conn.transaction():`. psycopg3 returns JSONB columns already parsed (no `json.loads`) and
+`TIMESTAMP` columns as `datetime` objects; placeholders are `%s`, and `Connection` has no
+`executemany` — use `conn.cursor().executemany(...)`.
 
 DB CLI: `python3 -m core.db` (init schema) · `python3 -m core.db backfill` · `python3 -m core.db stats`.
 
@@ -167,7 +168,11 @@ DB CLI: `python3 -m core.db` (init schema) · `python3 -m core.db backfill` · `
 
 ### 4.1 Dependency Installation
 
-Using `uv` for Python dependencies:
+PostgreSQL 18 server is a prerequisite (PGDG apt repo, `postgresql-18`); the role `claw` and
+databases `claw` / `claw_test` must exist, and `CLAW_PG_DSN` must be set (production:
+`/etc/star-archive.env` via the systemd unit's `EnvironmentFile`).
+
+Using `uv` for Python dependencies (psycopg is included):
 
 ```bash
 cd /root/claw-stream
@@ -216,6 +221,9 @@ systemctl restart star-archive-backend    # .venv/bin/python -m uvicorn ... :876
 systemctl restart star-archive-frontend   # node .output/server/index.mjs :3000
 ```
 
+The backend unit has `Requires/After=postgresql.service` and loads `CLAW_PG_DSN` via
+`EnvironmentFile=/etc/star-archive.env`.
+
 In production the Nitro server also proxies `/api`, `/stream`, `/torrent`, `/images` to `127.0.0.1:8765` via `routeRules` in `nuxt.config.ts`.
 
 ### 4.4 Caddy Reverse Proxy
@@ -254,14 +262,14 @@ systemctl reload caddy
 - Use Python 3.11+ type annotation syntax (e.g. `str | None`, `dict[str, Any]`)
 - Class names, function names, variable names in **English**; **comments and docstrings in English**
 - Prefer f-string for string formatting
-- SQL parameter binding: prefer `?` placeholders; only VARIANT-type complex dicts may use `variant_sql_literal()` generated expressions
-- All DuckDB writes go through `core/db/write_queue.py`; never open a second write connection ad hoc
+- SQL parameter binding: `%s` placeholders (psycopg3); JSON/JSONB values via `psycopg.types.json.Jsonb`
+- All DB writes go through `core/db/write_queue.py`; never open ad-hoc connections outside the pool
 
 ### 5.2 SQL Safety
 
 - **Never** concatenate user input directly into SQL
 - Column identifiers must pass whitelist validation
-- Value parameters use `?` placeholder binding
+- Value parameters use `%s` placeholder binding
 
 ### 5.3 Git Commit Convention
 
@@ -291,8 +299,8 @@ systemctl reload caddy
 | `tests/test_torrent_engine_arch.py` | TorrentEngine architecture tests (bootstrap-first, cache-warming) | No real download, uses mock |
 | `tests/test_disk_truth_source.py` | "Disk is the single source of truth" regression (mocked libtorrent handle) | No network |
 | `tests/test_diff_sync.py` | Diff-Sync incremental sync regression (sukebei RSS fetch, diff filtering, incremental covers, truncated-RSS/429 retry) | Mocked fetcher |
-| `tests/test_magnet_checker.py` | MagnetChecker liveness (local-seed alive, dead hash, swap/CRUD scopes) | Local BT seed + temp DuckDB |
-| `tests/conftest.py` | Shared fixtures (`local_seed`, `real_video_engine`) | Local BT seed |
+| `tests/test_magnet_checker.py` | MagnetChecker liveness (local-seed alive, dead hash, swap/CRUD scopes) | Local BT seed + `claw_test` PG database (skips without `CLAW_PG_DSN`) |
+| `tests/conftest.py` | Shared fixtures (`local_seed`, `real_video_engine`, `pg_test_db`) | Local BT seed + `claw_test` |
 | `tests/local_bt_fixture.py` + `tests/fixtures/` | Local seeder fixture (`test_video.mp4` + `test_video.torrent`) | — |
 | `backend/regression/test_piece_tracker.py` | Internal piece tracker regression | — |
 | `backend/regression/test_torrent_engine_readd.py` | Internal torrent engine regression | — |
@@ -315,7 +323,7 @@ uv run python -m pytest tests/test_disk_truth_source.py -v
 uv run python -m pytest tests/test_diff_sync.py -v
 ```
 
-> Tests auto-skip when real cache files or local seeds are unavailable — they do not fail.
+> Tests auto-skip when real cache files, local seeds, or the `claw_test` database are unavailable — they do not fail. DB-backed tests need `CLAW_PG_DSN` in the environment (the fixture repoints it at `claw_test`).
 
 ---
 
@@ -323,7 +331,8 @@ uv run python -m pytest tests/test_diff_sync.py -v
 
 ### 7.1 Data Security
 
-- DuckDB is a **single-file database** (`data/claw.duckdb`), excluded by `.gitignore`. **Never commit database files to git**
+- Data lives in the PostgreSQL cluster (databases `claw` / `claw_test`). The DB password sits in `/etc/star-archive.env` (chmod 600, outside the repo) — **never commit it or copy it into the repo**
+- `data/claw.duckdb` is the pre-migration DuckDB archive (rollback fallback), excluded by `.gitignore`. **Never commit database files to git**
 - Cover images may contain private content; agents must not leak them in shared contexts
 - `/cache` is intentionally **not** mounted as static files (prevents direct video download)
 - CORS: origins from `CORS_ORIGINS` env var (default `localhost:3000`); `*` with credentials is deliberately unsupported
@@ -360,10 +369,10 @@ systemctl restart star-archive-frontend
 ### 7.5 Data Refresh & Covers
 
 ```bash
-# Refresh title data (scrapers v2 pipeline → DuckDB, then prints stats)
+# Refresh title data (scrapers v2 pipeline → PostgreSQL, then prints stats)
 ./refresh.sh [config.json]
 
-# Export covers from DuckDB blobs to images/titles/{code}/{code}.jpg
+# Export covers from title_covers blobs to images/titles/{code}/{code}.jpg
 # (also generates {code}_thumb.jpg, 400px wide, for list/grid views)
 .venv/bin/python scripts/export_covers.py
 
@@ -372,7 +381,7 @@ systemctl restart star-archive-frontend
 ./b64-encode.sh [image-dir]
 ```
 
-`/api/stars` returns ready-to-use cover URLs: static `/images/titles/{code}/{code}.jpg` (and `cover_thumb_url` for the 400px variant) when the files exist on disk, otherwise `/api/cover/{code}`. `/api/cover/{code}` itself resolves disk static file (307 redirect) → in-memory LRU → DuckDB blob (+ disk backfill), so new titles never 404 even if the disk export lagged. `?thumb=1` redirects to the small `{code}_thumb.jpg` variant when it exists.
+`/api/stars` returns ready-to-use cover URLs: static `/images/titles/{code}/{code}.jpg` (and `cover_thumb_url` for the 400px variant) when the files exist on disk, otherwise `/api/cover/{code}`. `/api/cover/{code}` itself resolves disk static file (307 redirect) → in-memory LRU → `title_covers` blob (+ disk backfill), so new titles never 404 even if the disk export lagged. `?thumb=1` redirects to the small `{code}_thumb.jpg` variant when it exists.
 
 ### 7.6 Common Ops Commands
 
@@ -398,13 +407,15 @@ curl -s http://localhost:8765/api/health
 # DB stats
 python3 -m core.db stats
 
-# Shrink a bloated claw.duckdb (DuckDB never reclaims space from UPDATEs;
-# the file grew 1.8G→15G in 3 months with only ~450MB real data).
-# Stop the backend first, then rebuild into a fresh file and swap:
-systemctl stop star-archive-backend
-.venv/bin/python scripts/rebuild_db.py   # verifies row counts, prints swap commands
-# ... run the printed mv commands, then:
-systemctl start star-archive-backend
+# Ad-hoc SQL against the live database
+set -a; . /etc/star-archive.env; set +a
+psql "$CLAW_PG_DSN"
+
+# Table bloat: PostgreSQL autovacuum reclaims dead tuples continuously —
+# the DuckDB rewrite-on-UPDATE bloat problem is gone. If a table ever does
+# bloat (check pg_stat_user_tables n_dead_tup), use:
+#   VACUUM (ANALYZE) titles;
+# or pg_repack for lock-free shrinkage.
 ```
 
 ---
@@ -445,7 +456,7 @@ systemctl start star-archive-backend
 
   ```
   ijavtorrent (primary) ──┐
-                          ├─→ merge (ijav wins, magnets union) → diff → covers → DuckDB
+                          ├─→ merge (ijav wins, magnets union) → diff → covers → PostgreSQL
   sukebei RSS (fallback) ─┘
   ```
 
