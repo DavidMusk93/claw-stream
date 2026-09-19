@@ -11,13 +11,10 @@ import sys
 
 from .schema import init_schema, backfill_release_date_sort
 from .queries import get_stats
-from .connection import DB_PATH
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "export_to_tmp":
-        print("[db] export_to_tmp removed; generate-report.js reads DuckDB directly via Node.js driver")
-    elif len(sys.argv) > 1 and sys.argv[1] == "backfill":
+    if len(sys.argv) > 1 and sys.argv[1] == "backfill":
         init_schema()
         backfill_release_date_sort()
         print("[db] backfill done")
@@ -25,4 +22,4 @@ if __name__ == "__main__":
         print(json.dumps(get_stats(), ensure_ascii=False, indent=2))
     else:
         init_schema()
-        print(f"[db] initialized: {DB_PATH}")
+        print("[db] schema initialized")

@@ -5,7 +5,7 @@ Diff-Sync architecture (first principle: update as fast as possible):
 2. Per-star pipeline, all stars overlapped: fetch (pure HTTP, no browser) →
    in-memory diff (keep only new works) → incremental cover download (new
    works only, shared global semaphore) → incremental write (per-star UPSERT
-   through the serial DuckDB write queue). A star's covers/writes hide under
+   through the serial DB write queue). A star's covers/writes hide under
    the remaining stars' fetch time.
 
 Hybrid source: **ijavtorrent is the primary source** (actress pages carry the
@@ -370,7 +370,7 @@ async def run(
     # 3-5. Per-star pipeline: fetch → diff → covers → write, overlapped across
     # stars. A star's covers download and its rows write while later stars are
     # still fetching, hiding most cover/write time under fetch time. The
-    # DuckDB write queue serializes all writes anyway, so per-star writes
+    # DB write queue serializes all writes anyway, so per-star writes
     # don't change write-side safety.
     t0 = time.perf_counter()
     fetched = 0
@@ -510,8 +510,6 @@ def _query_stats(conn=None):
             GROUP BY s.id, s.code, s.name
             ORDER BY s.name
         """).fetchall()
-        if should_close:
-            managed.commit()
         return rows
     finally:
         if should_close:

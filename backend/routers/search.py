@@ -152,7 +152,7 @@ async def _fetch_items(query: str) -> list[tuple[VideoItem, str]]:
 def _library_codes(codes: list[str]) -> set[str]:
     if not codes:
         return set()
-    placeholders = ", ".join("?" for _ in codes)
+    placeholders = ", ".join("%s" for _ in codes)
     conn = _db_conn()
     try:
         rows = conn.execute(

@@ -16,8 +16,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Any
 
-import duckdb
-
 from backend.routers.auth import require_auth
 from core import get_logger
 from core.db.connection import _conn as _db_conn
@@ -29,7 +27,6 @@ router = APIRouter(prefix="/api/stars", tags=["stars"], dependencies=[Depends(re
 CODE_PATTERN = r"^[A-Za-z0-9_-]+$"
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 IMAGES_DIR = os.path.join(SCRIPT_DIR, "images")
 
@@ -92,23 +89,23 @@ def _build_stars_response() -> list[dict[str, Any]]:
         title_rows = conn.execute("""
         SELECT
             s.code,
-            COALESCE(array_agg(struct_pack(
-                code := r.code,
-                title := r.title,
-                date := IFNULL(r.release_date, ''),
-                views := IFNULL(CAST(r.views AS VARCHAR), ''),
-                likes := IFNULL(CAST(r.likes AS VARCHAR), ''),
-                resolution := IFNULL(r.resolution, ''),
-                download_url := IFNULL(r.download_url, ''),
-                cover_url := IFNULL(r.cover_url, ''),
-                cover_w := r.cover_w,
-                cover_h := r.cover_h,
-                charming_intro := IFNULL(r.charming_intro, ''),
-                magnet := IFNULL(r.magnet, ''),
-                magnet_status := IFNULL(r.magnet_status, ''),
-                user_liked := COALESCE(r.user_liked, 0)
+            COALESCE(jsonb_agg(jsonb_build_object(
+                'code', r.code,
+                'title', r.title,
+                'date', COALESCE(r.release_date, ''),
+                'views', COALESCE(r.views::text, ''),
+                'likes', COALESCE(r.likes::text, ''),
+                'resolution', COALESCE(r.resolution, ''),
+                'download_url', COALESCE(r.download_url, ''),
+                'cover_url', COALESCE(r.cover_url, ''),
+                'cover_w', r.cover_w,
+                'cover_h', r.cover_h,
+                'charming_intro', COALESCE(r.charming_intro, ''),
+                'magnet', COALESCE(r.magnet, ''),
+                'magnet_status', COALESCE(r.magnet_status, ''),
+                'user_liked', COALESCE(r.user_liked, 0)
             ) ORDER BY r.release_date_sort DESC NULLS LAST)
-            FILTER (WHERE r.code IS NOT NULL), []) AS titles
+            FILTER (WHERE r.code IS NOT NULL), '[]'::jsonb) AS titles
         FROM stars s
         LEFT JOIN titles r ON r.star_id = s.id
         GROUP BY s.id, s.code, s.name
@@ -356,7 +353,7 @@ async def delete_star(
             rows = conn.execute("""
                 SELECT magnet_hash
                 FROM titles
-                WHERE star_code = ? AND magnet_hash IS NOT NULL
+                WHERE star_code = %s AND magnet_hash IS NOT NULL
             """, [code]).fetchall()
             magnet_hashes = [h for (h,) in rows if h]
         finally:
@@ -404,7 +401,7 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
     conn = _db_conn()
     try:
         row = conn.execute(
-            "SELECT magnet, magnet_hash FROM titles WHERE code = ?",
+            "SELECT magnet, magnet_hash FROM titles WHERE code = %s",
             [code],
         ).fetchone()
         if not row:
@@ -417,10 +414,9 @@ async def like_title(request: LikeRequest, req: Request) -> LikeResponse:
     conn = _db_conn()
     try:
         conn.execute(
-            "UPDATE titles SET user_liked = ? WHERE code = ?",
+            "UPDATE titles SET user_liked = %s WHERE code = %s",
             [1 if liked else 0, code],
         )
-        conn.commit()
     finally:
         conn.close()
 

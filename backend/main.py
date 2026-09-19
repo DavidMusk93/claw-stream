@@ -18,8 +18,6 @@ import time
 import uuid
 import base64
 
-import duckdb
-
 from backend.routers import stream_router, check_router, torrents_router, cache_router, auth_router, log_router, sync_router, track_router, stars, search, test_router, events_router, magnets_router
 from backend.services.torrent_engine import TorrentEngine
 from core import get_logger, set_trace_id
@@ -88,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info("Backend starting up...")
 
     # Scale the default thread pool — most of our work is blocking file I/O
-    # (read_video_range, find_video_state, DuckDB queries, libtorrent calls).
+    # (read_video_range, find_video_state, PostgreSQL queries, libtorrent calls).
     # Default min(32, cpu+4) = 7 on a 3-core box is far too small under load.
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=32, thread_name_prefix="star-io"))
@@ -98,10 +96,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = engine
     log.info(f"TorrentEngine initialized, cache dir: {CACHE_DIR}")
 
-    # Ensure DuckDB schema is initialized (idempotent)
+    # Initialize the PostgreSQL connection pool and schema (idempotent)
     from core import db as _db
+    _db.get_pool()
     _db.init_schema()
-    log.info("DuckDB schema initialized")
+    log.info("PostgreSQL schema initialized")
 
     # Load user-liked titles into the engine protection set
     try:
@@ -137,8 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Clean up orphan torrents on startup (caused by historical bugs or interrupted deletion flows)
     try:
-        db_path = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
-        removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
+        removed = await asyncio.to_thread(engine.gc_orphaned_torrents)
         log.info(f"Startup GC removed {removed} orphan torrent(s)")
     except Exception as e:
         log.warning(f"Startup GC failed: {e}")
@@ -151,6 +149,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     shutdown_checker()
     engine.shutdown()
     log.info("TorrentEngine stopped")
+    from core import db as _db
+    _db.close_pool()
 
 
 async def _global_exception_handler(request: Request, exc: Exception):
@@ -220,8 +220,6 @@ async def health():
     return {"status": "ok"}
 
 
-DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
-
 # In-memory LRU cache: avoid repeatedly reading the same cover from disk.
 # Covers are immutable, so a modest cache dramatically reduces disk I/O.
 _cover_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
@@ -248,18 +246,23 @@ def _read_cover_from_disk(code_upper: str) -> tuple[bytes, str] | None:
 
 
 def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
-    """Synchronous function: read cover from disk first, then DuckDB, and backfill disk."""
-    # 1. Prefer disk: covers exported by scripts/export_covers.py live here.
+    """Synchronous function: read cover from disk first, then the DB, and backfill disk."""
+    # 1. Prefer disk: covers exported to images/titles/ live here.
     disk_result = _read_cover_from_disk(code_upper)
     if disk_result:
         return disk_result
 
-    # 2. Fallback to DuckDB base64 blob.
+    # 2. Fallback to the title_covers base64 blob.
     try:
         conn = _db_conn()
         try:
             row = conn.execute(
-                "SELECT cover_b64 FROM titles WHERE code = ? AND cover_b64 IS NOT NULL AND cover_b64 != '' LIMIT 1",
+                """
+                SELECT c.cover_b64 FROM title_covers c
+                JOIN titles t ON t.id = c.title_id
+                WHERE t.code = %s AND c.cover_b64 IS NOT NULL AND c.cover_b64 != ''
+                LIMIT 1
+                """,
                 (code_upper,),
             ).fetchone()
             if row and row[0]:
@@ -270,7 +273,7 @@ def _read_cover_from_db(code_upper: str) -> tuple[bytes, str] | None:
                     image_bytes = base64.b64decode(b64_data)
                     media_type = _guess_image_mime(image_bytes)
                     # Backfill disk (normalized JPEG + thumb) so subsequent
-                    # requests avoid DuckDB entirely.
+                    # requests avoid the DB entirely.
                     _crud_write_cover(code_upper, row[0])
                     return image_bytes, media_type
                 except Exception:
@@ -308,7 +311,7 @@ async def cover_image(code: str, thumb: int = 0):
 
     This is the single source of truth for cover URLs. If the normalized JPEG
     already exists on disk, redirect to `/images/titles/{code}/{code}.jpg` so
-    Caddy can serve it directly. Otherwise fall back to DuckDB, backfill disk,
+    Caddy can serve it directly. Otherwise fall back to the DB, backfill disk,
     and stream the bytes. New titles therefore never 404 even if the disk sync
     lagged or failed.
 

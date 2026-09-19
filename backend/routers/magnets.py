@@ -36,7 +36,6 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 CACHE_DIR = os.path.join(SCRIPT_DIR, "cache", "torrent")
 CHECK_WORK_DIR = os.path.join(SCRIPT_DIR, "cache", "magnet-check")
 IMAGES_DIR = os.path.join(SCRIPT_DIR, "images", "titles")
-DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 _checker: MagnetChecker | None = None
 _check_lock = asyncio.Lock()
@@ -74,11 +73,18 @@ class CheckRequest(BaseModel):
 
 
 def _candidates(item: dict[str, Any], skip_hash: str | None) -> list[dict[str, Any]]:
-    """Parse all_magnets JSON, dropping the dead primary and malformed rows."""
-    try:
-        mags = json.loads(item.get("all_magnets") or "[]")
-    except (TypeError, ValueError):
-        return []
+    """Parse all_magnets, dropping the dead primary and malformed rows.
+
+    JSONB columns come back from psycopg3 already parsed; a raw string is
+    still accepted for robustness.
+    """
+    raw = item.get("all_magnets")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    mags = raw if isinstance(raw, list) else []
     return [m for m in mags if isinstance(m, dict) and m.get("magnet") and m.get("hash") != skip_hash]
 
 
@@ -281,7 +287,7 @@ async def purge_dead(request: Request) -> dict[str, Any]:
     engine = getattr(request.app.state, "engine", None)
     if engine is not None:
         try:
-            orphans_removed = await asyncio.to_thread(engine.gc_orphaned_torrents, DB_PATH)
+            orphans_removed = await asyncio.to_thread(engine.gc_orphaned_torrents)
         except Exception:
             log.exception("gc_orphaned_torrents failed after purge")
 

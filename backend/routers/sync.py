@@ -1,7 +1,7 @@
 """backend/routers/sync.py — Actor title sync router
 
 Run scrapers.v2.tasks.sync_titles directly in the main event loop,
-coordinated with the global DuckDB serial write queue, completely eliminating cross-process / cross-thread lock conflicts.
+coordinated with the global serial DB write queue.
 
 Sync is both manual (POST /api/stars/sync) and scheduled: a background
 asyncio task re-runs it every SYNC_INTERVAL_HOURS. Every run is recorded
@@ -153,10 +153,10 @@ async def _scheduler_loop() -> None:
     delay = SYNC_INTERVAL_SEC
     try:
         runs = await db_write(db.list_sync_runs, 1)
-        if runs and runs[0]["finished_at"]:
-            from datetime import datetime
-            finished = datetime.strptime(runs[0]["finished_at"], "%Y-%m-%d %H:%M:%S").timestamp()
-            delay = max(60.0, SYNC_INTERVAL_SEC - (time.time() - finished))
+        finished_at = runs[0]["finished_at"] if runs else None
+        if finished_at:
+            # list_sync_runs returns real datetime objects (naive, server-local).
+            delay = max(60.0, SYNC_INTERVAL_SEC - (time.time() - finished_at.timestamp()))
     except Exception:
         log.exception("scheduler: failed to read last sync run")
 

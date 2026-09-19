@@ -2,7 +2,7 @@
 
 After wide-table simplification:
 - The titles table inlines magnet info directly, no separate magnets table is maintained
-- upsert_title adds star_code / star_name / magnet fields
+- Cover blobs live in the title_covers table (1:1 with titles)
 - Remove all magnets-related CRUD
 """
 
@@ -11,14 +11,14 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 import re
 from pathlib import Path
 
 from PIL import Image
+from psycopg.types.json import Jsonb
 
 from core.logger import get_logger
-from .connection import _conn, _date_to_sort
+from .connection import _conn
 from .ops_log import trace_db
 
 log = get_logger("db-crud")
@@ -130,7 +130,9 @@ def _managed_conn(conn=None):
     """Connection management helper.
 
     If an external connection is passed, returns (conn, False)—caller is not responsible for closing.
-    If not passed, creates a new connection and returns (new_conn, True)—caller must commit/close.
+    If not passed, checks out a pooled connection and returns (conn, True)—caller must close it
+    (close() returns the connection to the pool). Pool connections are autocommit, so no
+    commit() is needed for single statements.
     """
     if conn is not None:
         return conn, False
@@ -142,28 +144,26 @@ def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None
     """Insert or update star info, returns id"""
     managed, should_close = _managed_conn(conn)
     try:
-        row = managed.execute("SELECT id FROM stars WHERE name = ?", (name,)).fetchone()
+        row = managed.execute("SELECT id FROM stars WHERE name = %s", (name,)).fetchone()
         if row:
             managed.execute("""
                 UPDATE stars SET
-                    jp_name = ?,
-                    handle = ?,
-                    code = ?,
-                    type = ?,
-                    note = ?,
+                    jp_name = %s,
+                    handle = %s,
+                    code = %s,
+                    type = %s,
+                    note = %s,
                     updated_at = now()
-                WHERE id = ?
+                WHERE id = %s
             """, (jp_name, handle, code, type, note, row[0]))
             result = row[0]
         else:
-            managed.execute("""
+            row = managed.execute("""
                 INSERT INTO stars (name, jp_name, handle, code, type, note)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (name, jp_name, handle, code, type, note))
-            row = managed.execute("SELECT id FROM stars WHERE name = ?", (name,)).fetchone()
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (name, jp_name, handle, code, type, note)).fetchone()
             result = row[0]
-        if should_close:
-            managed.commit()
         return result
     finally:
         if should_close:
@@ -172,7 +172,7 @@ def upsert_star(name, jp_name=None, handle=None, code=None, type=None, note=None
 
 @trace_db
 def upsert_stars(star_rows, conn=None):
-    """Batch upsert stars, returns {code: id}. Single connection + commit."""
+    """Batch upsert stars, returns {code: id}. Single pooled connection."""
     managed, should_close = _managed_conn(conn)
     try:
         mapping = {}
@@ -186,24 +186,7 @@ def upsert_stars(star_rows, conn=None):
                 note=row.get("note"),
                 conn=managed,
             )
-        if should_close:
-            managed.commit()
         return mapping
-    finally:
-        if should_close:
-            managed.close()
-
-
-@trace_db
-def title_exists(star_id, code, conn=None):
-    """Check if title already exists"""
-    managed, should_close = _managed_conn(conn)
-    try:
-        row = managed.execute(
-            "SELECT 1 FROM titles WHERE star_id = ? AND code = ?",
-            (star_id, code)
-        ).fetchone()
-        return row is not None
     finally:
         if should_close:
             managed.close()
@@ -225,6 +208,17 @@ def load_all_title_codes(conn=None) -> set[tuple[int, str]]:
 # makers hhd800 never covers (FALENO/DAHLIA max out at 4K uploads, VR tops at
 # 8KVR) must not be re-backfilled forever.
 HD_RESOLUTIONS = ("[FHD]", "[FHDC]", "[8KVR]", "[4KVR]", "[4K]")
+
+
+def _parse_json_column(value):
+    """Normalize a JSON/JSONB column value: psycopg3 returns parsed objects
+    for JSONB, while older call sites/tests may still hand us a raw string."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value
 
 
 @trace_db
@@ -254,11 +248,10 @@ def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
             "SELECT star_id, code, all_magnets FROM titles WHERE all_magnets IS NOT NULL"
         ).fetchall()
         for star_id, code, all_magnets in magnet_rows:
-            try:
-                mags = json.loads(all_magnets)
-            except (TypeError, ValueError):
+            mags = _parse_json_column(all_magnets)
+            if not isinstance(mags, list):
                 continue
-            if not any(m.get("resolution") in HD_RESOLUTIONS for m in mags):
+            if not any(isinstance(m, dict) and m.get("resolution") in HD_RESOLUTIONS for m in mags):
                 result.add((star_id, code))
         return result
     finally:
@@ -270,8 +263,8 @@ def load_title_codes_missing_metadata(conn=None) -> set[tuple[int, str]]:
 def load_title_codes_missing_cover(conn=None) -> set[tuple[int, str]]:
     """Load (star_id, code) for titles with no usable cover.
 
-    Uses cover_w IS NULL as a cheap proxy — scanning the cover_b64 column
-    itself pulls ~500MB+ of blob data into the buffer manager on this table.
+    Uses cover_w IS NULL as a cheap proxy — cover blobs live in the separate
+    title_covers table and are never scanned here.
     """
     managed, should_close = _managed_conn(conn)
     try:
@@ -285,107 +278,6 @@ def load_title_codes_missing_cover(conn=None) -> set[tuple[int, str]]:
 
 
 @trace_db
-def upsert_title(
-    star_id,
-    code,
-    title=None,
-    release_date=None,
-    views=None,
-    likes=None,
-    resolution=None,
-    download_url=None,
-    cover_url=None,
-    cover_b64=None,
-    cover_path=None,
-    star_code=None,
-    star_name=None,
-    magnet=None,
-    magnet_hash=None,
-    all_magnets=None,
-    conn=None,
-):
-    """Insert or update title info.
-
-    In wide-table mode, magnet info is written directly along with the title,
-    all candidates stored via the all_magnets JSON column, magnet/magnet_hash stores the primary.
-    """
-    release_date_sort = _date_to_sort(release_date)
-    cover_dims = _cover_dims_from_b64(cover_b64)
-    cover_w = cover_dims[0] if cover_dims else None
-    cover_h = cover_dims[1] if cover_dims else None
-    managed, should_close = _managed_conn(conn)
-    try:
-        row = managed.execute(
-            "SELECT id, cover_b64 FROM titles WHERE star_id = ? AND code = ?",
-            (star_id, code)
-        ).fetchone()
-        if row:
-            title_id, existing_cover = row[0], row[1]
-            # Preserve existing cover_b64 (do not overwrite during incremental refresh)
-            if existing_cover and cover_b64 is None:
-                cover_b64 = existing_cover
-                if cover_dims is None:
-                    cover_dims = _cover_dims_from_b64(existing_cover)
-                    cover_w = cover_dims[0] if cover_dims else None
-                    cover_h = cover_dims[1] if cover_dims else None
-            managed.execute("""
-                UPDATE titles SET
-                    title = ?,
-                    release_date = ?,
-                    release_date_sort = ?,
-                    views = ?,
-                    likes = ?,
-                    resolution = ?,
-                    download_url = ?,
-                    cover_url = ?,
-                    cover_b64 = ?,
-                    cover_path = ?,
-                    star_code = ?,
-                    star_name = ?,
-                    magnet = COALESCE(?, magnet),
-                    magnet_hash = COALESCE(?, magnet_hash),
-                    all_magnets = COALESCE(?, all_magnets),
-                    cover_w = COALESCE(?, cover_w),
-                    cover_h = COALESCE(?, cover_h),
-                    updated_at = now()
-                WHERE id = ?
-            """, (
-                title, release_date, release_date_sort, views, likes, resolution,
-                download_url, cover_url, cover_b64, cover_path,
-                star_code, star_name, magnet, magnet_hash, all_magnets,
-                cover_w, cover_h, title_id
-            ))
-            result = title_id
-        else:
-            managed.execute("""
-                INSERT INTO titles (star_id, code, title, release_date, release_date_sort,
-                                   views, likes, resolution, download_url, cover_url,
-                                   cover_b64, cover_path, star_code, star_name,
-                                   magnet, magnet_hash, all_magnets, cover_w, cover_h)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                star_id, code, title, release_date, release_date_sort, views, likes,
-                resolution, download_url, cover_url, cover_b64, cover_path,
-                star_code, star_name, magnet, magnet_hash,
-                json.dumps(all_magnets) if all_magnets is not None else None,
-                cover_w, cover_h,
-            ))
-            row = managed.execute(
-                "SELECT id FROM titles WHERE star_id = ? AND code = ?",
-                (star_id, code)
-            ).fetchone()
-            result = row[0]
-        if should_close:
-            managed.commit()
-        # Keep disk cache in sync so new/edited covers are served immediately.
-        _write_cover_to_disk(code, cover_b64)
-        return result
-    finally:
-        if should_close:
-            managed.close()
-
-
-@trace_db
 def delete_star_by_code(code: str, conn=None) -> bool:
     """Delete an actor and all associated data (titles, social_posts).
 
@@ -393,17 +285,16 @@ def delete_star_by_code(code: str, conn=None) -> bool:
     """
     managed, should_close = _managed_conn(conn)
     try:
-        row = managed.execute("SELECT id FROM stars WHERE code = ?", (code,)).fetchone()
+        row = managed.execute("SELECT id FROM stars WHERE code = %s", (code,)).fetchone()
         if not row:
             return False
         star_id = row[0]
 
         # Delete in foreign-key dependency order: social_posts → titles → stars
-        managed.execute("DELETE FROM social_posts WHERE star_id = ?", (star_id,))
-        managed.execute("DELETE FROM titles WHERE star_id = ?", (star_id,))
-        managed.execute("DELETE FROM stars WHERE id = ?", (star_id,))
-        if should_close:
-            managed.commit()
+        # (title_covers rows cascade with their titles)
+        managed.execute("DELETE FROM social_posts WHERE star_id = %s", (star_id,))
+        managed.execute("DELETE FROM titles WHERE star_id = %s", (star_id,))
+        managed.execute("DELETE FROM stars WHERE id = %s", (star_id,))
         return True
     finally:
         if should_close:
@@ -417,12 +308,9 @@ def insert_sync_run(trigger: str, conn=None) -> int:
     """Start a sync run record, returns its id."""
     managed, should_close = _managed_conn(conn)
     try:
-        managed.execute(
-            "INSERT INTO sync_runs (trigger) VALUES (?)", (trigger,)
-        )
-        row = managed.execute("SELECT max(id) FROM sync_runs").fetchone()
-        if should_close:
-            managed.commit()
+        row = managed.execute(
+            "INSERT INTO sync_runs (trigger) VALUES (%s) RETURNING id", (trigger,)
+        ).fetchone()
         return row[0]
     finally:
         if should_close:
@@ -445,14 +333,12 @@ def finish_sync_run(
         managed.execute(
             """
             UPDATE sync_runs SET
-                status = ?, finished_at = now(), total_new = ?,
-                total_updated = ?, failed_count = ?, error = ?
-            WHERE id = ?
+                status = %s, finished_at = now(), total_new = %s,
+                total_updated = %s, failed_count = %s, error = %s
+            WHERE id = %s
             """,
             (status, total_new, total_updated, failed_count, error, run_id),
         )
-        if should_close:
-            managed.commit()
     finally:
         if should_close:
             managed.close()
@@ -460,16 +346,14 @@ def finish_sync_run(
 
 @trace_db
 def list_sync_runs(limit: int = 10, conn=None) -> list[dict]:
-    """Recent sync runs, newest first."""
+    """Recent sync runs, newest first. Timestamps are real datetime objects."""
     managed, should_close = _managed_conn(conn)
     try:
         rows = managed.execute(
             """
-            SELECT id, trigger, status,
-                   strftime(started_at, '%Y-%m-%d %H:%M:%S'),
-                   strftime(finished_at, '%Y-%m-%d %H:%M:%S'),
+            SELECT id, trigger, status, started_at, finished_at,
                    total_new, total_updated, failed_count, error
-            FROM sync_runs ORDER BY id DESC LIMIT ?
+            FROM sync_runs ORDER BY id DESC LIMIT %s
             """,
             (limit,),
         ).fetchall()
@@ -496,20 +380,19 @@ def insert_user_events(events: list[dict], conn=None) -> int:
         return 0
     managed, should_close = _managed_conn(conn)
     try:
-        managed.executemany(
-            "INSERT INTO user_events (event, code, star_code, meta) VALUES (?, ?, ?, ?)",
-            [
-                (
-                    str(e.get("event", ""))[:64],
-                    (e.get("code") or None),
-                    (e.get("star_code") or None),
-                    json.dumps(e.get("meta")) if e.get("meta") is not None else None,
-                )
-                for e in events[:100]
-            ],
-        )
-        if should_close:
-            managed.commit()
+        with managed.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO user_events (event, code, star_code, meta) VALUES (%s, %s, %s, %s)",
+                [
+                    (
+                        str(e.get("event", ""))[:64],
+                        (e.get("code") or None),
+                        (e.get("star_code") or None),
+                        Jsonb(e.get("meta")) if e.get("meta") is not None else None,
+                    )
+                    for e in events[:100]
+                ],
+            )
         return min(len(events), 100)
     finally:
         if should_close:
@@ -555,19 +438,17 @@ def load_titles_for_magnet_check(scope: str = "changed", conn=None) -> list[dict
 
 @trace_db
 def update_magnet_check_ok(title_id: int, checked_hash: str, conn=None) -> None:
-    """Mark a title's primary magnet alive. Never touches cover_b64."""
+    """Mark a title's primary magnet alive."""
     managed, should_close = _managed_conn(conn)
     try:
         managed.execute(
             """
             UPDATE titles SET magnet_status = 'ok', magnet_checked_at = now(),
-                magnet_checked_hash = ?, updated_at = now()
-            WHERE id = ?
+                magnet_checked_hash = %s, updated_at = now()
+            WHERE id = %s
             """,
             (checked_hash, title_id),
         )
-        if should_close:
-            managed.commit()
     finally:
         if should_close:
             managed.close()
@@ -581,13 +462,11 @@ def update_magnet_check_dead(title_id: int, checked_hash: str | None, conn=None)
         managed.execute(
             """
             UPDATE titles SET magnet_status = 'dead', magnet_checked_at = now(),
-                magnet_checked_hash = ?, updated_at = now()
-            WHERE id = ?
+                magnet_checked_hash = %s, updated_at = now()
+            WHERE id = %s
             """,
             (checked_hash, title_id),
         )
-        if should_close:
-            managed.commit()
     finally:
         if should_close:
             managed.close()
@@ -600,15 +479,13 @@ def swap_primary_magnet(title_id: int, new_magnet: str, new_hash: str, conn=None
     try:
         managed.execute(
             """
-            UPDATE titles SET magnet = ?, magnet_hash = ?,
+            UPDATE titles SET magnet = %s, magnet_hash = %s,
                 magnet_status = 'ok', magnet_checked_at = now(),
-                magnet_checked_hash = ?, updated_at = now()
-            WHERE id = ?
+                magnet_checked_hash = %s, updated_at = now()
+            WHERE id = %s
             """,
             (new_magnet, new_hash, new_hash, title_id),
         )
-        if should_close:
-            managed.commit()
     finally:
         if should_close:
             managed.close()
@@ -638,10 +515,8 @@ def delete_titles_by_ids(ids: list[int], conn=None) -> int:
         return 0
     managed, should_close = _managed_conn(conn)
     try:
-        placeholders = ", ".join(["?"] * len(ids))
+        placeholders = ", ".join(["%s"] * len(ids))
         managed.execute(f"DELETE FROM titles WHERE id IN ({placeholders})", ids)
-        if should_close:
-            managed.commit()
         return len(ids)
     finally:
         if should_close:

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import re
 import time
 
-import duckdb
 from fastapi import APIRouter, Request, Depends, HTTPException, Path
 from typing import Any
 
@@ -19,9 +16,6 @@ router = APIRouter(prefix="/torrent", tags=["torrents"], dependencies=[Depends(r
 log = get_logger("torrents-router")
 
 HASH_PATTERN = r"^[a-fA-F0-9]{40}$"
-
-SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(SCRIPT_DIR, "data", "claw.duckdb")
 
 
 def _is_primary_title(work_code: str) -> bool:
@@ -41,7 +35,7 @@ def _is_primary_title(work_code: str) -> bool:
                         ) AS rn
                     FROM titles
                 ) t ON t.star_id = s.id AND t.rn = 1
-                WHERE t.code = ?
+                WHERE t.code = %s
             """, [work_code.upper()]).fetchone()
             return row is not None
         finally:
@@ -62,19 +56,14 @@ def _resolve_magnet(magnet: str) -> str:
     try:
         conn = _db_conn()
         try:
-            # Wide table: look up matching hash from titles.all_magnets JSON
+            # Wide table: look up the candidate matching this hash in titles.all_magnets (JSONB)
             row = conn.execute("""
-                SELECT json_extract_string(
-                    list_filter(
-                        cast(all_magnets as JSON[]),
-                        x -> json_extract_string(x, '$.hash') = ?
-                    )[1],
-                    '$.magnet'
-                ) as magnet
-                FROM titles
-                WHERE magnet_hash = ? OR json_contains(all_magnets, json_object('hash', ?))
+                SELECT m->>'magnet' AS magnet
+                FROM titles t
+                CROSS JOIN LATERAL jsonb_array_elements(t.all_magnets) m
+                WHERE m->>'hash' = %s
                 LIMIT 1
-            """, [hash_str, hash_str, hash_str]).fetchone()
+            """, [hash_str]).fetchone()
             if row and row[0] and "tr=" in row[0]:
                 full = row[0].replace("&amp;", "&")
                 return full

@@ -4,8 +4,6 @@ import asyncio
 from fastapi import APIRouter, Request, Depends, HTTPException, Path
 from typing import Any
 
-import os
-
 from backend.models import CacheMetrics
 from backend.routers.auth import require_auth
 from backend.services.torrent_engine import format_size
@@ -55,9 +53,7 @@ async def delete_cache(
 @router.post("/gc-orphans")
 async def gc_orphans(engine: Any = Depends(get_engine)):
     """Manually trigger orphan torrent GC: clean up torrents that exist on disk but have no corresponding record in the database."""
-    script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    db_path = os.path.join(script_dir, "data", "claw.duckdb")
-    removed = await asyncio.to_thread(engine.gc_orphaned_torrents, db_path)
+    removed = await asyncio.to_thread(engine.gc_orphaned_torrents)
     await publish_event("cache.update", {"action": "gc", "removed": removed})
     return {"removed": removed}
 

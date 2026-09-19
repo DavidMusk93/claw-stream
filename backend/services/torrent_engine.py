@@ -9,7 +9,6 @@ import threading
 import time
 from typing import Any
 
-import duckdb
 import libtorrent as lt
 
 from core import get_logger
@@ -1739,7 +1738,7 @@ class TorrentEngine:
         self._emit_event("cache.update", {"action": "remove", "hash": hash_str})
         return True
 
-    def gc_orphaned_torrents(self, db_path: str) -> int:
+    def gc_orphaned_torrents(self) -> int:
         """Clean up orphaned torrents that exist on disk but have no matching title in database.
 
         Returns number of directories actually cleaned up.
@@ -1757,9 +1756,8 @@ class TorrentEngine:
 
         db_hashes: set[str] = set()
         try:
-            conn = duckdb.connect(db_path)
-            from core.db.connection import _apply_pragmas
-            _apply_pragmas(conn)
+            from core.db.connection import _conn
+            conn = _conn()
             try:
                 rows = conn.execute(
                     "SELECT DISTINCT magnet_hash FROM titles WHERE magnet_hash IS NOT NULL"

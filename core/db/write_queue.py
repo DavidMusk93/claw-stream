@@ -1,7 +1,10 @@
-"""core/db/write_queue.py — In-process DuckDB serial write queue
+"""core/db/write_queue.py — In-process serial DB write queue
 
-All write operations are serially executed by a single worker coroutine, avoiding
-contention from multiple coroutines opening write connections simultaneously within the same process, and completely eliminating cross-process lock conflicts.
+All write operations are serially executed by a single worker coroutine. This
+dates from the DuckDB single-writer era; PostgreSQL supports concurrent writers,
+but the queue API has many call sites, and serialization is harmless at this
+scale, so the API is kept unchanged. Internally each write now checks out a
+connection from the shared pool (core.db.connection).
 """
 
 from __future__ import annotations
@@ -16,14 +19,14 @@ from core.logger import get_logger
 log = get_logger("db-write-queue")
 
 
-class DuckDBWriteQueue:
-    """Serialize all DuckDB write operations within the same process.
+class DBWriteQueue:
+    """Serialize all DB write operations within the same process.
 
     Uses asyncio.Queue + single worker coroutine, all write requests are queued and executed,
     returning results to the caller via Future.
 
-    Note: DuckDB single-file database can only have one write connection holding the lock at a time,
-    so the worker does not maintain a persistent connection; instead each called function manages its own connection.
+    The worker does not maintain a persistent connection; instead each called
+    function checks out a pooled connection (core.db.connection._conn).
     Batch scenarios should reuse connections inside the function (e.g., TitleSyncSink.write_batch).
     """
 
@@ -40,24 +43,24 @@ class DuckDBWriteQueue:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError as exc:
-            raise RuntimeError("DuckDB write queue must be started inside a running event loop") from exc
+            raise RuntimeError("DB write queue must be started inside a running event loop") from exc
         self._queue = asyncio.Queue(maxsize=self._maxsize)
         self._worker_task = loop.create_task(self._worker())
         self._worker_task.add_done_callback(self._on_worker_done)
         self._started = True
-        log.info("DuckDB write queue started")
+        log.info("DB write queue started")
 
     def _on_worker_done(self, task: asyncio.Task) -> None:
         """Reset state if the worker exits unexpectedly."""
         if not task.cancelled() and task.exception() is not None:
-            log.error("DuckDB write queue worker died", exc_info=task.exception())
+            log.error("DB write queue worker died", exc_info=task.exception())
         self._started = False
         self._worker_task = None
 
     async def _worker(self) -> None:
         """Single worker: dequeue and execute write operations in a thread pool.
 
-        Uses loop.run_in_executor to offload synchronous DuckDB I/O to an independent thread,
+        Uses loop.run_in_executor to offload synchronous DB I/O to an independent thread,
         avoiding blocking the main event loop (especially during intensive libtorrent I/O).
         """
         loop = asyncio.get_running_loop()
@@ -108,14 +111,14 @@ class DuckDBWriteQueue:
             await self._worker_task
         self._started = False
         self._worker_task = None
-        log.info("DuckDB write queue stopped")
+        log.info("DB write queue stopped")
 
 
 # Global singleton (process-level)
-_default_queue = DuckDBWriteQueue()
+_default_queue = DBWriteQueue()
 
 
-def get_queue() -> DuckDBWriteQueue:
+def get_queue() -> DBWriteQueue:
     return _default_queue
 
 

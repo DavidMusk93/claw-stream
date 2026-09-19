@@ -2,13 +2,15 @@
 
 Write extraction results directly to the titles wide table via UPSERT;
 all works of one star need only one SQL execution, completely eliminating serial queue bottleneck.
+Cover blobs go to the separate title_covers table (1:1 with titles).
 """
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Protocol
+
+from psycopg.types.json import Jsonb
 
 from core import db
 from core.db.write_queue import db_write
@@ -26,7 +28,7 @@ class Sink(Protocol):
 
 
 class TitleSyncSink:
-    """Sync work data to DuckDB (wide-table UPSERT mode)
+    """Sync work data to PostgreSQL (wide-table UPSERT mode)
 
     Batch UPSERT per star, no need to preload existing_codes,
     no need to judge new/old, no serial write queue round-trips.
@@ -47,7 +49,7 @@ class TitleSyncSink:
         """Batch UPSERT all titles for this star in one SQL.
 
         Build multi-row VALUES + ON CONFLICT DO UPDATE,
-        leveraging DuckDB native UPSERT capability, no manual insert/update judgment needed.
+        leveraging PostgreSQL native UPSERT capability, no manual insert/update judgment needed.
         """
         import time as _time
 
@@ -103,72 +105,84 @@ class TitleSyncSink:
                 "cover_h": cover_dims[1] if cover_dims else None,
                 "magnet": primary.magnet if primary else None,
                 "magnet_hash": primary_hash,
-                "all_magnets": json.dumps(all_magnets) if all_magnets else None,
+                "all_magnets": Jsonb(all_magnets) if all_magnets else None,
             })
 
         def _upsert(conn=None) -> dict[str, int]:
             managed = conn if conn is not None else db._conn()
             should_close = conn is None
             try:
-                # DuckDB UPSERT: INSERT ... ON CONFLICT DO UPDATE
-                placeholders = ", ".join([
-                    "(" + ", ".join(["?"] * 17) + ")"
-                    for _ in values
-                ])
-                flat = []
-                for v in values:
-                    flat.extend([
-                        v["star_id"], v["star_code"], v["star_name"],
-                        v["code"], v["title"], v["release_date"], v["release_date_sort"],
-                        v["views"], v["likes"], v["resolution"],
-                        v["cover_url"], v["cover_b64"], v["cover_w"], v["cover_h"],
-                        v["magnet"], v["magnet_hash"], v["all_magnets"],
+                # Pool connections are autocommit: wrap the multi-statement
+                # upsert in an explicit transaction so rows + covers land atomically.
+                with managed.transaction():
+                    # INSERT ... ON CONFLICT DO UPDATE, RETURNING id+code for the
+                    # cover upsert below (works for both inserted and updated rows).
+                    placeholders = ", ".join([
+                        "(" + ", ".join(["%s"] * 16) + ")"
+                        for _ in values
                     ])
+                    flat = []
+                    for v in values:
+                        flat.extend([
+                            v["star_id"], v["star_code"], v["star_name"],
+                            v["code"], v["title"], v["release_date"], v["release_date_sort"],
+                            v["views"], v["likes"], v["resolution"],
+                            v["cover_url"], v["cover_w"], v["cover_h"],
+                            v["magnet"], v["magnet_hash"], v["all_magnets"],
+                        ])
 
-                # ON CONFLICT only updates metadata. cover_b64 is deliberately
-                # excluded from the SET clause: the titles table carries large
-                # base64 blobs inline, so rewriting that column on every
-                # conflict forces DuckDB to churn blob row groups (multi-GB
-                # memory, MVCC bloat) — and an empty EXCLUDED.cover_b64 would
-                # wipe an existing cover. Fresh covers are applied separately
-                # below, only for rows that actually have one.
-                managed.execute(
-                    f"""
-                    INSERT INTO titles (
-                        star_id, star_code, star_name, code, title,
-                        release_date, release_date_sort, views, likes,
-                        resolution, cover_url, cover_b64, cover_w, cover_h,
-                        magnet, magnet_hash, all_magnets
-                    )
-                    VALUES {placeholders}
-                    ON CONFLICT (star_id, code) DO UPDATE SET
-                        star_code = EXCLUDED.star_code,
-                        star_name = EXCLUDED.star_name,
-                        title = EXCLUDED.title,
-                        release_date = EXCLUDED.release_date,
-                        release_date_sort = EXCLUDED.release_date_sort,
-                        views = EXCLUDED.views,
-                        likes = EXCLUDED.likes,
-                        resolution = EXCLUDED.resolution,
-                        cover_url = EXCLUDED.cover_url,
-                        magnet = EXCLUDED.magnet,
-                        magnet_hash = EXCLUDED.magnet_hash,
-                        all_magnets = EXCLUDED.all_magnets,
-                        updated_at = now()
-                    """,
-                    flat,
-                )
+                    # ON CONFLICT only updates metadata. Covers are deliberately
+                    # kept out of this statement: they live in the title_covers
+                    # table, and an empty fresh cover must never wipe an existing
+                    # one. Fresh covers are applied separately below, only for
+                    # rows that actually have one.
+                    rows = managed.execute(
+                        f"""
+                        INSERT INTO titles (
+                            star_id, star_code, star_name, code, title,
+                            release_date, release_date_sort, views, likes,
+                            resolution, cover_url, cover_w, cover_h,
+                            magnet, magnet_hash, all_magnets
+                        )
+                        VALUES {placeholders}
+                        ON CONFLICT (star_id, code) DO UPDATE SET
+                            star_code = EXCLUDED.star_code,
+                            star_name = EXCLUDED.star_name,
+                            title = EXCLUDED.title,
+                            release_date = EXCLUDED.release_date,
+                            release_date_sort = EXCLUDED.release_date_sort,
+                            views = EXCLUDED.views,
+                            likes = EXCLUDED.likes,
+                            resolution = EXCLUDED.resolution,
+                            cover_url = EXCLUDED.cover_url,
+                            magnet = EXCLUDED.magnet,
+                            magnet_hash = EXCLUDED.magnet_hash,
+                            all_magnets = EXCLUDED.all_magnets,
+                            updated_at = now()
+                        RETURNING id, code
+                        """,
+                        flat,
+                    ).fetchall()
+                    id_by_code = {row[1]: row[0] for row in rows}
 
-                new_covers = [
-                    (v["cover_b64"], v["cover_w"], v["cover_h"], v["star_id"], v["code"])
-                    for v in values if v["cover_b64"]
-                ]
-                if new_covers:
-                    managed.executemany(
-                        "UPDATE titles SET cover_b64 = ?, cover_w = ?, cover_h = ?,"
-                        " updated_at = now() WHERE star_id = ? AND code = ?",
-                        new_covers,
-                    )
+                    new_covers = [v for v in values if v["cover_b64"]]
+                    if new_covers:
+                        with managed.cursor() as cur:
+                            cur.executemany(
+                                """
+                                INSERT INTO title_covers (title_id, cover_b64)
+                                VALUES (%s, %s)
+                                ON CONFLICT (title_id) DO UPDATE SET
+                                    cover_b64 = EXCLUDED.cover_b64,
+                                    updated_at = now()
+                                """,
+                                [(id_by_code[v["code"]], v["cover_b64"]) for v in new_covers],
+                            )
+                            cur.executemany(
+                                "UPDATE titles SET cover_w = %s, cover_h = %s,"
+                                " updated_at = now() WHERE id = %s",
+                                [(v["cover_w"], v["cover_h"], id_by_code[v["code"]]) for v in new_covers],
+                            )
 
                 # Export fresh covers to disk (full + thumb) so the frontend
                 # gets direct static URLs right away instead of going through
@@ -178,13 +192,10 @@ class TitleSyncSink:
                         db._write_cover_to_disk(v["code"], v["cover_b64"])
 
                 # Count insert vs update this round
-                # DuckDB has no built-in returning/row_count to distinguish insert/update;
-                # we approximate with new_codes (known new work count)
+                # We approximate with new_codes (known new work count)
                 new_count = len(new_codes)
                 updated_count = len(values) - new_count
 
-                if should_close:
-                    managed.commit()
                 return {
                     "new": max(0, new_count),
                     "updated": max(0, updated_count),
