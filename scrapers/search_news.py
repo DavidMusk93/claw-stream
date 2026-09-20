@@ -26,4 +26,13 @@ __all__ = [
 
 if __name__ == "__main__":
     config = sys.argv[1] if len(sys.argv) > 1 else "config.json"
-    asyncio.run(run(config))
+
+    async def _main() -> None:
+        outcome = await run(config)
+        # Await the deferred RSS enrichment — asyncio.run cancels pending
+        # tasks on loop close.
+        rss_task = outcome.get("rss_task")
+        if rss_task is not None:
+            await rss_task
+
+    asyncio.run(_main())

@@ -24,6 +24,7 @@ import pytest
 from scrapers.v2.extractors import SukebeiRssExtractor
 from scrapers.v2.tasks import sync_titles
 from scrapers.v2.tasks.sync_titles import (
+    SukebeiRateLimiter,
     fetch_star,
     fetch_star_page,
     fetch_star_rss,
@@ -36,8 +37,9 @@ from scrapers.v2.filters import hidden_reason
 
 @pytest.fixture(autouse=True)
 def _no_request_pacing(monkeypatch):
-    """Tests must not pay the real sukebei request-pacing delay."""
-    monkeypatch.setattr(sync_titles, "RSS_REQUEST_INTERVAL", 0.0)
+    """Tests must not pay the real sukebei rate-limiting intervals."""
+    monkeypatch.setattr(sync_titles, "RSS_BASE_INTERVAL", 0.0)
+    monkeypatch.setattr(sync_titles, "RSS_MAX_INTERVAL", 0.0)
 
 
 # ── RSS fixtures ───────────────────────────────────────────────────────
@@ -90,9 +92,7 @@ async def test_fetch_star_rss_uses_http():
     mock_fetcher.fetch = AsyncMock(return_value=_FULL_RSS)
 
     star = StarConfig(name="Test Star", code="TEST-001")
-    sem = asyncio.Semaphore(1)
-
-    result = await fetch_star_rss(mock_fetcher, star, sem)
+    result = await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
     assert len(result) == 1
     assert result[0].code == "TEST-001"
     mock_fetcher.fetch.assert_called_once_with(_rss_url("Test Star"))
@@ -114,7 +114,7 @@ async def test_fetch_star_rss_retries_truncated_body(monkeypatch):
     )
 
     star = StarConfig(name="Test Star", code="TEST-001")
-    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    result = await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
 
     assert len(result) == 1
     assert mock_fetcher.fetch.call_count == 2
@@ -129,7 +129,7 @@ async def test_fetch_star_rss_raises_on_persistent_truncation(monkeypatch):
 
     star = StarConfig(name="Test Star", code="TEST-001")
     with pytest.raises(sync_titles.IncompletePageError):
-        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+        await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
     assert mock_fetcher.fetch.call_count == sync_titles.MAX_FETCH_ATTEMPTS
 
 
@@ -142,7 +142,7 @@ async def test_fetch_star_rss_raises_when_all_queries_empty(monkeypatch):
 
     star = StarConfig(name="NoHit Star", code="TEST-001", jp="NoHit")
     with pytest.raises(sync_titles.IncompletePageError):
-        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+        await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
     # 2 query variants × MAX_FETCH_ATTEMPTS
     assert mock_fetcher.fetch.call_count == 2 * sync_titles.MAX_FETCH_ATTEMPTS
 
@@ -160,7 +160,7 @@ async def test_fetch_star_rss_query_fallback_to_jp():
     mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
 
     star = StarConfig(name="Test Star", code="TEST-001", jp="TestStar")
-    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    result = await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
 
     assert len(result) == 1
     assert result[0].code == "TEST-001"
@@ -189,7 +189,7 @@ async def test_fetch_star_rss_unions_all_query_variants():
     mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
 
     star = StarConfig(name="Test Star", code="TEST-001", jp="テスト星")
-    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    result = await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
 
     by_code = {it.code: it for it in result}
     assert set(by_code) == {"TEST-001", "TEST-002"}
@@ -205,7 +205,7 @@ async def test_fetch_star_rss_sync_query_takes_precedence():
     mock_fetcher.fetch = AsyncMock(return_value=_FULL_RSS)
 
     star = StarConfig(name="Test Star", code="TEST-001", sync_query="Test Star")
-    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    result = await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
 
     assert len(result) == 1
     mock_fetcher.fetch.assert_called_once_with(_rss_url("Test Star"))
@@ -221,12 +221,14 @@ async def test_fetch_star_rss_raises_on_fetch_failure(monkeypatch):
     star = StarConfig(name="Test Star", code="TEST-001")
 
     with pytest.raises(TimeoutError):
-        await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+        await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
 
 
 @pytest.mark.asyncio
 async def test_fetch_star_rss_backs_off_on_429(monkeypatch):
-    """HTTP 429 from sukebei triggers a long back-off, then the retry succeeds."""
+    """HTTP 429 from sukebei backs off the rate limiter, then the retry succeeds."""
+    monkeypatch.setattr(sync_titles, "RSS_BASE_INTERVAL", 1.0)
+    monkeypatch.setattr(sync_titles, "RSS_MAX_INTERVAL", 30.0)
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     monkeypatch.setattr(sync_titles, "RATE_LIMIT_RETRY_DELAY", 0.0)
     req = httpx.Request("GET", "https://x.test")
@@ -236,11 +238,70 @@ async def test_fetch_star_rss_backs_off_on_429(monkeypatch):
     mock_fetcher = AsyncMock()
     mock_fetcher.fetch = AsyncMock(side_effect=[err, _FULL_RSS])
 
+    limiter = SukebeiRateLimiter()
     star = StarConfig(name="Test Star", code="TEST-001")
-    result = await fetch_star_rss(mock_fetcher, star, asyncio.Semaphore(1))
+    result = await fetch_star_rss(mock_fetcher, star, limiter)
 
     assert len(result) == 1
     assert mock_fetcher.fetch.call_count == 2
+    # 429 doubled the interval (1.0 → 2.0); the successful retry then
+    # decayed it ×0.75 → 1.5.
+    assert limiter.interval == 1.5
+
+
+# ── SukebeiRateLimiter unit tests ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_enforces_global_interval(monkeypatch):
+    """Two consecutive acquire() calls are spaced by the (patched) interval."""
+    monkeypatch.setattr(sync_titles, "RSS_BASE_INTERVAL", 0.2)
+    limiter = SukebeiRateLimiter()
+
+    t0 = time.monotonic()
+    await limiter.acquire()
+    await limiter.acquire()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed >= 0.19  # small tolerance for monotonic jitter
+
+
+def test_rate_limiter_backoff_doubles_and_caps(monkeypatch):
+    monkeypatch.setattr(sync_titles, "RSS_BASE_INTERVAL", 1.0)
+    monkeypatch.setattr(sync_titles, "RSS_MAX_INTERVAL", 4.0)
+    limiter = SukebeiRateLimiter()
+
+    limiter.backoff()
+    assert limiter.interval == 2.0
+    limiter.backoff()
+    assert limiter.interval == 4.0
+    limiter.backoff()  # capped
+    assert limiter.interval == 4.0
+
+
+def test_rate_limiter_softblock_streak_triggers_backoff(monkeypatch):
+    """N consecutive 0-raw-item responses = soft block: back off once, re-arm."""
+    monkeypatch.setattr(sync_titles, "RSS_BASE_INTERVAL", 1.0)
+    monkeypatch.setattr(sync_titles, "RSS_MAX_INTERVAL", 30.0)
+    monkeypatch.setattr(sync_titles, "RSS_SOFTBLOCK_THRESHOLD", 3)
+    limiter = SukebeiRateLimiter()
+
+    limiter.note_response(0)
+    limiter.note_response(0)
+    assert limiter.interval == 1.0  # below threshold: no backoff
+    limiter.note_response(0)  # streak hits threshold
+    assert limiter.interval == 2.0
+
+    # Streak re-armed: two more zeros must not back off again.
+    limiter.note_response(0)
+    limiter.note_response(0)
+    assert limiter.interval == 2.0
+
+    # A healthy response decays the interval toward the floor.
+    limiter.note_response(5)
+    assert limiter.interval == 1.5
+    limiter.note_response(5)
+    assert limiter.interval == 1.125
 
 
 # ── SukebeiRssExtractor unit tests ─────────────────────────────────────
@@ -511,18 +572,24 @@ def _write_config(tmp_path, stars: list[StarConfig]) -> str:
     return str(p)
 
 
+async def _noop_rss_enrich(*_args, **_kwargs):
+    """Phase B is exercised separately; run() tests stub it out."""
+    return None
+
+
 @pytest.mark.asyncio
 async def test_run_raises_when_all_fetches_fail(tmp_path, monkeypatch):
-    """Total outage: every star RSS fetch fails -> run() must raise."""
+    """Total outage: every star ijav fetch fails -> run() must raise."""
     stars = [
-        StarConfig(name="Star A", code="STAR-A"),
-        StarConfig(name="Star B", code="STAR-B"),
+        StarConfig(name="Star A", code="STAR-A", star_page_url="https://example.com/a"),
+        StarConfig(name="Star B", code="STAR-B", star_page_url="https://example.com/b"),
     ]
-    behavior = {_rss_url(s.name): TimeoutError("connect timeout") for s in stars}
+    behavior = {s.star_page_url: TimeoutError("connect timeout") for s in stars}
 
     monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
     monkeypatch.setattr(sync_titles, "db_write", _stub_db_write)
     monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
+    monkeypatch.setattr(sync_titles, "_rss_enrich_all", _noop_rss_enrich)
 
     with pytest.raises(RuntimeError, match="all 2 star fetches failed"):
         await run(_write_config(tmp_path, stars))
@@ -531,13 +598,18 @@ async def test_run_raises_when_all_fetches_fail(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     """Partial outage: failed stars are reported; good stars still sync."""
+    good_page = (
+        '<html><body><div class="video-item">'
+        '<a href="/movie/sb-001-12345"><img alt="SB-001 Good Star fresh title"/></a>'
+        '</div></body></html>'
+    )
     stars = [
-        StarConfig(name="Bad Star", code="STAR-A"),
-        StarConfig(name="Good Star", code="STAR-B"),
+        StarConfig(name="Bad Star", code="STAR-A", star_page_url="https://example.com/bad"),
+        StarConfig(name="Good Star", code="STAR-B", star_page_url="https://example.com/good"),
     ]
     behavior = {
-        _rss_url("Bad Star"): TimeoutError("connect timeout"),
-        _rss_url("Good Star"): _rss(_item("SB-001 Good Star fresh title")),
+        "https://example.com/bad": TimeoutError("connect timeout"),
+        "https://example.com/good": good_page,
     }
 
     class _StubSink:
@@ -555,6 +627,7 @@ async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
     monkeypatch.setattr(sync_titles, "download_covers_batch", _stub_covers)
     monkeypatch.setattr(sync_titles, "TitleSyncSink", _StubSink)
+    monkeypatch.setattr(sync_titles, "_rss_enrich_all", _noop_rss_enrich)
 
     out = await run(_write_config(tmp_path, stars))
 
@@ -562,6 +635,67 @@ async def test_run_partial_failure_returns_failed_list(tmp_path, monkeypatch):
     assert len(out["results"]) == 1
     assert out["results"][0]["name"] == "Good Star"
     assert out["results"][0]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_phase_b_enriches_with_rss(tmp_path, monkeypatch):
+    """Two-phase sync: phase A writes ijav-only X; phase B (deferred) merges
+    RSS magnets into X and appends rss-only Y."""
+    star = StarConfig(name="Test Star", code="TEST-001",
+                      star_page_url="https://example.com/test")
+    ijav_page = (
+        '<html><body><div class="video-item">'
+        '<a href="/movie/test-001-12345"><img alt="TEST-001 sample"/></a>'
+        '<table><tr style="vertical-align: middle"><td>'
+        f'<a href="magnet:?xt=urn:btih:{"a" * 40}&dn=TEST-001">dl</a>'
+        '<i class="fa-weight-hanging"></i> 5.2 GB <strong>S:</strong> 10'
+        '</td></tr></table></div></body></html>'
+    )
+    rss = _rss(
+        _item("TEST-001 Test Star second upload", info_hash="b" * 40),
+        _item("TEST-009 Test Star rss only title", info_hash="c" * 40),
+    )
+    behavior = {
+        star.star_page_url: ijav_page,
+        _rss_url("Test Star"): rss,
+    }
+
+    sink_calls: list[list[tuple[str, list[str]]]] = []
+
+    class _RecordingSink:
+        def __init__(self, star_id, star_code, star_name):
+            pass
+
+        async def write_batch(self, items, new_codes, cover_map):
+            sink_calls.append([(it.code, [m.magnet for m in it.magnets]) for it in items])
+            return {"new": len(new_codes), "updated": 0, "skipped_no_magnet": 0}
+
+    async def _stub_covers(items, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    monkeypatch.setattr(sync_titles, "db_write", _stub_db_write)
+    monkeypatch.setattr(sync_titles, "HttpxFetcher", lambda: _StubFetcher(behavior))
+    monkeypatch.setattr(sync_titles, "download_covers_batch", _stub_covers)
+    monkeypatch.setattr(sync_titles, "TitleSyncSink", _RecordingSink)
+
+    out = await run(_write_config(tmp_path, [star]))
+
+    # Phase A (awaited): ijav-only write of TEST-001 with its single magnet.
+    assert len(sink_calls) == 1
+    phase_a = sink_calls[0]
+    assert [code for code, _ in phase_a] == ["TEST-001"]
+    assert len(phase_a[0][1]) == 1
+
+    # Phase B (deferred): rewrites TEST-001 with both magnets, adds TEST-009.
+    rss_task = out["rss_task"]
+    assert rss_task is not None
+    await rss_task
+
+    assert len(sink_calls) == 2
+    phase_b = dict(sink_calls[1])
+    assert len(phase_b["TEST-001"]) == 2  # ijav + rss magnets unioned
+    assert "TEST-009" in phase_b          # rss-only code appended
 
 
 # ── Hybrid source: ijavtorrent primary + sukebei supplement ──────────
@@ -688,7 +822,7 @@ async def test_fetch_star_merges_ijav_and_rss(monkeypatch):
     mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
     star = StarConfig(name="Test Star", code="TEST-001", star_page_url=ijav_url)
 
-    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), SukebeiRateLimiter())
 
     assert {it.code for it in result} == {"TEST-001", "TEST-002"}
 
@@ -708,7 +842,7 @@ async def test_fetch_star_degrades_to_rss_when_ijav_fails(monkeypatch):
     mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
     star = StarConfig(name="Test Star", code="TEST-001", star_page_url=ijav_url)
 
-    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), SukebeiRateLimiter())
 
     assert [it.code for it in result] == ["TEST-001"]
 
@@ -722,7 +856,7 @@ async def test_fetch_star_raises_only_when_both_sources_fail(monkeypatch):
 
     star = StarConfig(name="Test Star", code="TEST-001", star_page_url="https://example.com/test")
     with pytest.raises(sync_titles.IncompletePageError, match="both sources failed"):
-        await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+        await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), SukebeiRateLimiter())
 
 
 _MULTI_STAR_PAGE = (
@@ -755,7 +889,7 @@ async def test_fetch_star_filters_multi_star_titles(monkeypatch):
     mock_fetcher.fetch = AsyncMock(side_effect=_fetch)
     star = StarConfig(name="Test Star", code="SOLO-001", star_page_url=ijav_url)
 
-    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), asyncio.Semaphore(1))
+    result = await fetch_star(mock_fetcher, star, asyncio.Semaphore(1), SukebeiRateLimiter())
 
     assert [it.code for it in result] == ["SOLO-001"]
 

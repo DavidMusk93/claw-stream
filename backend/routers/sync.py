@@ -3,6 +3,10 @@
 Run scrapers.v2.tasks.sync_titles directly in the main event loop,
 coordinated with the global serial DB write queue.
 
+Sync is two-phase: phase A (ijavtorrent) is awaited and recorded in
+sync_runs; phase B (sukebei RSS enrichment) runs as a background task that
+is referenced and exception-logged here but never awaited.
+
 Sync is both manual (POST /api/stars/sync) and scheduled: a background
 asyncio task re-runs it every SYNC_INTERVAL_HOURS. Every run is recorded
 in the sync_runs table so the UI can show last-update time and history.
@@ -39,7 +43,18 @@ _sync_state: dict[str, Any] = {
 }
 _sync_task: asyncio.Task[Any] | None = None
 _scheduler_task: asyncio.Task[Any] | None = None
+_rss_task: asyncio.Task[Any] | None = None  # phase-B RSS enrichment (never awaited)
 _next_scheduled_at: float | None = None
+
+
+def _on_rss_task_done(task: asyncio.Task[Any]) -> None:
+    """Log phase-B failures; RSS enrichment must never fail the sync."""
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        log.error(f"rss enrichment task failed: {exc}", exc_info=exc)
 
 
 async def _run_sync_bg(trigger: str) -> None:
@@ -92,6 +107,14 @@ async def _run_sync_bg(trigger: str) -> None:
             "failed": [f["name"] for f in failed],
             "elapsed": round(time.time() - started_at, 1) if started_at else 0,
         })
+
+        # Phase B (sukebei RSS enrichment) runs in the background — keep a
+        # reference, log its exceptions, never await it here.
+        global _rss_task
+        rss_task = outcome.get("rss_task")
+        if rss_task is not None:
+            _rss_task = rss_task
+            _rss_task.add_done_callback(_on_rss_task_done)
 
         # Sync may have resurrected dead primaries (ON CONFLICT overwrites
         # magnet/all_magnets with fresh scrape data) — validate new/changed
