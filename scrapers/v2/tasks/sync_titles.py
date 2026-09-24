@@ -363,6 +363,24 @@ def _drop_hidden(
     return kept
 
 
+def _drop_blacklisted(
+    items: list[VideoItem],
+    star_id: int,
+    blacklisted: set[tuple[int, str]],
+) -> list[VideoItem]:
+    """Drop titles on the blacklist (repeatedly rejected by the sink).
+
+    Blacklisted codes never reach the diff, so no cover is downloaded for
+    them — without this, sink-rejected titles would be re-fetched and
+    re-rejected every sync, wasting a cover download each round.
+    """
+    kept = [it for it in items if (star_id, it.code) not in blacklisted]
+    dropped = len(items) - len(kept)
+    if dropped:
+        log.info(f"star_id={star_id}: skipped {dropped} blacklisted titles")
+    return kept
+
+
 async def fetch_star(
     fetcher: HttpxFetcher,
     star: StarConfig,
@@ -497,6 +515,7 @@ async def run(
     existing_codes = await db_write(db.load_all_title_codes)
     missing_codes = await db_write(db.load_title_codes_missing_metadata)
     cover_missing = await db_write(db.load_title_codes_missing_cover)
+    blacklisted = await db_write(db.load_blacklisted_codes)
     t1 = time.perf_counter()
     log.info(f"[timing] load existing codes: {(t1 - t0) * 1000:.1f}ms | count={len(existing_codes)} | missing={len(missing_codes)}")
 
@@ -550,6 +569,10 @@ async def run(
 
             # Diff: new works + existing works with missing metadata/covers
             star_id = star_id_map[star.code]
+            items = _drop_blacklisted(items, star_id, blacklisted)
+            if not items:
+                log.info(f"{star.name}: no new titles")
+                return
             new_items, backfill_items, cover_fix_items, sync_items = _split_sync_items(
                 star_id, star.name, items, existing_codes, missing_codes, cover_missing
             )
@@ -628,7 +651,7 @@ async def run(
     elif stars:
         _rss_task = asyncio.create_task(_rss_enrich_all(
             stars, ijav_by_star, star_id_map,
-            existing_codes, missing_codes, cover_missing,
+            existing_codes, missing_codes, cover_missing, blacklisted,
             roster_names, phase_a_covers, on_progress,
         ))
         rss_task = _rss_task
@@ -649,6 +672,7 @@ async def _rss_enrich_all(
     existing_codes: set,
     missing_codes: set,
     cover_missing: set,
+    blacklisted: set[tuple[int, str]],
     roster_names: list[str],
     phase_a_covers: dict[str, set[str]],
     on_progress: ProgressCallback | None,
@@ -690,6 +714,10 @@ async def _rss_enrich_all(
                 star, roster_names,
             )
             star_id = star_id_map[star.code]
+            merged = _drop_blacklisted(merged, star_id, blacklisted)
+            if not merged:
+                await _emit("rss", star=star.name, done=i, total=len(stars), enriched=0, new=0)
+                continue
             new_items, backfill_items, cover_fix_items, sync_items = _split_sync_items(
                 star_id, star.name, merged, existing_codes, missing_codes, cover_missing
             )
@@ -776,6 +804,8 @@ async def sync_star(
     items = await fetch_star(
         fetcher, star, asyncio.Semaphore(1), SukebeiRateLimiter(), roster_names
     )
+    blacklisted = await db_write(db.load_blacklisted_codes)
+    items = _drop_blacklisted(items, star_id, blacklisted)
     if not items:
         return {"name": star.name, "count": 0, "titles": []}
 

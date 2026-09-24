@@ -47,7 +47,8 @@ def real_video_engine(local_seed, tmp_path_factory):
     cleanup_cache_dir(cache_dir, hash_str)
 
 
-_PG_TABLES = "stars, titles, title_covers, social_posts, sync_runs, user_events"
+_PG_TABLES = ("stars, titles, title_covers, social_posts, sync_runs,"
+              " user_events, title_blacklist")
 
 
 @pytest.fixture()

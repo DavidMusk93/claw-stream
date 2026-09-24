@@ -1099,6 +1099,7 @@ async def test_sink_skips_titles_without_magnets(sink_db):
     """Titles without magnets are never recorded in the DB."""
     from scrapers.v2 import sinks
 
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star NM')")
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
     item = VideoItem(code="ABC-003", title="no magnet", cover_url="https://img.test/3.jpg")
     result = await sink.write_batch([item], {"ABC-003"}, {})
@@ -1138,6 +1139,7 @@ async def test_sink_skips_invalid_magnet_hash(sink_db):
     """Magnets without an extractable 40-hex btih hash count as no magnet."""
     from scrapers.v2 import sinks
 
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star Q1')")
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
     bad = _vi_item("ABC-010", "magnet:?xt=urn:btih:NOTAHASH&dn=x")
     good = _vi_item("ABC-011", "magnet:?xt=urn:btih:" + "cc" * 20)
@@ -1155,6 +1157,7 @@ async def test_sink_skips_new_title_with_tall_cover(sink_db):
     """A new title whose only cover is taller than wide is skipped entirely."""
     from scrapers.v2 import sinks
 
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star Q2')")
     sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
     item = _vi_item("ABC-012", "magnet:?xt=urn:btih:" + "dd" * 20)
     result = await sink.write_batch([item], {"ABC-012"}, {"ABC-012": _jpeg_b64(2, 4)})
@@ -1170,6 +1173,7 @@ async def test_sink_tall_cover_on_existing_row_keeps_old_cover(sink_db):
     """Backfill with a tall fresh cover must not wipe the existing cover."""
     from scrapers.v2 import sinks
 
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star Q3')")
     sink_db.execute(
         "INSERT INTO titles (id, star_id, code, title, cover_w, cover_h)"
         " VALUES (1, 1, 'ABC-013', 'old', 800, 537)"
@@ -1196,6 +1200,7 @@ async def test_sink_skips_new_title_without_cover(sink_db):
     """New titles without a cover are skipped; existing rows still write."""
     from scrapers.v2 import sinks
 
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star Q4')")
     sink_db.execute(
         "INSERT INTO titles (id, star_id, code, title) VALUES (1, 1, 'ABC-014', 'old')"
     )
@@ -1209,3 +1214,76 @@ async def test_sink_skips_new_title_without_cover(sink_db):
     assert result["updated"] == 1
     rows = sink_db.execute("SELECT code, title FROM titles").fetchall()
     assert [(r[0], r[1]) for r in rows] == [("ABC-014", old_item.title)]
+
+
+# ── Title blacklist: sink records skips, sync filters them ───────────
+# Repeatedly sink-rejected titles land in title_blacklist; the sync
+# pipeline filters them before the diff so no cover is downloaded for
+# them again. Entries older than the retry window get one retry pass.
+
+
+def test_drop_blacklisted_filters_items():
+    from scrapers.v2.tasks.sync_titles import _drop_blacklisted
+
+    items = [_vi("AAA-001"), _vi("AAA-002"), _vi("AAA-003")]
+    kept = _drop_blacklisted(items, star_id=1, blacklisted={(1, "AAA-002"), (2, "AAA-003")})
+    assert [it.code for it in kept] == ["AAA-001", "AAA-003"]
+
+
+@pytest.mark.asyncio
+async def test_sink_records_blacklist_on_skip(sink_db):
+    """Skipped titles land in title_blacklist; repeated skips bump skip_count."""
+    from scrapers.v2 import sinks
+
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star BL1')")
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    no_magnet = _vi_item("ABC-020")
+    no_cover = _vi_item("ABC-021", "magnet:?xt=urn:btih:" + "aa" * 20)
+    tall = _vi_item("ABC-022", "magnet:?xt=urn:btih:" + "bb" * 20)
+
+    for _ in range(2):
+        await sink.write_batch(
+            [no_magnet, no_cover, tall], {"ABC-020", "ABC-021", "ABC-022"},
+            {"ABC-022": _jpeg_b64(2, 4)},
+        )
+
+    rows = sink_db.execute(
+        "SELECT code, reason, skip_count FROM title_blacklist ORDER BY code"
+    ).fetchall()
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        ("ABC-020", "no_magnet", 2),
+        ("ABC-021", "no_cover", 2),
+        ("ABC-022", "bad_cover", 2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sink_clears_blacklist_on_successful_write(sink_db):
+    """A retry-window pass that finally succeeds removes the blacklist entry."""
+    from scrapers.v2 import sinks
+
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star BL2')")
+    sink_db.execute(
+        "INSERT INTO title_blacklist (star_id, code, reason) VALUES (1, 'ABC-023', 'no_cover')"
+    )
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    item = _vi_item("ABC-023", "magnet:?xt=urn:btih:" + "cc" * 20)
+    result = await sink.write_batch([item], {"ABC-023"}, {"ABC-023": _jpeg_b64(4, 2)})
+
+    assert result["new"] == 1
+    assert sink_db.execute(
+        "SELECT count(*) FROM title_blacklist WHERE code = 'ABC-023'"
+    ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_load_blacklisted_codes_respects_retry_window(sink_db):
+    from core import db
+
+    sink_db.execute("INSERT INTO stars (id, name) VALUES (1, 'Star BL3')")
+    sink_db.execute(
+        "INSERT INTO title_blacklist (star_id, code, reason, last_seen)"
+        " VALUES (1, 'FRESH-001', 'no_cover', now()),"
+        "        (1, 'STALE-001', 'no_cover', now() - interval '8 days')"
+    )
+    assert db.load_blacklisted_codes() == {(1, "FRESH-001")}

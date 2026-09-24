@@ -278,6 +278,63 @@ def load_title_codes_missing_cover(conn=None) -> set[tuple[int, str]]:
 
 
 @trace_db
+def load_blacklisted_codes(retry_days: int = 7, conn=None) -> set[tuple[int, str]]:
+    """Load (star_id, code) pairs currently on the title blacklist.
+
+    Entries older than ``retry_days`` are not returned: they get one retry
+    pass in the next sync (the source may have fixed the cover/magnet), and
+    if they are still rejected the sink re-records them and ``last_seen``
+    refreshes, blacklisting them for another window.
+    """
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            "SELECT star_id, code FROM title_blacklist"
+            " WHERE last_seen > now() - make_interval(days => %s)",
+            (retry_days,),
+        ).fetchall()
+        return set(rows)
+    finally:
+        if should_close:
+            managed.close()
+
+
+def record_blacklist_skips(
+    conn, star_id: int, skips: list[tuple[str, str]]
+) -> None:
+    """Upsert (code, reason) skip records into title_blacklist.
+
+    Meant to be called inside the caller's transaction (no autocommit
+    concerns here). Repeated skips bump skip_count and refresh last_seen.
+    """
+    if not skips:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO title_blacklist (star_id, code, reason)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (star_id, code) DO UPDATE SET
+                reason = EXCLUDED.reason,
+                skip_count = title_blacklist.skip_count + 1,
+                last_seen = now()
+            """,
+            [(star_id, code, reason) for code, reason in skips],
+        )
+
+
+def clear_blacklist_entries(conn, star_id: int, codes: list[str]) -> None:
+    """Remove codes from title_blacklist after they were written successfully
+    (a retry-window pass that finally produced a usable cover + magnet)."""
+    if not codes:
+        return
+    conn.execute(
+        "DELETE FROM title_blacklist WHERE star_id = %s AND code = ANY(%s)",
+        (star_id, codes),
+    )
+
+
+@trace_db
 def delete_star_by_code(code: str, conn=None) -> bool:
     """Delete an actor and all associated data (titles, social_posts).
 

@@ -67,6 +67,7 @@ class TitleSyncSink:
         skipped_no_magnet = 0
         skipped_bad_cover = 0
         skipped_no_cover = 0
+        skips: dict[str, str] = {}  # code → first skip reason (for title_blacklist)
         for item in items:
             # Never record titles without a usable magnet: they are unplayable
             # and only clutter the catalog. Candidates whose btih hash cannot
@@ -79,6 +80,7 @@ class TitleSyncSink:
             )
             if not scored:
                 skipped_no_magnet += 1
+                skips.setdefault(item.code, "no_magnet")
                 continue
             primary = scored[0]
             primary_hash = _extract_hash(primary.magnet)
@@ -101,12 +103,14 @@ class TitleSyncSink:
                 # Taller-than-wide covers are vertical front-cover thumbnails,
                 # not usable covers — drop the blob and treat as coverless.
                 skipped_bad_cover += 1
+                skips.setdefault(item.code, "bad_cover")
                 cover_b64 = ""
                 cover_dims = None
             if not cover_b64 and item.code in new_codes:
-                # New titles without a cover never enter the DB; staying
-                # "new" means the next sync retries the cover download.
+                # New titles without a cover never enter the DB; the
+                # blacklist record stops future syncs from re-downloading it.
                 skipped_no_cover += 1
+                skips.setdefault(item.code, "no_cover")
                 continue
             values.append({
                 "star_id": self.star_id,
@@ -211,6 +215,13 @@ class TitleSyncSink:
                     if v["cover_b64"]:
                         db._write_cover_to_disk(v["code"], v["cover_b64"])
 
+                # Persist skips so future syncs stop re-downloading covers
+                # for titles that can never be accepted (see title_blacklist).
+                # Codes written this round (retry-window passes that finally
+                # succeeded) leave the blacklist again.
+                db.clear_blacklist_entries(managed, self.star_id, [v["code"] for v in values])
+                db.record_blacklist_skips(managed, self.star_id, list(skips.items()))
+
                 # Count insert vs update this round; skipped new codes (no
                 # usable cover) must not inflate the new count.
                 new_count = sum(1 for v in values if v["code"] in new_codes)
@@ -232,6 +243,17 @@ class TitleSyncSink:
                 f"write_batch: {self.star_name}: all {len(items)} items skipped"
                 f" (no_magnet={skipped_no_magnet}, no_cover={skipped_no_cover})"
             )
+            if skips:
+                def _record_only(conn=None) -> None:
+                    managed = conn if conn is not None else db._conn()
+                    should_close = conn is None
+                    try:
+                        db.record_blacklist_skips(managed, self.star_id, list(skips.items()))
+                    finally:
+                        if should_close:
+                            managed.close()
+
+                await db_write(_record_only)
             return {"new": 0, "updated": 0, "skipped_no_magnet": skipped_no_magnet,
                     "skipped_bad_cover": skipped_bad_cover, "skipped_no_cover": skipped_no_cover}
 

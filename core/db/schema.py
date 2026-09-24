@@ -124,6 +124,17 @@ def init_schema(conn=None):
                 meta JSONB
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS title_blacklist (
+                star_id INTEGER NOT NULL REFERENCES stars(id) ON DELETE CASCADE,
+                code TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                skip_count INTEGER NOT NULL DEFAULT 1,
+                first_seen TIMESTAMP NOT NULL DEFAULT now(),
+                last_seen TIMESTAMP NOT NULL DEFAULT now(),
+                PRIMARY KEY (star_id, code)
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_events_ts ON user_events(ts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_star ON titles(star_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")
