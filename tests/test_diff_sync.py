@@ -1106,3 +1106,106 @@ async def test_sink_skips_titles_without_magnets(sink_db):
     assert result["skipped_no_magnet"] == 1
     assert result["new"] == 0
     assert sink_db.execute("SELECT count(*) FROM titles").fetchone()[0] == 0
+
+
+# ── Sink: quality rules (magnet validity, cover presence/shape) ────────
+# Titles without a usable magnet, and new titles without a usable cover,
+# must never enter the DB. Vertical (taller-than-wide) covers are
+# front-cover thumbnails, not real covers — they are dropped and the
+# title is treated as coverless.
+
+
+def _jpeg_b64(w: int, h: int) -> str:
+    import base64 as _b64
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (w, h)).save(buf, "JPEG")
+    return _b64.b64encode(buf.getvalue()).decode()
+
+
+def _vi_item(code: str, magnet: str | None = None) -> VideoItem:
+    return VideoItem(
+        code=code, title=f"title {code}", cover_url=f"https://img.test/{code}.jpg",
+        magnets=[MagnetCandidate(magnet=magnet)] if magnet else [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_sink_skips_invalid_magnet_hash(sink_db):
+    """Magnets without an extractable 40-hex btih hash count as no magnet."""
+    from scrapers.v2 import sinks
+
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    bad = _vi_item("ABC-010", "magnet:?xt=urn:btih:NOTAHASH&dn=x")
+    good = _vi_item("ABC-011", "magnet:?xt=urn:btih:" + "cc" * 20)
+    result = await sink.write_batch([bad, good], {"ABC-010", "ABC-011"},
+                                    {"ABC-011": _jpeg_b64(4, 2)})
+
+    assert result["skipped_no_magnet"] == 1
+    assert result["new"] == 1
+    rows = sink_db.execute("SELECT code FROM titles").fetchall()
+    assert [r[0] for r in rows] == ["ABC-011"]
+
+
+@pytest.mark.asyncio
+async def test_sink_skips_new_title_with_tall_cover(sink_db):
+    """A new title whose only cover is taller than wide is skipped entirely."""
+    from scrapers.v2 import sinks
+
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    item = _vi_item("ABC-012", "magnet:?xt=urn:btih:" + "dd" * 20)
+    result = await sink.write_batch([item], {"ABC-012"}, {"ABC-012": _jpeg_b64(2, 4)})
+
+    assert result["skipped_bad_cover"] == 1
+    assert result["skipped_no_cover"] == 1
+    assert result["new"] == 0
+    assert sink_db.execute("SELECT count(*) FROM titles").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_sink_tall_cover_on_existing_row_keeps_old_cover(sink_db):
+    """Backfill with a tall fresh cover must not wipe the existing cover."""
+    from scrapers.v2 import sinks
+
+    sink_db.execute(
+        "INSERT INTO titles (id, star_id, code, title, cover_w, cover_h)"
+        " VALUES (1, 1, 'ABC-013', 'old', 800, 537)"
+    )
+    sink_db.execute(
+        "INSERT INTO title_covers (title_id, cover_b64) VALUES (1, 'EXISTING_B64')"
+    )
+
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    item = _vi_item("ABC-013", "magnet:?xt=urn:btih:" + "ee" * 20)
+    result = await sink.write_batch([item], set(), {"ABC-013": _jpeg_b64(2, 4)})
+
+    assert result["skipped_bad_cover"] == 1
+    assert result["updated"] == 1
+    row = sink_db.execute(
+        "SELECT c.cover_b64, t.cover_w, t.cover_h, t.title FROM titles t"
+        " JOIN title_covers c ON c.title_id = t.id WHERE t.code = 'ABC-013'"
+    ).fetchone()
+    assert row == ("EXISTING_B64", 800, 537, item.title)
+
+
+@pytest.mark.asyncio
+async def test_sink_skips_new_title_without_cover(sink_db):
+    """New titles without a cover are skipped; existing rows still write."""
+    from scrapers.v2 import sinks
+
+    sink_db.execute(
+        "INSERT INTO titles (id, star_id, code, title) VALUES (1, 1, 'ABC-014', 'old')"
+    )
+    sink = sinks.TitleSyncSink(star_id=1, star_code="ABC", star_name="Test")
+    new_item = _vi_item("ABC-015", "magnet:?xt=urn:btih:" + "ff" * 20)
+    old_item = _vi_item("ABC-014", "magnet:?xt=urn:btih:" + "ee" * 20)
+    result = await sink.write_batch([new_item, old_item], {"ABC-015"}, {})
+
+    assert result["skipped_no_cover"] == 1
+    assert result["new"] == 0
+    assert result["updated"] == 1
+    rows = sink_db.execute("SELECT code, title FROM titles").fetchall()
+    assert [(r[0], r[1]) for r in rows] == [("ABC-014", old_item.title)]

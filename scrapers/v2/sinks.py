@@ -19,6 +19,11 @@ from scrapers.v2.schemas import VideoItem, MagnetCandidate
 
 log = get_logger("title-sync-sink")
 
+# Covers taller than wide are never legit full covers — they are vertical
+# front-cover thumbnails (e.g. ijavtorrent's 300x426 / 564x800) that break
+# the aspect-ratio placeholders in list rendering. Normal covers are 0.6-0.8.
+COVER_MAX_HW_RATIO = 1.0
+
 
 class Sink(Protocol):
     """Sink protocol"""
@@ -54,25 +59,29 @@ class TitleSyncSink:
         import time as _time
 
         if not items:
-            return {"new": 0, "updated": 0, "skipped_no_magnet": 0}
+            return {"new": 0, "updated": 0, "skipped_no_magnet": 0,
+                    "skipped_bad_cover": 0, "skipped_no_cover": 0}
 
         t0 = _time.perf_counter()
         values = []
         skipped_no_magnet = 0
+        skipped_bad_cover = 0
+        skipped_no_cover = 0
         for item in items:
-            # Never record titles without a magnet: they are unplayable and
-            # only clutter the catalog. A source listing the code with magnets
-            # later will insert it then.
-            if not item.magnets:
-                skipped_no_magnet += 1
-                continue
+            # Never record titles without a usable magnet: they are unplayable
+            # and only clutter the catalog. Candidates whose btih hash cannot
+            # be extracted count as unusable. A source listing the code with
+            # valid magnets later will insert it then.
             scored = sorted(
-                item.magnets,
+                (m for m in item.magnets if _extract_hash(m.magnet)),
                 key=lambda m: TitleSyncSink._score_magnet(m),
                 reverse=True,
             )
-            primary = scored[0] if scored else None
-            primary_hash = _extract_hash(primary.magnet) if primary else None
+            if not scored:
+                skipped_no_magnet += 1
+                continue
+            primary = scored[0]
+            primary_hash = _extract_hash(primary.magnet)
 
             all_magnets = [
                 {
@@ -88,6 +97,17 @@ class TitleSyncSink:
 
             cover_b64 = cover_map.get(item.code) or ""
             cover_dims = db._cover_dims_from_b64(cover_b64)
+            if cover_dims and cover_dims[1] / cover_dims[0] > COVER_MAX_HW_RATIO:
+                # Taller-than-wide covers are vertical front-cover thumbnails,
+                # not usable covers — drop the blob and treat as coverless.
+                skipped_bad_cover += 1
+                cover_b64 = ""
+                cover_dims = None
+            if not cover_b64 and item.code in new_codes:
+                # New titles without a cover never enter the DB; staying
+                # "new" means the next sync retries the cover download.
+                skipped_no_cover += 1
+                continue
             values.append({
                 "star_id": self.star_id,
                 "star_code": self.star_code,
@@ -98,12 +118,12 @@ class TitleSyncSink:
                 "release_date_sort": db._date_to_sort(item.release_date),
                 "views": item.views,
                 "likes": item.likes,
-                "resolution": primary.resolution if primary else "",
+                "resolution": primary.resolution,
                 "cover_url": item.cover_url,
                 "cover_b64": cover_b64,
                 "cover_w": cover_dims[0] if cover_dims else None,
                 "cover_h": cover_dims[1] if cover_dims else None,
-                "magnet": primary.magnet if primary else None,
+                "magnet": primary.magnet,
                 "magnet_hash": primary_hash,
                 "all_magnets": Jsonb(all_magnets) if all_magnets else None,
             })
@@ -191,30 +211,38 @@ class TitleSyncSink:
                     if v["cover_b64"]:
                         db._write_cover_to_disk(v["code"], v["cover_b64"])
 
-                # Count insert vs update this round
-                # We approximate with new_codes (known new work count)
-                new_count = len(new_codes)
+                # Count insert vs update this round; skipped new codes (no
+                # usable cover) must not inflate the new count.
+                new_count = sum(1 for v in values if v["code"] in new_codes)
                 updated_count = len(values) - new_count
 
                 return {
                     "new": max(0, new_count),
                     "updated": max(0, updated_count),
                     "skipped_no_magnet": skipped_no_magnet,
+                    "skipped_bad_cover": skipped_bad_cover,
+                    "skipped_no_cover": skipped_no_cover,
                 }
             finally:
                 if should_close:
                     managed.close()
 
         if not values:
-            log.info(f"write_batch: {self.star_name}: all {len(items)} items skipped (no magnet)")
-            return {"new": 0, "updated": 0, "skipped_no_magnet": skipped_no_magnet}
+            log.info(
+                f"write_batch: {self.star_name}: all {len(items)} items skipped"
+                f" (no_magnet={skipped_no_magnet}, no_cover={skipped_no_cover})"
+            )
+            return {"new": 0, "updated": 0, "skipped_no_magnet": skipped_no_magnet,
+                    "skipped_bad_cover": skipped_bad_cover, "skipped_no_cover": skipped_no_cover}
 
         result = await db_write(_upsert)
         elapsed = (_time.perf_counter() - t0) * 1000
-        log.info(
-            f"write_batch: {self.star_name}: {len(values)} items in {elapsed:.1f}ms"
-            + (f" (skipped {skipped_no_magnet} without magnet)" if skipped_no_magnet else "")
+        skipped = (
+            f" (skipped: no_magnet={skipped_no_magnet},"
+            f" bad_cover={skipped_bad_cover}, no_cover={skipped_no_cover})"
+            if skipped_no_magnet or skipped_bad_cover or skipped_no_cover else ""
         )
+        log.info(f"write_batch: {self.star_name}: {len(values)} items in {elapsed:.1f}ms{skipped}")
         return result
 
     @staticmethod
