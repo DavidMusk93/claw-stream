@@ -43,7 +43,7 @@ def main() -> None:
         rows = conn.execute(
             """
             SELECT t.id, t.star_id, t.code, t.cover_w, t.cover_h, t.magnet,
-                   t.user_liked, (tc.title_id IS NOT NULL) AS has_blob
+                   t.user_liked, (length(tc.cover_b64) > 0) AS has_blob
             FROM titles t
             LEFT JOIN title_covers tc ON tc.title_id = t.id
             """
