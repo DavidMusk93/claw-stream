@@ -30,6 +30,13 @@ cc.guohuasun.com {
 
     # API / stream / torrent → FastAPI backend
     handle /api/* {
+        # Compress API responses: /api/stars is a 2.5MB payload and uvicorn
+        # serves it identity-encoded. SSE (/api/events, would buffer events)
+        # and cover blobs (/api/cover, already-compressed JPEGs) are excluded.
+        @compressible not path /api/events /api/cover/*
+        encode @compressible zstd gzip {
+            minimum_length 1024
+        }
         reverse_proxy localhost:8765
     }
     handle /stream/* {
