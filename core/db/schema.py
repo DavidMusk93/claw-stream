@@ -135,6 +135,13 @@ def init_schema(conn=None):
                 PRIMARY KEY (star_id, code)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS star_rss_state (
+                star_id INTEGER PRIMARY KEY REFERENCES stars(id) ON DELETE CASCADE,
+                empty_streak INTEGER NOT NULL DEFAULT 1,
+                last_empty_at TIMESTAMP NOT NULL DEFAULT now()
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_events_ts ON user_events(ts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_star ON titles(star_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_titles_code ON titles(code)")

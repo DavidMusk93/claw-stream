@@ -48,7 +48,7 @@ def real_video_engine(local_seed, tmp_path_factory):
 
 
 _PG_TABLES = ("stars, titles, title_covers, social_posts, sync_runs,"
-              " user_events, title_blacklist")
+              " user_events, title_blacklist, star_rss_state")
 
 
 @pytest.fixture()

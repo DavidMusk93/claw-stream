@@ -84,6 +84,15 @@ class IncompletePageError(Exception):
     """Page fetched with HTTP 200 but looks truncated (stream cut or partial card list)."""
 
 
+class NoRssResultsError(IncompletePageError):
+    """All sukebei RSS queries for a star returned zero usable items.
+
+    Distinct from a fetch failure: the source answered fine, the star just
+    has no (matching) torrents. Phase B counts these into star_rss_state and
+    suppresses repeat offenders instead of retrying them every sync.
+    """
+
+
 class SukebeiRateLimiter:
     """Global async leaky bucket shared by ALL sukebei requests in a run.
 
@@ -241,8 +250,13 @@ async def fetch_star_rss(
             else:
                 await asyncio.sleep(FETCH_RETRY_DELAYS[attempt - 1])
     if last_err is None:
-        last_err = IncompletePageError(f"0 usable items for all queries: {queries}")
-    log.error(f"rss fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
+        last_err = NoRssResultsError(f"0 usable items for all queries: {queries}")
+    if isinstance(last_err, NoRssResultsError):
+        # Not an outage — the star simply has no matching torrents. Phase B
+        # negative-caches repeat offenders; keep the log at info.
+        log.info(f"rss: {star.name}: 0 usable items for all queries: {queries}")
+    else:
+        log.error(f"rss fetch failed: {star.name}: {type(last_err).__name__}: {last_err}")
     raise last_err
 
 
@@ -696,24 +710,37 @@ async def _rss_enrich_all(
     n_enriched = 0
     n_new = 0
     n_failed = 0
+    suppressed = await db_write(db.load_rss_suppressed_stars)
+    if suppressed:
+        log.info(f"phase B: {len(suppressed)} stars rss-suppressed (repeated empty results)")
 
     async with HttpxFetcher() as fetcher:
         cover_sem = asyncio.Semaphore(COVER_DOWNLOAD_CONCURRENCY)
         for i, star in enumerate(stars, 1):
+            star_id = star_id_map[star.code]
+            if star_id in suppressed:
+                await _emit("rss", star=star.name, done=i, total=len(stars),
+                            enriched=0, new=0, suppressed=True)
+                continue
             try:
                 rss_items = await fetch_star_rss(fetcher, star, limiter)
+            except NoRssResultsError:
+                await db_write(db.record_rss_empty, star_id)
+                await _emit("rss", star=star.name, done=i, total=len(stars), enriched=0, new=0)
+                continue
             except Exception as e:
                 n_failed += 1
                 log.warning(f"phase B: rss failed for {star.name}: {type(e).__name__}: {e}")
                 await _emit("rss", star=star.name, done=i, total=len(stars),
                             enriched=0, new=0, error=f"{type(e).__name__}: {e}"[:200])
                 continue
+            # The source answered with usable items — reset any empty streak.
+            await db_write(db.clear_rss_empty, star_id)
 
             merged = _drop_hidden(
                 merge_sources(ijav_by_star.get(star.code, []), rss_items, star.name),
                 star, roster_names,
             )
-            star_id = star_id_map[star.code]
             merged = _drop_blacklisted(merged, star_id, blacklisted)
             if not merged:
                 await _emit("rss", star=star.name, done=i, total=len(stars), enriched=0, new=0)

@@ -335,6 +335,59 @@ def clear_blacklist_entries(conn, star_id: int, codes: list[str]) -> None:
 
 
 @trace_db
+def load_rss_suppressed_stars(
+    threshold: int = 3, cooldown_days: int = 7, conn=None
+) -> set[int]:
+    """Star IDs whose sukebei RSS supplement is temporarily suppressed.
+
+    A star lands here after ``threshold`` consecutive syncs with zero usable
+    RSS items (obscure names sukebei simply doesn't have). Querying them
+    every sync just burns rate-limiter slots and spams the error log, so
+    phase B skips them for ``cooldown_days``, then retries once.
+    """
+    managed, should_close = _managed_conn(conn)
+    try:
+        rows = managed.execute(
+            "SELECT star_id FROM star_rss_state"
+            " WHERE empty_streak >= %s"
+            " AND last_empty_at > now() - make_interval(days => %s)",
+            (threshold, cooldown_days),
+        ).fetchall()
+        return {r[0] for r in rows}
+    finally:
+        if should_close:
+            managed.close()
+
+
+def record_rss_empty(star_id: int, conn=None) -> None:
+    """Bump a star's consecutive empty-RSS streak."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute(
+            """
+            INSERT INTO star_rss_state (star_id) VALUES (%s)
+            ON CONFLICT (star_id) DO UPDATE SET
+                empty_streak = star_rss_state.empty_streak + 1,
+                last_empty_at = now()
+            """,
+            (star_id,),
+        )
+    finally:
+        if should_close:
+            managed.close()
+
+
+def clear_rss_empty(star_id: int, conn=None) -> None:
+    """Reset a star's empty-RSS streak after a sync found usable items."""
+    managed, should_close = _managed_conn(conn)
+    try:
+        managed.execute("DELETE FROM star_rss_state WHERE star_id = %s", (star_id,))
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
 def delete_star_by_code(code: str, conn=None) -> bool:
     """Delete an actor and all associated data (titles, social_posts).
 

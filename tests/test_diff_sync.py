@@ -1287,3 +1287,97 @@ async def test_load_blacklisted_codes_respects_retry_window(sink_db):
         "        (1, 'STALE-001', 'no_cover', now() - interval '8 days')"
     )
     assert db.load_blacklisted_codes() == {(1, "FRESH-001")}
+
+
+# ── RSS negative cache: suppress stars with repeated empty results ────
+
+
+@pytest.mark.asyncio
+async def test_fetch_star_rss_empty_raises_no_results(monkeypatch):
+    """All-empty RSS yields the dedicated NoRssResultsError subclass."""
+    monkeypatch.setattr(sync_titles, "FETCH_RETRY_DELAYS", (0.0, 0.0))
+    mock_fetcher = AsyncMock()
+    mock_fetcher.fetch = AsyncMock(return_value=_EMPTY_RSS)
+
+    star = StarConfig(name="NoHit Star", code="TEST-001", jp="NoHit")
+    with pytest.raises(sync_titles.NoRssResultsError):
+        await fetch_star_rss(mock_fetcher, star, SukebeiRateLimiter())
+
+
+@pytest.mark.asyncio
+async def test_rss_suppression_window(sink_db):
+    from core import db
+
+    sink_db.execute(
+        "INSERT INTO stars (id, name, code) VALUES"
+        " (1, 'Hot', 'H-1'), (2, 'Cold', 'C-1'), (3, 'Old', 'O-1')"
+    )
+    sink_db.execute(
+        "INSERT INTO star_rss_state (star_id, empty_streak, last_empty_at) VALUES"
+        " (1, 3, now()),"                         # suppressed: streak hit, fresh
+        " (2, 1, now()),"                         # streak below threshold
+        " (3, 5, now() - interval '8 days')"      # past cooldown → retry
+    )
+    assert db.load_rss_suppressed_stars() == {1}
+
+
+@pytest.mark.asyncio
+async def test_rss_enrich_records_and_suppresses_empty_stars(sink_db, monkeypatch):
+    """Phase B records empty results; a streak >= threshold skips fetching."""
+    from scrapers.v2.tasks import sync_titles as st
+
+    async def _direct(fn, *a, **k):
+        return fn(*a, **k)
+
+    monkeypatch.setattr(st, "db_write", _direct)
+    sink_db.execute("INSERT INTO stars (id, name, code) VALUES (1, 'Empty Star', 'E-1')")
+    star = StarConfig(name="Empty Star", code="E-1")
+
+    async def _no_results(*a, **k):
+        raise st.NoRssResultsError("0 usable items")
+
+    monkeypatch.setattr(st, "fetch_star_rss", _no_results)
+    args = ([star], {}, {"E-1": 1}, set(), set(), set(), set(), [], {}, None)
+    await st._rss_enrich_all(*args)
+    assert sink_db.execute(
+        "SELECT empty_streak FROM star_rss_state WHERE star_id = 1"
+    ).fetchone()[0] == 1
+
+    # Simulate a star at the threshold: fetch must not even be attempted.
+    sink_db.execute("UPDATE star_rss_state SET empty_streak = 3 WHERE star_id = 1")
+    called = False
+
+    async def _boom(*a, **k):
+        nonlocal called
+        called = True
+        raise AssertionError("suppressed star must not be fetched")
+
+    monkeypatch.setattr(st, "fetch_star_rss", _boom)
+    await st._rss_enrich_all(*args)
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_rss_enrich_clears_streak_on_results(sink_db, monkeypatch):
+    """A star that finally yields RSS items leaves the negative cache."""
+    from scrapers.v2.tasks import sync_titles as st
+
+    async def _direct(fn, *a, **k):
+        return fn(*a, **k)
+
+    monkeypatch.setattr(st, "db_write", _direct)
+    sink_db.execute("INSERT INTO stars (id, name, code) VALUES (1, 'Lucky Star', 'L-1')")
+    sink_db.execute("INSERT INTO star_rss_state (star_id, empty_streak) VALUES (1, 2)")
+
+    async def _one_hit(*a, **k):
+        return [VideoItem(code="LCK-001", title="Lucky Star hit",
+                          magnets=[MagnetCandidate(magnet="magnet:?xt=urn:btih:" + "ab" * 20)])]
+
+    monkeypatch.setattr(st, "fetch_star_rss", _one_hit)
+    star = StarConfig(name="Lucky Star", code="L-1")
+    await st._rss_enrich_all(
+        [star], {}, {"L-1": 1}, set(), set(), set(), set(), [], {}, None,
+    )
+    assert sink_db.execute(
+        "SELECT count(*) FROM star_rss_state WHERE star_id = 1"
+    ).fetchone()[0] == 0

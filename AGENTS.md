@@ -152,6 +152,7 @@ Wide-table design (`core/db/schema.py`, idempotent `init_schema()` with `ALTER T
 - `sync_runs` — Sync run history (`trigger` manual/scheduled, `status`, `started_at`, `finished_at`, `total_new`, `total_updated`, `failed_count`, `error`)
 - `user_events` — User behavior events (`ts`, `event`, `code`, `star_code`, `meta JSONB`)
 - `title_blacklist` — Sink-rejected titles (`star_id`, `code`, `reason`, `skip_count`, `first_seen`, `last_seen`; PK `(star_id, code)`); sync filters these before the diff so rejected covers are never re-downloaded. `last_seen` older than 7 days = one retry pass
+- `star_rss_state` — Per-star RSS negative cache (`star_id` PK, `empty_streak`, `last_empty_at`): after 3 consecutive syncs with zero usable sukebei results, phase B skips that star's RSS queries for 7 days (they only burn rate-limiter slots); a non-empty result resets the streak
 
 There is **no separate `magnets` table** anymore — magnet data lives on `titles`.
 
