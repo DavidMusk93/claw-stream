@@ -252,8 +252,11 @@ async def get_check_status() -> dict[str, Any]:
 async def purge_dead(request: Request) -> dict[str, Any]:
     """Delete unplayable titles (dead-checked magnets or no magnet at all).
 
-    Liked titles (user_liked=1) are never deleted. Cached torrents of deleted
-    rows become orphans and are garbage-collected right away; cover image
+    Liked titles (user_liked=1) are never deleted. Deleted codes are sealed
+    in title_blacklist (reason=dead_magnet) so the next sync does not
+    re-download and re-add them; the 7-day retry window still lets a title
+    back if its swarm comes back to life. Cached torrents of deleted rows
+    become orphans and are garbage-collected right away; cover image
     directories are removed as well.
     """
     from backend.routers.stars import invalidate_stars_cache
@@ -269,6 +272,10 @@ async def purge_dead(request: Request) -> dict[str, Any]:
     liked = [t for t in unplayable if t["user_liked"]]
     deletable = [t for t in unplayable if not t["user_liked"]]
 
+    blacklisted = await db_write(
+        db.blacklist_titles,
+        [(t["star_id"], t["code"], "dead_magnet") for t in deletable],
+    )
     deleted = await db_write(db.delete_titles_by_ids, [t["id"] for t in deletable])
 
     def _remove_covers() -> int:
@@ -294,6 +301,7 @@ async def purge_dead(request: Request) -> dict[str, Any]:
     invalidate_stars_cache()
     summary = {
         "deleted": deleted,
+        "blacklisted": blacklisted,
         "liked_kept": len(liked),
         "liked_codes": [t["code"] for t in liked],
         "covers_removed": covers_removed,

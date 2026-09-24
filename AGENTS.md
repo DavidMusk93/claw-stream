@@ -62,7 +62,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 | `auth_router` | `backend/routers/auth.py` | `/api/auth` (daily rotating password validation) |
 | `log_router` | `backend/routers/log.py` | `/api/log` log query endpoints |
 | `events_router` | `backend/routers/events.py` | `/api/events` SSE stream (heartbeat every 30s) |
-| `magnets_router` | `backend/routers/magnets.py` | `/api/magnets/check` — magnet liveness check (bg task, auto after sync) |
+| `magnets_router` | `backend/routers/magnets.py` | `/api/magnets/check` — magnet liveness check (bg task, auto after sync); `/api/magnets/purge-dead` — delete unplayable titles, sealing them in `title_blacklist` (`dead_magnet`) so sync never re-adds them |
 | `search_router` | `backend/routers/search.py` | `/api/search?q=` — catalog search (60s TTL cache). Keyword queries: ijavtorrent + sync-consistent VR/multi-star/no-magnet filtering. Code-like queries: exact match, filters skipped (explicit intent), sukebei RSS fallback when ijav lacks the code (`source='sukebei'`, no cover/actress). `in_library` + per-actress `followed` enrichment. Powers the frontend `/search` page; follow button reuses `POST /api/stars/add` |
 | `test_router` | `backend/routers/test_helper.py` | Test helper endpoints (debug only, no auth) |
 | `EventBus` | `core/events.py` | In-process async pub/sub for SSE |

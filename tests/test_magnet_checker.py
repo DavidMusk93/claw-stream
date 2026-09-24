@@ -147,3 +147,33 @@ def test_load_titles_for_magnet_check_scopes(temp_db):
 
     with pytest.raises(ValueError):
         db.load_titles_for_magnet_check("bogus", conn=conn)
+
+
+def test_purge_flow_seals_blacklist(temp_db):
+    """Unplayable titles are listed with star_id; blacklisting + deleting them
+    leaves a dead_magnet entry so sync never re-adds the code."""
+    conn, star_id, dead_hash, _ = temp_db
+    db.update_magnet_check_dead(
+        conn.execute("SELECT id FROM titles WHERE code = 'TEST-001'").fetchone()[0],
+        dead_hash, conn=conn,
+    )
+
+    unplayable = db.list_unplayable_titles(conn=conn)
+    assert len(unplayable) == 1
+    assert unplayable[0]["code"] == "TEST-001"
+    assert unplayable[0]["star_id"] == star_id
+
+    n = db.blacklist_titles(
+        [(t["star_id"], t["code"], "dead_magnet") for t in unplayable], conn=conn
+    )
+    assert n == 1
+    db.delete_titles_by_ids([t["id"] for t in unplayable], conn=conn)
+
+    assert conn.execute("SELECT count(*) FROM titles").fetchone()[0] == 0
+    row = conn.execute(
+        "SELECT reason, skip_count FROM title_blacklist WHERE star_id = %s AND code = 'TEST-001'",
+        (star_id,),
+    ).fetchone()
+    assert row == ("dead_magnet", 1)
+    # And the sync-side loader picks it up.
+    assert db.load_blacklisted_codes(conn=conn) == {(star_id, "TEST-001")}

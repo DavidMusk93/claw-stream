@@ -35,7 +35,8 @@ def main() -> int:
     parser.add_argument("--no-wait", action="store_true", help="start the check and exit")
     parser.add_argument(
         "--purge", action="store_true",
-        help="delete unplayable titles (dead magnets / no magnet) instead of checking",
+        help="delete unplayable titles (dead magnets / no magnet) and seal them "
+             "in title_blacklist so sync does not re-add them",
     )
     args = parser.parse_args()
 

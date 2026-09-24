@@ -30,6 +30,7 @@ from .crud import (
     update_magnet_check_dead,
     swap_primary_magnet,
     list_unplayable_titles,
+    blacklist_titles,
     delete_titles_by_ids,
 )
 from .write_queue import DBWriteQueue, db_write, get_queue
@@ -66,6 +67,7 @@ __all__ = [
     "update_magnet_check_dead",
     "swap_primary_magnet",
     "list_unplayable_titles",
+    "blacklist_titles",
     "delete_titles_by_ids",
     "get_stats",
 ]

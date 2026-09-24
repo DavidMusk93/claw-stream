@@ -608,11 +608,40 @@ def list_unplayable_titles(conn=None) -> list[dict]:
     try:
         rows = managed.execute(
             """
-            SELECT id, code, COALESCE(user_liked, 0) FROM titles
+            SELECT id, star_id, code, COALESCE(user_liked, 0) FROM titles
             WHERE magnet_status = 'dead' OR magnet IS NULL OR magnet = ''
             """
         ).fetchall()
-        return [{"id": r[0], "code": r[1], "user_liked": r[2]} for r in rows]
+        return [{"id": r[0], "star_id": r[1], "code": r[2], "user_liked": r[3]} for r in rows]
+    finally:
+        if should_close:
+            managed.close()
+
+
+@trace_db
+def blacklist_titles(entries: list[tuple[int, str, str]], conn=None) -> int:
+    """Upsert (star_id, code, reason) rows into title_blacklist.
+
+    Used when deliberately removing titles (e.g. purge-dead) so the next
+    sync does not re-download and re-add them. db_write-compatible.
+    """
+    if not entries:
+        return 0
+    managed, should_close = _managed_conn(conn)
+    try:
+        with managed.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO title_blacklist (star_id, code, reason)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (star_id, code) DO UPDATE SET
+                    reason = EXCLUDED.reason,
+                    skip_count = title_blacklist.skip_count + 1,
+                    last_seen = now()
+                """,
+                entries,
+            )
+        return len(entries)
     finally:
         if should_close:
             managed.close()

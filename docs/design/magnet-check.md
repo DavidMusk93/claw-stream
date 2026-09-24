@@ -85,7 +85,10 @@ scope 语义（`crud.load_titles_for_magnet_check`）：
 
 `POST /api/magnets/purge-dead`（或 `scripts/check_magnets.py --purge`）删除
 不可播放的 title：`magnet_status='dead'` 或根本没有 magnet 的行。
-`user_liked=1` 的永删不掉（单独报告）。删除同时清理封面目录
+`user_liked=1` 的永删不掉（单独报告）。**删除前先把 (star_id, code) 以
+`reason='dead_magnet'` 封入 `title_blacklist`**，否则下一轮同步会把这些
+code 当新作品重新下载封面、重新入库；黑名单 7 天重试窗口仍然有效——
+如果 swarm 复活，作品会在重试时自然回归。删除同时清理封面目录
 （`images/titles/{code}`）并对孤儿 cache 跑 `gc_orphaned_torrents`。
 与进行中的校验互斥（409）。
 
