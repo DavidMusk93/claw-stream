@@ -34,6 +34,8 @@
         <img
           v-if="activeTitle.cover_url && !activeImgError"
           :src="activeTitle.cover_url"
+          :srcset="heroSrcset(activeTitle)"
+          sizes="(min-width: 1024px) 440px, (min-width: 768px) 360px, (min-width: 640px) 300px, calc(100vw - 32px)"
           :alt="activeTitle.code"
           class="w-full h-auto block bg-[#F2F2F7]"
           :style="{ aspectRatio: coverAR(activeTitle) }"
@@ -128,9 +130,13 @@
       <div
         ref="rowRef"
         class="flex gap-3 sm:gap-4 items-start overflow-x-auto scrollbar-hide pb-4 pt-1 px-1 snap-x snap-mandatory"
+        @scroll.passive="onRowScroll"
       >
+        <!-- Windowed rendering: spacers keep the scroll width exact while
+             only the visible ±THUMB_BUFFER thumbnails exist in the DOM -->
+        <div v-if="leadPad > 0" class="shrink-0 h-px" :style="{ width: `${leadPad}px` }" />
         <button
-          v-for="(title, idx) in star.titles"
+          v-for="{ title, idx } in windowedTitles"
           :key="title.code"
           class="group/thumb relative shrink-0 w-[120px] sm:w-[150px] md:w-[180px] rounded-xl overflow-hidden bg-black transition-all duration-200 snap-start active:scale-[0.97]"
           :class="[
@@ -179,6 +185,7 @@
             #{{ title.number || idx + 1 }}
           </div>
         </button>
+        <div v-if="trailPad > 0" class="shrink-0 h-px" :style="{ width: `${trailPad}px` }" />
       </div>
 
       <!-- Fade edges -->
@@ -217,6 +224,93 @@ const thumbErrors = ref<Record<string, boolean>>({})
 function coverAR(t: Title): string {
   return t.cover_w && t.cover_h ? `${t.cover_w} / ${t.cover_h}` : '3 / 2'
 }
+
+// Hero srcset: let the browser pick the smallest variant that covers the
+// display box (440px max, ≤2x DPR → the 800px mid wins almost everywhere).
+// Decoding a 1600-2200px original for a 440px box was the main render stall.
+function heroSrcset(t: Title): string | undefined {
+  const candidates: string[] = []
+  if (t.cover_thumb_url) candidates.push(`${t.cover_thumb_url} 400w`)
+  if (t.cover_mid_url) candidates.push(`${t.cover_mid_url} 800w`)
+  if (t.cover_url && t.cover_url.startsWith('/images/')) {
+    candidates.push(`${t.cover_url} ${t.cover_w || 1600}w`)
+  }
+  return candidates.length > 1 ? candidates.join(', ') : undefined
+}
+
+// ── Thumbnail row windowing ──────────────────────────────────────────
+// A star can have ~100 titles; mounting every button+img keeps thousands of
+// DOM nodes alive after a full-catalog scroll. Render only the visible
+// window (±THUMB_BUFFER) and pad with spacers so the scroll width (and snap
+// positions) stay exactly as if every item were present.
+const THUMB_BUFFER = 8
+const rowRef = ref<HTMLElement | null>(null)
+const rowScrollLeft = ref(0)
+const rowViewWidth = ref(0)
+const thumbItemWidth = ref(0)
+const thumbGap = ref(0)
+const thumbStride = computed(() => thumbItemWidth.value + thumbGap.value)
+
+const thumbRange = computed(() => {
+  const total = props.star.titles?.length ?? 0
+  if (!thumbStride.value || !rowViewWidth.value) {
+    // SSR / pre-measure: render a small head window only
+    return { start: 0, end: Math.min(total, 20) }
+  }
+  const firstVisible = Math.floor(rowScrollLeft.value / thumbStride.value)
+  const visible = Math.ceil(rowViewWidth.value / thumbStride.value)
+  const start = Math.max(0, firstVisible - THUMB_BUFFER)
+  const end = Math.min(total, firstVisible + visible + THUMB_BUFFER)
+  return { start, end }
+})
+
+const windowedTitles = computed(() => {
+  const titles = props.star.titles ?? []
+  const { start, end } = thumbRange.value
+  return titles.slice(start, end).map((title, i) => ({ title, idx: start + i }))
+})
+
+// Spacer widths must reproduce the flex layout exactly: N hidden items occupy
+// N*width + (N-1)*gap; the spacer itself adds one more gap back.
+const leadPad = computed(() => {
+  const { start } = thumbRange.value
+  return start > 0 ? start * thumbStride.value - thumbGap.value : 0
+})
+const trailPad = computed(() => {
+  const total = props.star.titles?.length ?? 0
+  const remaining = total - thumbRange.value.end
+  return remaining > 0 ? remaining * thumbStride.value - thumbGap.value : 0
+})
+
+function onRowScroll() {
+  rowScrollLeft.value = rowRef.value?.scrollLeft ?? 0
+}
+
+let rowResizeObserver: ResizeObserver | null = null
+
+function measureRow() {
+  const row = rowRef.value
+  if (!row) return
+  rowViewWidth.value = row.clientWidth
+  rowScrollLeft.value = row.scrollLeft
+  const firstBtn = row.querySelector('button')
+  if (firstBtn) {
+    thumbItemWidth.value = (firstBtn as HTMLElement).offsetWidth
+    thumbGap.value = parseFloat(getComputedStyle(row).columnGap) || 0
+  }
+}
+
+onMounted(() => {
+  measureRow()
+  if (rowRef.value) {
+    rowResizeObserver = new ResizeObserver(measureRow)
+    rowResizeObserver.observe(rowRef.value)
+  }
+})
+
+onUnmounted(() => {
+  rowResizeObserver?.disconnect()
+})
 const copied = ref(false)
 const liking = ref(false)
 const activeLiked = computed(() => activeTitle.value?.user_liked ?? false)
