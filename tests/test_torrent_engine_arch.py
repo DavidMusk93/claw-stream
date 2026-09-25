@@ -50,6 +50,7 @@ class MockTorrentHandle:
         self._deadlines: dict[int, int] = {}
         self._have: set[int] = set()
         self._hash = ""
+        self._paused = False
 
     def is_valid(self) -> bool:
         return True
@@ -58,6 +59,7 @@ class MockTorrentHandle:
         m = MagicMock()
         m.state = self._state
         m.has_metadata = self._has_metadata
+        m.paused = self._paused
         m.name = "test"
         m.num_peers = 5
         m.progress = 0.5
@@ -65,6 +67,15 @@ class MockTorrentHandle:
         m.upload_rate = 512
         m.save_path = self._save_path
         return m
+
+    def resume(self) -> None:
+        self._paused = False
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def set_sequential_download(self, on: bool) -> None:
+        pass
 
     def force_recheck(self) -> None:
         self._force_recheck_called = True
@@ -112,6 +123,7 @@ class MockTracker:
         self._bootstrap_called = False
         self._overlay_called = False
         self._request_head_tail_called = False
+        self._moov_range_set = False
         self.start_piece = 0
         self.end_piece = 9
         self.piece_length = 2_097_152
@@ -119,6 +131,9 @@ class MockTracker:
 
     def head_ready(self) -> bool:
         return self._head_ready
+
+    def is_verified(self, p: int) -> bool:
+        return False
 
     def _bootstrap_from_filesystem(self) -> None:
         self._bootstrap_called = True
@@ -134,7 +149,7 @@ class MockTracker:
         return 5
 
     def set_moov_range(self, moov_start: int, moov_end: int) -> None:
-        pass
+        self._moov_range_set = True
 
 
 # ── Tests ───────────────────────────────────────────────────────────
@@ -419,7 +434,10 @@ class TestTouchPreventsGCEviction(unittest.TestCase):
 
 
 class TestCacheWarmingRetry(unittest.TestCase):
-    """Architecture: get_status re-applies priority while head_ready=False."""
+    """Architecture: get_status re-applies the play window when a late moov
+    scan discovers the range after the window was set (moov unknown → tail
+    probe only); without the re-apply, head-moov pieces stay priority 0 and
+    the torrent stalls in phantom-finished."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp()
@@ -458,59 +476,54 @@ class TestCacheWarmingRetry(unittest.TestCase):
         self.engine.torrents[hash_str] = info
         return handle, info, hash_str
 
-    def test_get_status_does_not_reapply_priority(self) -> None:
-        """get_status is read-only; it does not modify piece priorities."""
+    def test_get_status_does_not_reapply_when_moov_known(self) -> None:
+        """moov range already known (moov_pc>0) → get_status stays read-only."""
         tracker = MockTracker(head_ready_val=False, moov_pc=5)
         handle, info, hash_str = self._inject_torrent(tracker)
 
         self.engine.get_status(hash_str)
 
-        self.assertFalse(
-            tracker._request_head_tail_called,
-            "get_status must not re-apply play priority",
-        )
-
-    def test_get_status_throttles_reapply_within_10s(self) -> None:
-        """head_ready=False but <10s since last warm → do NOT re-apply."""
-        tracker = MockTracker(head_ready_val=False, moov_pc=5)
-        handle, info, hash_str = self._inject_torrent(tracker)
-
-        # Recent warm attempt
-        info["_last_warm_attempt"] = time.time() - 3
-
-        self.engine.get_status(hash_str)
-
-        self.assertFalse(
-            tracker._request_head_tail_called,
-            "get_status must NOT re-apply within 10s throttle window",
+        self.assertEqual(
+            handle._prios, [4] * 10,
+            "get_status must not re-apply play priority when moov is known",
         )
 
     def test_get_status_no_reapply_when_already_ready(self) -> None:
-        """head_ready=True → no warming retry needed."""
+        """head_ready=True → no re-apply needed."""
         tracker = MockTracker(head_ready_val=True, moov_pc=5)
         handle, info, hash_str = self._inject_torrent(tracker)
-        info["_last_warm_attempt"] = time.time() - 15
 
         self.engine.get_status(hash_str)
 
-        self.assertFalse(
-            tracker._request_head_tail_called,
-            "get_status must NOT re-apply when head_ready is already true",
-        )
+        self.assertEqual(handle._prios, [4] * 10)
 
-    def test_get_status_no_reapply_without_moov_end(self) -> None:
-        """moov_end not set → warming retry must not fire (moov unknown)."""
+    def test_get_status_reapplies_when_moov_discovered_late(self) -> None:
+        """moov unknown at window-set time but found by the retry scan →
+        re-apply the window so head-moov pieces become urgent."""
         tracker = MockTracker(head_ready_val=False, moov_pc=0)
         handle, info, hash_str = self._inject_torrent(tracker)
         info["moov_end"] = 0  # simulate moov not yet scanned
-        info["_last_warm_attempt"] = time.time() - 15
 
         self.engine.get_status(hash_str)
 
-        self.assertFalse(
-            tracker._request_head_tail_called,
-            "warming retry must not fire when moov range is unknown",
+        self.assertTrue(tracker._moov_range_set, "retry scan must record the moov range")
+        self.assertEqual(
+            handle._prios[0], 7,
+            "head piece must be raised to urgent once the moov range is known",
         )
+
+    def test_get_status_no_reapply_when_moov_undiscoverable(self) -> None:
+        """moov truly absent on disk (all-zero file) → no re-apply."""
+        tracker = MockTracker(head_ready_val=False, moov_pc=0)
+        handle, info, hash_str = self._inject_torrent(tracker)
+        info["moov_end"] = 0
+        with open(info["video_path"], "wb") as f:
+            f.write(b"\x00" * (1024 * 1024))
+
+        self.engine.get_status(hash_str)
+
+        self.assertFalse(tracker._moov_range_set)
+        self.assertEqual(handle._prios, [4] * 10)
 
 
 class FakeTorrentFinishedAlert:

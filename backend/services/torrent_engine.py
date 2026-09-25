@@ -340,6 +340,17 @@ class TorrentEngine:
         settings["upload_rate_limit"] = 2 * 1024 * 1024  # 2 MB/s
         settings["checking_mem_usage"] = 1024  # 1GB RAM for faster hash checking
         settings["alert_queue_size"] = 10000  # prevent alert drop under load
+        # Cold-start tuning for stream-while-downloading (benchmarked on a
+        # 930-peer swarm: first byte 10s -> 5s, head done ~35s -> ~20s):
+        # - hit every tracker at once instead of one per announce
+        # - open 50 outbound connections/s instead of 10
+        # - churn dead peers/snubbed requests faster (defaults 15s/60s/20s)
+        settings["announce_to_all_trackers"] = True
+        settings["announce_to_all_tiers"] = True
+        settings["connection_speed"] = 50
+        settings["peer_connect_timeout"] = 8
+        settings["request_timeout"] = 20
+        settings["piece_timeout"] = 10
         # CRITICAL: disable mmap storage to avoid finished-state deadlock.
         # libtorrent 2.0 mmap creates full-size sparse files on add, then
         # force_recheck reads page-cache zeros and falsely marks pieces
@@ -1187,33 +1198,36 @@ class TorrentEngine:
         severely hurting experience. Instead retain downloaded pieces (priority=1), only set
         undownloaded pieces outside window to 0.
         """
-        # CRITICAL: libtorrent 2.0 may report finished for sparse files even
-        # when data is missing. In finished state libtorrent ignores
-        # piece_priority / set_piece_deadline, causing playback deadlock.
-        # With mmap disabled, force_recheck() re-verifies pieces against hashes
-        # and preserves existing downloaded data.
+        # Phantom-finished recovery. libtorrent reports finished whenever all
+        # priority>0 pieces are done — pause zeroes every priority, so a
+        # paused-then-retried torrent sits in finished with the head missing.
+        # libtorrent 2.0 with POSIX storage (mmap disabled) re-enters
+        # downloading as soon as priorities are raised again, so the normal
+        # path below already escapes the phantom. The one exception is
+        # genuinely mis-verified disk data (libtorrent claims pieces the disk
+        # contradicts) — recheck ONCE per add to rule that out, then trust
+        # priorities. verified==0 means nothing was ever claimed (fresh add):
+        # no recheck, just download.
         status = h.status()
         if status.state == lt.torrent_status.finished:
             tracker = info.get("tracker")
-            if tracker:
-                if tracker.verified_count() == 0 or not tracker.head_ready():
+            if tracker and tracker.verified_count() > 0 and not tracker.head_ready():
+                if not info.get("_last_force_recheck"):
                     log.warning(
                         f"finished false-positive: {info['hash'][:12]}... "
                         f"verified={tracker.verified_count()}, head_ready={tracker.head_ready()}, "
-                        f"forcing recheck to preserve cache"
+                        f"forcing one recheck to rule out mis-verified data"
                     )
-                    # Pause zeroes all piece priorities, which flips the
-                    # torrent into finished; a retry then lands here. Record
-                    # the requested window so torrent_checked re-applies it
-                    # once the recheck invalidates the phantom-finished state
-                    # — without this the retry got a 404 and the download
-                    # stayed paused forever (stall at a few percent).
+                    # torrent_checked re-applies this window once the recheck
+                    # invalidates the phantom-finished state.
                     info["_window_after_recheck"] = (time_sec, duration_sec, window_pcs)
-                    now = time.time()
-                    if now - info.get("_last_force_recheck", 0) >= 120:
-                        info["_last_force_recheck"] = now
-                        self._force_recheck(info["hash"], info)
+                    info["_last_force_recheck"] = time.time()
+                    self._force_recheck(info["hash"], info)
                     return True
+                log.info(
+                    f"phantom finished: {info['hash'][:12]}... "
+                    f"recheck already done, re-applying window"
+                )
 
         if not status.has_metadata:
             return False
@@ -1503,6 +1517,13 @@ class TorrentEngine:
                         f"moov found on retry: {hash_str[:12]}... "
                         f"range={moov_start}-{moov_end}"
                     )
+                    # The play window was set while moov was unknown (tail
+                    # probe only). If the moov turned out to sit at the head,
+                    # its pieces were never prioritized and the torrent may
+                    # already sit in phantom-finished with everything wanted
+                    # done — re-apply the window now that moov is known.
+                    if not tracker.head_ready() and not info.get("_paused"):
+                        self._set_stream_window(h, info, 0.0, 0.0, window_pcs=0)
                 else:
                     log.debug(
                         f"moov retry still missing: {hash_str[:12]}... "
