@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-void">
     <!-- Top bar -->
-    <header class="fixed top-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
+    <header class="fixed top-0 left-0 right-0 z-40 bg-white/95 sm:bg-white/90 sm:backdrop-blur-xl border-b border-black/[0.06]">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
         <div class="flex items-center gap-2.5">
           <img src="/logo.png" alt="Star Archive logo" class="w-8 h-8 -my-1 rounded-full" />
@@ -54,7 +54,7 @@
     </header>
 
     <!-- Star navigation pills -->
-    <div class="fixed top-14 left-0 right-0 z-30 bg-white/90 backdrop-blur-xl border-b border-black/[0.06]">
+    <div class="fixed top-14 left-0 right-0 z-30 bg-white/95 sm:bg-white/90 sm:backdrop-blur-xl border-b border-black/[0.06]">
       <StarNav :stars="displayStars" />
     </div>
 
