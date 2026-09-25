@@ -41,13 +41,11 @@ export interface CacheMetrics {
 export interface Title {
   code: string
   title?: string
-  charming_intro?: string
   date?: string
-  views?: string
-  likes?: string
   resolution?: string
   cover_url?: string
   cover_thumb_url?: string
+  cover_mid_url?: string
   cover_w?: number
   cover_h?: number
   magnet?: string

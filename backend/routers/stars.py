@@ -56,15 +56,15 @@ def invalidate_stars_cache() -> None:
 
 # ── Response builder ────────────────────────────────────────────────
 
-def _scan_cover_files() -> dict[str, tuple[bool, bool]]:
-    """Scan images/titles/ once and map code -> (has_full, has_thumb).
+def _scan_cover_files() -> dict[str, tuple[bool, bool, bool]]:
+    """Scan images/titles/ once and map code -> (has_full, has_thumb, has_mid).
 
     Lets /api/stars emit direct static cover URLs (served by Caddy with
     long-lived cache headers) instead of forcing every client through the
     /api/cover 307 redirect hop. One listdir pass replaces ~3.5k stat calls.
     """
     titles_dir = os.path.join(IMAGES_DIR, "titles")
-    found: dict[str, tuple[bool, bool]] = {}
+    found: dict[str, tuple[bool, bool, bool]] = {}
     try:
         codes = os.listdir(titles_dir)
     except OSError:
@@ -77,6 +77,7 @@ def _scan_cover_files() -> dict[str, tuple[bool, bool]]:
         found[code_dir.upper()] = (
             f"{code_dir}.jpg" in files,
             f"{code_dir}_thumb.jpg" in files,
+            f"{code_dir}_mid.jpg" in files,
         )
     return found
 
@@ -86,6 +87,8 @@ def _build_stars_response() -> list[dict[str, Any]]:
 
     conn = _db_conn()
     try:
+        # Only fields the frontend actually renders — the catalog is ~2k
+        # titles and this JSON ships on every page load.
         title_rows = conn.execute("""
         SELECT
             s.code,
@@ -93,14 +96,9 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 'code', r.code,
                 'title', r.title,
                 'date', COALESCE(r.release_date, ''),
-                'views', COALESCE(r.views::text, ''),
-                'likes', COALESCE(r.likes::text, ''),
                 'resolution', COALESCE(r.resolution, ''),
-                'download_url', COALESCE(r.download_url, ''),
-                'cover_url', COALESCE(r.cover_url, ''),
                 'cover_w', r.cover_w,
                 'cover_h', r.cover_h,
-                'charming_intro', COALESCE(r.charming_intro, ''),
                 'magnet', COALESCE(r.magnet, ''),
                 'magnet_status', COALESCE(r.magnet_status, ''),
                 'user_liked', COALESCE(r.user_liked, 0)
@@ -129,13 +127,15 @@ def _build_stars_response() -> list[dict[str, Any]]:
                 # hop entirely; fall back to /api/cover (DB + disk backfill)
                 # when the exported file is missing.
                 code_lower = t["code"].lower()
-                has_full, has_thumb = cover_files.get(t["code"].upper(), (False, False))
+                has_full, has_thumb, has_mid = cover_files.get(t["code"].upper(), (False, False, False))
                 if has_full:
                     t["cover_url"] = f"/images/titles/{code_lower}/{code_lower}.jpg"
                 else:
                     t["cover_url"] = f"/api/cover/{t['code']}"
                 if has_thumb:
                     t["cover_thumb_url"] = f"/images/titles/{code_lower}/{code_lower}_thumb.jpg"
+                if has_mid:
+                    t["cover_mid_url"] = f"/images/titles/{code_lower}/{code_lower}_mid.jpg"
                 t["user_liked"] = bool(t.get("user_liked", 0))
 
             result.append({
@@ -162,14 +162,11 @@ def _build_stars_response() -> list[dict[str, Any]]:
         number = 1
         for star in result:
             star["number"] = None
-            is_first = True
             for t in star.get("titles", []):
                 t["number"] = number
-                t["is_primary"] = is_first
                 if star["number"] is None:
                     star["number"] = number
                 number += 1
-                is_first = False
 
         return result
     finally:
