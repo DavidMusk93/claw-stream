@@ -90,33 +90,42 @@ def _write_cover_to_disk(code: str, cover_b64: str | None) -> None:
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(jpeg_bytes)
-        _write_thumb(code_lower, jpeg_bytes)
+        _write_variants(code_lower, jpeg_bytes)
     except Exception:
         log.warning(f"cover write failed for {code}", exc_info=True)
 
 
 THUMB_WIDTH = 400
 THUMB_QUALITY = 82
+MID_WIDTH = 800
+MID_QUALITY = 85
 
 
-def _write_thumb(code_lower: str, full_jpeg: bytes) -> None:
-    """Generate {code}_thumb.jpg (THUMB_WIDTH px wide) next to the full cover.
-
-    List/grid views load the thumb variant; skipping this on write leaves new
-    titles downloading the full-size cover until the next manual export run.
-    """
-    thumb_path = IMAGES_DIR / code_lower / f"{code_lower}_thumb.jpg"
-    if thumb_path.exists() and thumb_path.stat().st_size > 0:
+def _write_variant(code_lower: str, img: Image.Image, width: int, quality: int, suffix: str) -> None:
+    """Generate {code}{suffix}.jpg (width px wide) next to the full cover."""
+    variant_path = IMAGES_DIR / code_lower / f"{code_lower}{suffix}.jpg"
+    if variant_path.exists() and variant_path.stat().st_size > 0:
         return
+    if img.width > width:
+        height = round(img.height * width / img.width)
+        img = img.resize((width, height), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=quality, optimize=True)
+    variant_path.write_bytes(out.getvalue())
+
+
+def _write_variants(code_lower: str, full_jpeg: bytes) -> None:
+    """Generate the thumb (THUMB_WIDTH) and mid (MID_WIDTH) variants.
+
+    List/grid views load the thumb, the hero loads the mid via srcset;
+    skipping these on write leaves new titles decoding the full-size cover
+    until the next manual export run.
+    """
     img = Image.open(io.BytesIO(full_jpeg))
     if img.mode in ("RGBA", "P", "LA"):
         img = img.convert("RGB")
-    if img.width > THUMB_WIDTH:
-        height = round(img.height * THUMB_WIDTH / img.width)
-        img = img.resize((THUMB_WIDTH, height), Image.LANCZOS)
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=THUMB_QUALITY, optimize=True)
-    thumb_path.write_bytes(out.getvalue())
+    _write_variant(code_lower, img, THUMB_WIDTH, THUMB_QUALITY, "_thumb")
+    _write_variant(code_lower, img, MID_WIDTH, MID_QUALITY, "_mid")
 
 
 def _extract_hash(magnet: str | None) -> str | None:
