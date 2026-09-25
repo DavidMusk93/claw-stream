@@ -925,11 +925,22 @@ class TorrentEngine:
         elif isinstance(alert, lt.torrent_checked_alert):
             h = alert.handle
             hash_str = str(h.info_hash())
+            pending_window = None
             with self.lock:
                 if hash_str in self.torrents:
                     info = self.torrents[hash_str]
                     if info.get("tracker"):
                         info["tracker"]._bootstrap_from_filesystem()
+                    if not info.get("_paused"):
+                        pending_window = info.pop("_window_after_recheck", None)
+            if pending_window:
+                # A play retry hit the finished false-positive and asked for
+                # this window before the recheck; apply it now that the
+                # phantom-finished state is gone, and actually start the
+                # download (the handle may still be paused).
+                if h.status().paused:
+                    h.resume()
+                self._set_stream_window(h, info, *pending_window)
             self._invalidate_status_cache(hash_str)
             self._emit_event("torrent.status", {"hash": hash_str, "state": "checked"})
         elif isinstance(alert, lt.torrent_finished_alert):
@@ -1191,8 +1202,18 @@ class TorrentEngine:
                         f"verified={tracker.verified_count()}, head_ready={tracker.head_ready()}, "
                         f"forcing recheck to preserve cache"
                     )
-                    self._force_recheck(info["hash"], info)
-                    return False
+                    # Pause zeroes all piece priorities, which flips the
+                    # torrent into finished; a retry then lands here. Record
+                    # the requested window so torrent_checked re-applies it
+                    # once the recheck invalidates the phantom-finished state
+                    # — without this the retry got a 404 and the download
+                    # stayed paused forever (stall at a few percent).
+                    info["_window_after_recheck"] = (time_sec, duration_sec, window_pcs)
+                    now = time.time()
+                    if now - info.get("_last_force_recheck", 0) >= 120:
+                        info["_last_force_recheck"] = now
+                        self._force_recheck(info["hash"], info)
+                    return True
 
         if not status.has_metadata:
             return False
