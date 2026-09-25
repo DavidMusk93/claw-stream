@@ -170,7 +170,6 @@
             :alt="title.code"
             class="w-full h-auto block bg-[#F2F2F7]"
             :style="{ aspectRatio: coverAR(title) }"
-            loading="lazy"
             decoding="async"
             @error="thumbErrors[title.code] = true"
           />
