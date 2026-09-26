@@ -64,7 +64,7 @@ Before SSE, the frontend ran four independent short-polling loops:
 | `star.ready` | `stars.py` | `{code, name, titles_count}` | 3s add-star polling |
 | `torrent.head_ready` | `TorrentEngine` | `{hash}` | video status polling |
 | `torrent.status` | `TorrentEngine` | `{hash, state}` | video status polling |
-| `torrent.progress` | `TorrentEngine` | `{hash, state, progress, download_rate, upload_rate, peers, ready, head_ready, video_size, local_size, verified_pieces}` | 5s video status polling |
+| `torrent.progress` | `TorrentEngine` | `{hash, state, progress, download_rate, upload_rate, peers, ready, head_ready, video_size, local_size, verified_pieces, piece_segments}` | 5s video status polling |
 | `cache.update` | `TorrentEngine` / `cache.py` | `{action, hash}` | 30s cache polling |
 
 ### `torrent.progress`: throttled snapshot push
@@ -81,6 +81,13 @@ UI renders. The frontend merges it into local state directly and never refetches
 `/torrent/status` on a schedule; `local_size` is a verified-bytes estimate
 (exact on-disk size still comes from the one-shot status fetch at subscribe time
 and from resync).
+
+`piece_segments` is the live download-state map:
+`PieceStateTracker.get_lane_segments(PROGRESS_SEGMENTS)` (100 segments ≈ 1%
+each) rendered by the player progress bar (`PlayerProgressBar.vue`) as
+cached / downloading / missing regions. It is pure in-memory bitmap math
+(~1.5KB per push), so the 2s snapshot doubles as the player's piece-map feed —
+the progress bar needs no separate polling or REST refetch.
 
 ### The key insight: state change is rare
 

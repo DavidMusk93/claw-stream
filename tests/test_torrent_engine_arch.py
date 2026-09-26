@@ -1180,5 +1180,73 @@ class TestOnDemandDownloadDiscipline(unittest.TestCase):
         self.assertTrue(tracker.reset_priorities_called)
 
 
+class TestProgressPushSegments(unittest.TestCase):
+    """torrent.progress SSE payload carries the download-state map
+    (piece_segments at PROGRESS_SEGMENTS granularity) so the player
+    progress bar can render live download state without REST polling."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+        self.events: list[tuple[str, dict]] = []
+        self.engine._emit_event = lambda event, data: self.events.append((event, data))
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+
+    def _inject_active_torrent(self, tracker) -> str:
+        hash_str = "ab" * 20
+        handle = MockTorrentHandle(lt.torrent_status.downloading)
+        self.engine.torrents[hash_str] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": None,
+            "video_size": 10 * 2_097_152,
+            "ready": True,
+            "tracker": tracker,
+            "_last_play_time": time.time(),
+        }
+        return hash_str
+
+    def test_progress_payload_includes_piece_segments(self) -> None:
+        from services.torrent_engine import PROGRESS_SEGMENTS
+
+        sentinel = [[i, i + 1, 2] for i in range(PROGRESS_SEGMENTS)]
+        tracker = MagicMock()
+        tracker.verified_count.return_value = 3
+        tracker.start_piece = 0
+        tracker.end_piece = 9
+        tracker.piece_length = 2_097_152
+        tracker._moov_pc = 1
+        tracker.head_ready.return_value = True
+        tracker.get_lane_segments.return_value = sentinel
+        hash_str = self._inject_active_torrent(tracker)
+
+        self.engine._last_progress_push = 0.0
+        self.engine._maybe_push_progress()
+
+        progress_events = [d for e, d in self.events if e == "torrent.progress"]
+        self.assertEqual(len(progress_events), 1)
+        payload = progress_events[0]
+        self.assertEqual(payload["hash"], hash_str)
+        self.assertEqual(payload["piece_segments"], sentinel)
+        tracker.get_lane_segments.assert_called_once_with(PROGRESS_SEGMENTS)
+
+    def test_progress_payload_without_tracker_has_empty_segments(self) -> None:
+        hash_str = self._inject_active_torrent(tracker=None)
+
+        self.engine._last_progress_push = 0.0
+        self.engine._maybe_push_progress()
+
+        progress_events = [d for e, d in self.events if e == "torrent.progress"]
+        self.assertEqual(len(progress_events), 1)
+        self.assertEqual(progress_events[0]["hash"], hash_str)
+        self.assertEqual(progress_events[0]["piece_segments"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

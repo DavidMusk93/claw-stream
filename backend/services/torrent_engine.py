@@ -32,6 +32,10 @@ CACHE_CLEAN_INTERVAL_SEC = 60  # Background cleanup interval
 PROGRESS_PUSH_INTERVAL_SEC = 2.0
 # A torrent stays "live" for progress pushes this long after its last play.
 PROGRESS_PUSH_ACTIVE_WINDOW_SEC = 600
+# Lane-segment granularity for the download-state map sent to the player
+# progress bar (REST /torrent/status and SSE torrent.progress). 100 segments
+# ≈ 1% per segment; pure in-memory bitmap math, ~1.5KB per push.
+PROGRESS_SEGMENTS = 100
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
     r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
@@ -935,6 +939,9 @@ class TorrentEngine:
                     "video_size": info.get("video_size", 0),
                     "local_size": local_size,
                     "verified_pieces": verified,
+                    "piece_segments": (
+                        tracker.get_lane_segments(PROGRESS_SEGMENTS) if tracker else []
+                    ),
                 })
             except Exception:
                 log.debug(f"progress push failed for {hash_str[:12]}...", exc_info=True)
@@ -1612,7 +1619,7 @@ class TorrentEngine:
             "state": str(s.state),
             "verified_pieces": tracker.verified_count() if tracker else 0,
             "quality": info.get("quality", "SD"),
-            "piece_segments": tracker.get_lane_segments(10) if tracker and hasattr(tracker, "get_lane_segments") else [],
+            "piece_segments": tracker.get_lane_segments(PROGRESS_SEGMENTS) if tracker and hasattr(tracker, "get_lane_segments") else [],
             "tier": self._get_tier(info),
         }
 
