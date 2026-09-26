@@ -1247,6 +1247,33 @@ class TestProgressPushSegments(unittest.TestCase):
         self.assertEqual(progress_events[0]["hash"], hash_str)
         self.assertEqual(progress_events[0]["piece_segments"], [])
 
+    def test_progress_payload_exposes_check_progress_while_checking(self) -> None:
+        """During checking_files the verified-ratio progress sits at 0; the UI
+        needs libtorrent's native check progress to show verification moving."""
+        hash_str = "cd" * 20
+        handle = MockTorrentHandle(lt.torrent_status.checking_files)
+        self.engine.torrents[hash_str] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 1,
+            "video_path": None,
+            "video_size": 10 * 2_097_152,
+            "ready": False,
+            "tracker": None,
+            "_last_play_time": time.time(),
+        }
+
+        self.engine._last_progress_push = 0.0
+        self.engine._maybe_push_progress()
+
+        progress_events = [d for e, d in self.events if e == "torrent.progress"]
+        self.assertEqual(len(progress_events), 1)
+        # MockTorrentHandle.status().progress is fixed at 0.5
+        self.assertEqual(progress_events[0]["check_progress"], 50.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

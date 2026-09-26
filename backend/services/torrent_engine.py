@@ -36,6 +36,11 @@ PROGRESS_PUSH_ACTIVE_WINDOW_SEC = 600
 # progress bar (REST /torrent/status and SSE torrent.progress). 100 segments
 # ≈ 1% per segment; pure in-memory bitmap math, ~1.5KB per push.
 PROGRESS_SEGMENTS = 100
+# Fast-resume snapshot file stored next to {hash}.torrent. libtorrent 2.0
+# trusts the resume have_pieces bitmask blindly (no file revalidation), so the
+# snapshot must be deleted whenever we mutate files behind libtorrent's back
+# (punch-hole). Saves happen on pause and on graceful shutdown.
+RESUME_FILE_SUFFIX = ".resume"
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".webm"}
 SPAM_PATTERNS = [re.compile(p, re.I) for p in [
     r"game pack", r"996gg", r"^\d+\.txt$", r"^readme", r"\.url$", r"\.txt$"
@@ -420,6 +425,117 @@ class TorrentEngine:
             except Exception:
                 pass
 
+    def _resume_file_path(self, hash_str: str) -> str:
+        return os.path.join(self.cache_dir, hash_str, f"{hash_str}{RESUME_FILE_SUFFIX}")
+
+    def _drop_resume_file(self, hash_str: str) -> None:
+        """Invalidate the fast-resume snapshot (files changed behind libtorrent)."""
+        try:
+            os.remove(self._resume_file_path(hash_str))
+        except OSError:
+            pass
+
+    def _on_save_resume_data(self, alert: lt.save_resume_data_alert) -> None:
+        """Persist libtorrent resume data so the next add skips the hash check."""
+        try:
+            hash_str = str(alert.handle.info_hash())
+        except Exception:
+            return
+        try:
+            buf = lt.write_resume_data_buf(alert.params)
+        except Exception as e:
+            log.warning(f"resume data encode failed: {hash_str[:12]}... {e}")
+            return
+        path = self._resume_file_path(hash_str)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(buf)
+            os.replace(tmp, path)
+            log.info(f"resume data saved: {hash_str[:12]}...")
+        except OSError as e:
+            log.warning(f"resume data write failed: {hash_str[:12]}... {e}")
+
+    def _load_resume_data(self, hash_str: str, params: lt.add_torrent_params) -> int | None:
+        """Merge a saved have_pieces bitmask into add params (fast resume).
+
+        Returns the number of pieces the snapshot claims as downloaded, or
+        None when no snapshot was applied. Only the piece bitmask is taken —
+        our own flags/save_path/priority discipline stays in control.
+        """
+        resume_path = self._resume_file_path(hash_str)
+        if not os.path.exists(resume_path):
+            return None
+        try:
+            with open(resume_path, "rb") as f:
+                raw = f.read()
+            rd = lt.bdecode(raw)
+            v1 = rd.get(b"info-hash", b"").hex()
+            v2 = rd.get(b"info-hash2", b"").hex()[:40]
+            if hash_str not in (v1, v2):
+                log.warning(f"resume data hash mismatch: {hash_str[:12]}... deleting")
+                self._drop_resume_file(hash_str)
+                return None
+            atp = lt.read_resume_data(raw)
+            # Empty list = "unknown" (triggers full check). A non-empty list —
+            # even all-False = "checked, nothing had" — skips it.
+            if atp.have_pieces:
+                params.have_pieces = atp.have_pieces
+                log.info(
+                    f"fast-resume: {hash_str[:12]}... "
+                    f"({sum(atp.have_pieces)}/{len(atp.have_pieces)} pieces known)"
+                )
+                return int(sum(atp.have_pieces))
+        except Exception as e:
+            log.warning(f"resume data load failed: {hash_str[:12]}... {e}")
+        return None
+
+    def _save_all_resume_data(self, timeout: float = 15.0) -> None:
+        """Flush resume data for every torrent, synchronously.
+
+        Called from shutdown() after the alert thread has stopped, so this is
+        the only pop_alerts consumer. Torrents still checking are skipped —
+        their piece knowledge is unreliable.
+        """
+        checking_states = (
+            lt.torrent_status.checking_files,
+            lt.torrent_status.checking_resume_data,
+        )
+        with self.lock:
+            items = list(self.torrents.items())
+        pending: set[str] = set()
+        for hash_str, info in items:
+            h = info.get("handle")
+            if not h or not h.is_valid():
+                continue
+            try:
+                s = h.status()
+                if not s.has_metadata or s.state in checking_states:
+                    continue
+                h.save_resume_data()
+                pending.add(hash_str)
+            except Exception:
+                pass
+        if not pending:
+            return
+        deadline = time.time() + timeout
+        while pending and time.time() < deadline:
+            for alert in self.session.pop_alerts():
+                if isinstance(alert, lt.save_resume_data_alert):
+                    try:
+                        hash_str = str(alert.handle.info_hash())
+                    except Exception:
+                        continue
+                    self._on_save_resume_data(alert)
+                    pending.discard(hash_str)
+            if pending:
+                time.sleep(0.05)
+        if pending:
+            log.warning(f"resume data flush timed out for {len(pending)} torrent(s)")
+        else:
+            log.info(f"resume data flush complete ({len(items)} torrents)")
+
     def _preload_cached_torrents(self) -> None:
         """Scan cache directory and auto-load all cached .torrent files."""
         if not os.path.isdir(self.cache_dir):
@@ -440,8 +556,20 @@ class TorrentEngine:
                     continue
             try:
                 magnet = f"magnet:?xt=urn:btih:{hash_str}"
-                self.add_torrent(magnet, prefetch=False)
+                info = self.add_torrent(magnet, prefetch=False)
                 loaded += 1
+                # Migration: torrents without a fast-resume snapshot would sit
+                # in checking_files limbo (paused defers the check) and make
+                # the first play after restart pay a full-file hash check.
+                # Kick the check now — priorities are all 0, so nothing
+                # downloads — then torrent_checked re-pauses and snapshots.
+                if (
+                    info
+                    and not os.path.exists(self._resume_file_path(hash_str))
+                    and info["handle"].status().has_metadata
+                ):
+                    info["_preload_checking"] = True
+                    info["handle"].resume()
             except Exception as e:
                 log.warning(f"preload failed: {hash_str[:12]}... {e}")
         if loaded:
@@ -612,6 +740,9 @@ class TorrentEngine:
 
         if freed > 0:
             tracker._bootstrap_from_filesystem()
+            # The file changed behind libtorrent's back; a stale fast-resume
+            # snapshot would overstate what is on disk.
+            self._drop_resume_file(hash_str)
             log.info(
                 f"punch hole: {hash_str[:12]}... freed {format_size(freed)} "
                 f"(kept head+tail {format_size(30 * piece_length * 2)})"
@@ -812,6 +943,7 @@ class TorrentEngine:
                         f"file hash={ti_v1[:12]}/{ti_v2_trunc[:12]}... deleting stale cache"
                     )
                     os.remove(torrent_path)
+                    self._drop_resume_file(hash_str)
                 elif ti_v1 != "0" * 40 and ti_v1 != hash_str:
                     # Hybrid (v1+v2) torrent addressed by its truncated v2 hash:
                     # libtorrent rejects params.ti when the real v1 differs from
@@ -825,6 +957,10 @@ class TorrentEngine:
                     log.info(f"metadata cache hit: {hash_str[:12]}... ({ti.name()})")
             except Exception as e:
                 log.warning(f"metadata cache load failed: {hash_str[:12]}... {e}")
+
+        # Fast resume: a saved have_pieces snapshot lets libtorrent skip the
+        # full-file hash check that otherwise blocks first-play after restart.
+        resume_claimed = self._load_resume_data(hash_str, params)
 
         handle = self.session.add_torrent(params)
 
@@ -843,6 +979,7 @@ class TorrentEngine:
             "_last_play_time": 0,
             "_play_count": 0,
             "progress": 0.0,
+            "_resume_claimed": resume_claimed,
         }
         # Liked titles should always keep their cache.
         if hash_str in self.liked_hashes:
@@ -954,7 +1091,11 @@ class TorrentEngine:
 
     def _handle_alert(self, alert: lt.alert) -> None:
         """Handle a single libtorrent alert."""
-        if isinstance(alert, lt.metadata_received_alert):
+        if isinstance(alert, lt.save_resume_data_alert):
+            self._on_save_resume_data(alert)
+        elif isinstance(alert, lt.save_resume_data_failed_alert):
+            log.warning(f"save_resume_data failed: {alert.error.message()}")
+        elif isinstance(alert, lt.metadata_received_alert):
             self._on_metadata(alert.handle)
         elif isinstance(alert, lt.torrent_checked_alert):
             h = alert.handle
@@ -975,6 +1116,31 @@ class TorrentEngine:
                 if h.status().paused:
                     h.resume()
                 self._set_stream_window(h, info, *pending_window)
+            # Preload migration: this torrent was resumed at startup only to
+            # run the one-time hash check. Snapshot piece knowledge for fast
+            # resume, then return it to its paused, lazy state — unless the
+            # user started playing meanwhile.
+            with self.lock:
+                info = self.torrents.get(hash_str)
+                preload_checking = bool(info and info.pop("_preload_checking", None))
+                never_played = bool(
+                    info
+                    and not info.get("_last_play_time", 0)
+                    and not info.get("_resume_on_metadata")
+                )
+            if preload_checking:
+                try:
+                    h.save_resume_data()
+                except Exception:
+                    pass
+                if never_played:
+                    try:
+                        h.pause()
+                        with self.lock:
+                            if hash_str in self.torrents:
+                                self.torrents[hash_str]["_paused"] = True
+                    except Exception:
+                        pass
             self._invalidate_status_cache(hash_str)
             self._emit_event("torrent.status", {"hash": hash_str, "state": "checked"})
         elif isinstance(alert, lt.torrent_finished_alert):
@@ -1193,7 +1359,7 @@ class TorrentEngine:
         # now that mmap storage is disabled (mmap_file_size_cutoff=0).
         if not info.get("_recheck_done"):
             status = handle.status()
-            if status.state == lt.torrent_status.finished:
+            if status.state in (lt.torrent_status.finished, lt.torrent_status.seeding):
                 tracker = info.get("tracker")
                 if tracker:
                     tracker._bootstrap_from_filesystem()
@@ -1205,6 +1371,18 @@ class TorrentEngine:
                         )
                         return
                     else:
+                        # A fast-resume snapshot claiming zero pieces, with
+                        # zero pieces on disk, is not a contradiction — the
+                        # torrent is simply empty. Rehashing gigabytes of
+                        # sparse zeros would confirm nothing; skip it.
+                        if info.get("_resume_claimed") == 0 and tracker.verified_count() == 0:
+                            info["_recheck_done"] = True
+                            info["ready"] = True
+                            log.info(
+                                f"bootstrap-first: {hash_str[:12]}... "
+                                f"empty torrent (0 pieces claimed/on disk), skip recheck"
+                            )
+                            return
                         log.warning(
                             f"finished with holes: {hash_str[:12]}... "
                             f"disk scan shows missing data, forcing recheck"
@@ -1249,7 +1427,7 @@ class TorrentEngine:
             status = h.status()
         except RuntimeError:
             return False
-        was_finished = status.state == lt.torrent_status.finished
+        was_finished = status.state in (lt.torrent_status.finished, lt.torrent_status.seeding)
         if was_finished:
             tracker = info.get("tracker")
             if tracker and tracker.verified_count() > 0 and not tracker.head_ready():
@@ -1490,6 +1668,12 @@ class TorrentEngine:
             log.info(f"pause download: {hash_str[:12]}... non-primary, removing torrent")
             self.remove_torrent(hash_str)
         else:
+            # Snapshot piece knowledge so the next add fast-resumes without a
+            # full-file hash check.
+            try:
+                h.save_resume_data()
+            except Exception:
+                pass
             log.info(f"pause download: {hash_str[:12]}... primary, keeping cache")
         return True
 
@@ -1981,6 +2165,12 @@ class TorrentEngine:
         self._alert_thread.join(timeout=5)
         self._clean_thread.join(timeout=5)
         self._preload_thread.join(timeout=5)
+        # Fast-resume flush: the alert thread is stopped, so this is the only
+        # pop_alerts consumer.
+        try:
+            self._save_all_resume_data()
+        except Exception as e:
+            log.warning(f"resume data flush failed: {e}")
         # Remove all torrents to release file handles (critical in tests)
         for hash_str in list(self.torrents.keys()):
             try:

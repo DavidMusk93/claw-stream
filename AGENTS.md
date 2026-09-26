@@ -31,7 +31,7 @@ This repository is **claw-stream**, a personal workspace. The only active subpro
 ### 1.2 Core Architecture Decisions
 
 - **Sparse File + SEEK_DATA/SEEK_HOLE**: Linux sparse files for storage; un-downloaded regions occupy no disk. Stream reads use `SEEK_HOLE` to detect holes and avoid returning all-zero data to the browser.
-- **Bootstrap-first verification**: Finished torrents are first scanned with `lseek(SEEK_HOLE)`; if data is complete, skip the minute-long hash recheck.
+- **Bootstrap-first verification + fast-resume snapshots**: Finished/seeding torrents are first scanned with `lseek(SEEK_HOLE)`; if data is complete, skip the minute-long hash recheck. Resume data (`{hash}.resume`, saved on pause and graceful shutdown) is merged at add time so a restart skips the full-file hash check entirely; the snapshot is invalidated whenever files change behind libtorrent's back (punch-hole, stale metadata). During an actual check, `check_progress` exposes libtorrent's native verification progress.
 - **Disk is the single source of truth**: piece state is derived from on-disk data, not libtorrent's in-memory view (see `tests/test_disk_truth_source.py`).
 - **Tiered cache (L1/L2/L3/L4)**: Scores based on playback heat, completion, and access time, replacing pure LRU eviction. Liked titles (`user_liked=1`) are protected from eviction and auto-resumed on startup.
 - **PieceStateTracker**: Independent piece state machine (`backend/services/piece_tracker.py`). libtorrent `have_piece()` is unreliable during `checking_files`, so we track with bitmaps.
@@ -307,8 +307,9 @@ systemctl reload caddy
 | `tests/test_ondemand_download.py` | On-demand download discipline E2E: play downloads only head window + moov probe, seek moves window, unwatched middle stays a hole | Local BT seed |
 | `tests/test_diff_sync.py` | Diff-Sync incremental sync regression (sukebei RSS fetch, diff filtering, incremental covers, truncated-RSS/429 retry) | Mocked fetcher |
 | `tests/test_magnet_checker.py` | MagnetChecker liveness (local-seed alive, dead hash, swap/CRUD scopes) | Local BT seed + `claw_test` PG database (skips without `CLAW_PG_DSN`) |
+| `tests/test_resume_data_persistence.py` | Fast-resume restart regression: graceful shutdown saves `{hash}.resume`; a fresh engine over the same cache is ready without re-entering `checking_files` | Local BT seed |
 | `tests/conftest.py` | Shared fixtures (`local_seed`, `real_video_engine`, `pg_test_db`) | Local BT seed + `claw_test` |
-| `tests/local_bt_fixture.py` + `tests/fixtures/` | Local seeder fixture (`test_video.mp4` + `test_video.torrent`) | — |
+| `tests/local_bt_fixture.py` + `tests/fixtures/` | Local seeder fixture (`test_video.mp4` + `test_video.torrent`, v1-only — matching production's 40-hex btih addressing; piece geometry fixed at 138 × 16KB) | — |
 | `backend/regression/test_piece_tracker.py` | Internal piece tracker regression | — |
 | `backend/regression/test_torrent_engine_readd.py` | Internal torrent engine regression | — |
 

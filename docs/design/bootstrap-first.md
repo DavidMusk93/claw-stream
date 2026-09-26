@@ -59,7 +59,7 @@ finished torrent
 ```python
 if not info.get("_recheck_done"):
     status = handle.status()
-    if status.state == lt.torrent_status.finished:
+    if status.state in (lt.torrent_status.finished, lt.torrent_status.seeding):
         tracker = info.get("tracker")
         if tracker:
             tracker._bootstrap_from_filesystem()
@@ -73,10 +73,9 @@ if not info.get("_recheck_done"):
             else:
                 log.warning(
                     f"finished with holes: {hash_str[:12]}... "
-                    f"disk scan shows missing data, will re-download"
+                    f"disk scan shows missing data, forcing recheck"
                 )
-        # Do NOT force_recheck — it causes finished-state deadlock.
-        # Let _set_stream_window set urgent priorities instead.
+                self._force_recheck(hash_str, info)
 ```
 
 ---
@@ -107,3 +106,37 @@ if not info.get("_recheck_done"):
 | 2 GB file intact | 2–5 min recheck | **instant ready** |
 
 For "finished and data intact" caches (the most common case), startup drops from minutes to seconds.
+
+---
+
+## Fast-Resume Snapshots (restart path)
+
+Bootstrap-first only helps once libtorrent knows the piece states. A plain
+re-add of a paused torrent with existing files lands in `checking_files`
+limbo: the check is deferred while paused, and the first play after a restart
+pays a **full-file hash check** (measured: ~25s for a 6.1GB sparse file)
+before any piece can download.
+
+To eliminate this, the engine persists libtorrent resume data
+(`{hash}.resume` next to `{hash}.torrent`):
+
+- **Save**: on `pause_download` (cache-keeping path) and on graceful
+  `shutdown()` (synchronous flush of all non-checking torrents).
+- **Load**: `_add_torrent_inner` merges the saved `have_pieces` bitmask into
+  the add params (`_load_resume_data`). The snapshot's info-hash must match;
+  only the piece bitmask is taken — flags, save_path, and the on-demand
+  priority discipline stay under engine control.
+- **Invalidate**: punch-hole and stale-metadata paths delete the snapshot —
+  libtorrent 2.0 trusts `have_pieces` blindly (verified experimentally: a
+  corrupted file still reports seeding), so the file must never be older
+  than the data it describes. The disk-truth tracker (SEEK_HOLE bootstrap)
+  remains the safety net: if the snapshot overstates disk contents,
+  bootstrap-first detects the holes and forces one real recheck.
+- **Migration**: at preload, torrents without a snapshot are briefly resumed
+  (all priorities are 0, so nothing downloads) purely to run the one-time
+  check; `torrent_checked_alert` then snapshots them and re-pauses them if
+  the user hasn't started playing.
+
+While a check *is* running (first-ever add, crash recovery), the UI shows
+real progress: `check_progress` (libtorrent's native `status().progress`)
+is exposed via REST and SSE `torrent.progress`.
