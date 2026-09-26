@@ -114,6 +114,41 @@ Hero cover + info column, with a horizontal thumbnail rail below.
 
 ---
 
+## Video Player Progress Bar
+
+`frontend/components/video/PlayerProgressBar.vue` — the progress bar is also
+the **download-state map**, fed live by `torrent.progress` SSE
+(`piece_segments`, 100 segments ≈ 1% each; see
+[sse-push-architecture.md](sse-push-architecture.md)).
+
+Layer stack (bottom → top):
+
+1. Track `bg-white/15` — the whole timeline.
+2. Download-state map per segment:
+   - **Cached** (verified on disk): `bg-white/40` — plays instantly.
+   - **Downloading**: `bg-amber-400/70` + pulse — arriving now.
+   - **Corrupt**: `bg-red-500/60`.
+   - **Missing**: transparent (track color shows through).
+   - Until the first status arrives, falls back to the browser's
+     `video.buffered` ranges (`bg-white/25`).
+3. Playhead fill: solid accent `#ff375f`.
+4. Thumb: white dot, visible on hover/drag.
+
+Interactions:
+
+- **Click** seeks (unchanged).
+- **Drag scrub** (Pointer Events + `setPointerCapture`): playhead and bubble
+  follow the finger in real time; the seek commits once on release. The
+  control bar never auto-hides mid-drag (`scrubbing` event).
+- **Hover/drag bubble** above the bar: timestamp + a state dot and label
+  (`Cached` / `Downloading` / `Not cached` / `Corrupt`) for the position
+  under the cursor — the user knows whether a seek target will play
+  instantly or needs buffering *before* committing the seek.
+- `touch-action: none` on the bar; container swipe/double-tap gestures are
+  stopped while interacting with the bar.
+
+---
+
 ## Glassmorphism Panel Rules
 
 | Element | Treatment |

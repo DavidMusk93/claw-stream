@@ -76,29 +76,15 @@
           @mousemove="showControls"
           @touchstart="showControls"
         >
-          <!-- Progress bar — hit target taller than the visual bar (44px-ish touch zone) -->
-          <div
-            ref="progressBarRef"
-            class="relative py-2.5 -my-2.5 cursor-pointer group"
-            @click="onProgressClick"
-          >
-            <div class="relative h-1.5 sm:h-2 bg-white/15 rounded-full">
-              <div
-                v-for="(range, i) in bufferedRanges"
-                :key="i"
-                class="absolute h-full bg-white/25 rounded-full"
-                :style="{ left: range.start + '%', width: range.width + '%' }"
-              />
-              <div
-                class="absolute h-full bg-[#ff375f] rounded-full"
-                :style="{ width: progressPercent + '%' }"
-              />
-              <div
-                class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                :style="{ left: 'calc(' + progressPercent + '% - 8px)' }"
-              />
-            </div>
-          </div>
+          <!-- Progress bar with live download-state map, drag scrub and hover preview -->
+          <PlayerProgressBar
+            :duration="duration"
+            :current-time="currentTime"
+            :segments="status?.piece_segments ?? []"
+            :buffered="bufferedRanges"
+            @seek="onSeek"
+            @scrubbing="onScrubbing"
+          />
 
           <!-- Controls row -->
           <div class="flex items-center justify-between mt-3">
@@ -239,7 +225,6 @@ const { track } = useTrack()
 
 const videoRef = ref<HTMLVideoElement>()
 const containerRef = ref<HTMLDivElement>()
-const progressBarRef = ref<HTMLDivElement>()
 const { status, loading, error, canplayFired, startPolling, stopPolling, waitForHeadReady, reportSeek, reportProgress, reportPause, reportResume, formatSpeed } = useVideoPlayer()
 
 const buffering = ref(false)
@@ -272,11 +257,6 @@ function clearAllTimers() {
 
 const wasPlayingBeforeSeek = ref(false)
 
-const progressPercent = computed(() => {
-  if (!duration.value || duration.value === Infinity) return 0
-  return (currentTime.value / duration.value) * 100
-})
-
 interface BufferedRange { start: number; width: number }
 const bufferedRanges = computed<BufferedRange[]>(() => {
   const v = videoRef.value
@@ -307,16 +287,22 @@ function showControls() {
   }, 3000)
 }
 
-function onProgressClick(e: MouseEvent) {
+function onSeek(t: number) {
   const v = videoRef.value
-  const bar = progressBarRef.value
-  if (!v || !v.duration || !bar) return
-  const rect = bar.getBoundingClientRect()
-  const ratio = (e.clientX - rect.left) / rect.width
-  const newTime = v.duration * Math.max(0, Math.min(1, ratio))
-  v.currentTime = newTime
-  currentTime.value = newTime
+  if (!v) return
+  v.currentTime = t
+  currentTime.value = t
   showControls()
+}
+
+function onScrubbing(active: boolean) {
+  // Keep controls visible while the user drags the progress bar.
+  if (active) {
+    controlsHidden.value = false
+    if (controlsHideTimer) clearTimeout(controlsHideTimer)
+  } else {
+    showControls()
+  }
 }
 
 const PROGRESS_KEY = 'claw_video_progress'
