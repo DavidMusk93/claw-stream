@@ -146,13 +146,13 @@
             <div class="h-2 bg-white/10 rounded-full overflow-hidden">
               <div
                 class="h-full bg-[#ff375f] rounded-full transition-all duration-500"
-                :style="{ width: Math.min(status?.progress || 0, 100) + '%' }"
+                :style="{ width: Math.min(loadingProgress, 100) + '%' }"
               />
             </div>
             <div class="mt-2 flex justify-between text-xs text-white/60">
               <span>
                 {{ status?.state?.includes('checking') ? 'Verifying' : 'Downloading' }}
-                {{ (status?.progress || 0).toFixed(1) }}%
+                {{ loadingProgress.toFixed(1) }}%
               </span>
               <span v-if="status?.video_size">{{ (status.video_size / 1024 / 1024 / 1024).toFixed(1) }} GB</span>
             </div>
@@ -409,6 +409,14 @@ const cacheRatio = computed(() => {
   return `Cached ${mb}MB / ${gb}GB (${pct}%)`
 })
 
+const loadingProgress = computed(() => {
+  const s = status.value
+  if (!s) return 0
+  // During hash verification, verified-ratio stays 0 — show real check progress.
+  if (s.state?.includes('checking')) return s.check_progress || 0
+  return s.progress || 0
+})
+
 const detailStatus = computed(() => {
   if (!status.value) return ''
   const s = status.value
@@ -452,8 +460,12 @@ const statusText = computed(() => {
 
   if (!s.ready) {
     const parts = [stateText]
-    if (peers) parts.push(peers)
-    if (s.download_rate > 0) parts.push(speed)
+    if (s.state.includes('checking')) {
+      parts.push(`${(s.check_progress || 0).toFixed(0)}%`)
+    } else {
+      if (peers) parts.push(peers)
+      if (s.download_rate > 0) parts.push(speed)
+    }
     if (verified && s.state.includes('checking')) parts.push(`Verified ${verified}`)
     return parts.join(' | ')
   }

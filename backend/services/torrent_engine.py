@@ -929,6 +929,12 @@ class TorrentEngine:
                     "hash": hash_str,
                     "state": str(s.state),
                     "progress": progress,
+                    # During checking_files/checking_resume_data, libtorrent's
+                    # own progress tracks the hash check — expose it so the UI
+                    # can show real verification progress instead of a frozen 0%.
+                    "check_progress": (
+                        s.progress * 100 if s.state in checking_states else 0.0
+                    ),
                     "download_rate": s.download_rate,
                     "upload_rate": s.upload_rate,
                     "peers": s.num_peers,
@@ -1610,6 +1616,8 @@ class TorrentEngine:
             "head_ready": head_ready,
             "peers": s.num_peers,
             "progress": progress,
+            # Hash-check progress (checking_files/checking_resume_data only).
+            "check_progress": s.progress * 100 if s.state in checking_states else 0.0,
             "download_rate": s.download_rate,
             "upload_rate": s.upload_rate,
             "video_file": os.path.basename(info["video_path"]) if info["video_path"] else None,

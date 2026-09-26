@@ -64,7 +64,7 @@ Before SSE, the frontend ran four independent short-polling loops:
 | `star.ready` | `stars.py` | `{code, name, titles_count}` | 3s add-star polling |
 | `torrent.head_ready` | `TorrentEngine` | `{hash}` | video status polling |
 | `torrent.status` | `TorrentEngine` | `{hash, state}` | video status polling |
-| `torrent.progress` | `TorrentEngine` | `{hash, state, progress, download_rate, upload_rate, peers, ready, head_ready, video_size, local_size, verified_pieces, piece_segments}` | 5s video status polling |
+| `torrent.progress` | `TorrentEngine` | `{hash, state, progress, check_progress, download_rate, upload_rate, peers, ready, head_ready, video_size, local_size, verified_pieces, piece_segments}` | 5s video status polling |
 | `cache.update` | `TorrentEngine` / `cache.py` | `{action, hash}` | 30s cache polling |
 
 ### `torrent.progress`: throttled snapshot push

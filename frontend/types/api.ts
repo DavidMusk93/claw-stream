@@ -26,6 +26,8 @@ export interface TorrentStatus {
   verified_pieces: number
   quality: string
   piece_segments: [number, number, number][]
+  /** Hash-check progress 0-100 while state is checking_*; 0 otherwise. */
+  check_progress?: number
 }
 
 export interface CacheMetrics {
