@@ -351,6 +351,16 @@ class TorrentEngine:
         settings["peer_connect_timeout"] = 8
         settings["request_timeout"] = 20
         settings["piece_timeout"] = 10
+        # Keep peer connections across finished<->downloading flips. A
+        # sliding-window streaming torrent enters (phantom) finished whenever
+        # its wanted set drains — pause, window catch-up, fresh add with all
+        # priorities at 0. The default (True) drops every peer on that
+        # transition ("torrent finished" disconnect), and reconnected peers
+        # pay backoff, turning every escape into a multi-second stall.
+        # Measured: with False the seed stays attached and raised priorities
+        # download immediately; with True ~1/3 of escapes stall permanently
+        # on a single-seed swarm.
+        settings["close_redundant_connections"] = False
         # CRITICAL: disable mmap storage to avoid finished-state deadlock.
         # libtorrent 2.0 mmap creates full-size sparse files on add, then
         # force_recheck reads page-cache zeros and falsely marks pieces
@@ -1038,6 +1048,18 @@ class TorrentEngine:
                 info = self.torrents[hash_str]
                 if info.get("_metadata_done"):
                     return
+                # A _readd_torrent may have swapped the handle while this
+                # stale alert was queued; the new handle runs its own
+                # _on_metadata, so drop this one instead of touching an
+                # invalid handle mid-call. NB: pybind11 returns a fresh
+                # Python wrapper per alert, so compare by value (==), not
+                # identity (is).
+                if info["handle"] != handle:
+                    log.info(f"_on_metadata: stale handle for {hash_str[:12]}..., skipping")
+                    return
+                if not handle.is_valid():
+                    log.warning("_on_metadata: handle went invalid, skipping")
+                    return
 
             ti = handle.torrent_file()
             fs = ti.files()
@@ -1146,10 +1168,10 @@ class TorrentEngine:
                         resume_window = info.pop("_resume_window_pcs", 30)
                         info.pop("_resume_on_metadata", None)
             if resume_pending:
-                if resume_duration == 0 and resume_time == 0:
-                    self._apply_play_priority(handle, info)
-                else:
-                    self._set_stream_window(handle, info, resume_time, resume_duration, window_pcs=resume_window)
+                # Play-from-zero (0, 0) must also use the queued window size —
+                # _apply_play_priority's window_pcs=0 would buffer only the
+                # head piece instead of the ±30 window the caller asked for.
+                self._set_stream_window(handle, info, resume_time, resume_duration, window_pcs=resume_window)
 
         # ── Architecture: bootstrap-first verification ─────────────────
         # For finished torrents, use SEEK_HOLE bootstrap (seconds) to verify
@@ -1208,8 +1230,14 @@ class TorrentEngine:
         # contradicts) — recheck ONCE per add to rule that out, then trust
         # priorities. verified==0 means nothing was ever claimed (fresh add):
         # no recheck, just download.
-        status = h.status()
-        if status.state == lt.torrent_status.finished:
+        if not h.is_valid():
+            return False
+        try:
+            status = h.status()
+        except RuntimeError:
+            return False
+        was_finished = status.state == lt.torrent_status.finished
+        if was_finished:
             tracker = info.get("tracker")
             if tracker and tracker.verified_count() > 0 and not tracker.head_ready():
                 if not info.get("_last_force_recheck"):
@@ -1231,106 +1259,126 @@ class TorrentEngine:
 
         if not status.has_metadata:
             return False
-        # Ensure the torrent is running when we set play priorities.
-        if status.paused:
-            h.resume()
-        ti = h.torrent_file()
-        fs = ti.files()
-        idx = info["video_idx"]
-        if idx is None:
-            return False
+        try:
+            # Ensure the torrent is running when we set play priorities.
+            if status.paused:
+                h.resume()
+            ti = h.torrent_file()
+            fs = ti.files()
+            idx = info["video_idx"]
+            if idx is None:
+                return False
 
-        num_pieces = ti.num_pieces()
-        piece_length = ti.piece_length()
-        file_offset = fs.file_offset(idx)
-        file_size = fs.file_size(idx)
-        start_piece = file_offset // piece_length
-        end_piece = min(
-            num_pieces - 1,
-            (file_offset + file_size - 1) // piece_length,
-        )
+            num_pieces = ti.num_pieces()
+            piece_length = ti.piece_length()
+            file_offset = fs.file_offset(idx)
+            file_size = fs.file_size(idx)
+            start_piece = file_offset // piece_length
+            end_piece = min(
+                num_pieces - 1,
+                (file_offset + file_size - 1) // piece_length,
+            )
 
-        tracker = info.get("tracker")
-        head_ready = tracker.head_ready() if tracker else False
-        moov_end = info.get("moov_end", 0)
+            tracker = info.get("tracker")
+            head_ready = tracker.head_ready() if tracker else False
+            moov_end = info.get("moov_end", 0)
 
-        # Read current priorities and apply incremental changes (avoid full reset dropping downloaded data)
-        piece_prios = list(h.piece_priorities())
-        changed = False
+            # Read current priorities and apply incremental changes (avoid full reset dropping downloaded data)
+            piece_prios = list(h.piece_priorities())
+            changed = False
 
-        # ---- moov / head_ready handling ----
-        moov_pieces: set[int] = set()
-        if not head_ready and moov_end > 0 and tracker:
-            moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
-            moov_end_piece = (tracker.file_offset + moov_end - 1) // piece_length
-            for p in range(max(start_piece, moov_start_piece), min(end_piece, moov_end_piece) + 1):
-                if tracker and not tracker.is_verified(p):
-                    moov_pieces.add(p)
-        elif not head_ready:
-            # moov unknown: try scan now — file may have grown since _on_metadata
-            if tracker and info.get("video_path") and os.path.exists(info["video_path"]):
-                scanned_start, scanned_end = _scan_mp4_moov(info["video_path"])
-                if scanned_end > 0:
-                    info["moov_start"] = scanned_start
-                    info["moov_end"] = scanned_end
-                    tracker.set_moov_range(scanned_start, scanned_end)
-                    moov_end = scanned_end
-                    log.info(
-                        f"moov found on-the-fly: {info['hash'][:12]}... "
-                        f"range={scanned_start}-{scanned_end}"
-                    )
-            if moov_end > 0 and tracker:
+            # ---- moov / head_ready handling ----
+            moov_pieces: set[int] = set()
+            if not head_ready and moov_end > 0 and tracker:
                 moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
                 moov_end_piece = (tracker.file_offset + moov_end - 1) // piece_length
                 for p in range(max(start_piece, moov_start_piece), min(end_piece, moov_end_piece) + 1):
-                    if not tracker.is_verified(p):
+                    if tracker and not tracker.is_verified(p):
                         moov_pieces.add(p)
-            else:
-                # Still unknown: probe tail only (tail-moov is far more common)
-                probe_count = min(20, end_piece - start_piece + 1)
-                for p in range(max(start_piece, end_piece - probe_count + 1), end_piece + 1):
-                    moov_pieces.add(p)
+            elif not head_ready:
+                # moov unknown: try scan now — file may have grown since _on_metadata
+                if tracker and info.get("video_path") and os.path.exists(info["video_path"]):
+                    scanned_start, scanned_end = _scan_mp4_moov(info["video_path"])
+                    if scanned_end > 0:
+                        info["moov_start"] = scanned_start
+                        info["moov_end"] = scanned_end
+                        tracker.set_moov_range(scanned_start, scanned_end)
+                        moov_end = scanned_end
+                        log.info(
+                            f"moov found on-the-fly: {info['hash'][:12]}... "
+                            f"range={scanned_start}-{scanned_end}"
+                        )
+                if moov_end > 0 and tracker:
+                    moov_start_piece = (tracker.file_offset + info.get("moov_start", 0)) // piece_length
+                    moov_end_piece = (tracker.file_offset + moov_end - 1) // piece_length
+                    for p in range(max(start_piece, moov_start_piece), min(end_piece, moov_end_piece) + 1):
+                        if not tracker.is_verified(p):
+                            moov_pieces.add(p)
+                else:
+                    # Still unknown: probe tail only (tail-moov is far more common)
+                    probe_count = min(20, end_piece - start_piece + 1)
+                    for p in range(max(start_piece, end_piece - probe_count + 1), end_piece + 1):
+                        moov_pieces.add(p)
 
-        # ---- playback window ----
-        ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
-        target_byte = int(file_size * ratio)
-        target_piece = start_piece + (target_byte // piece_length)
+            # ---- playback window ----
+            ratio = min(1.0, max(0.0, time_sec / duration_sec)) if duration_sec > 0 else 0.0
+            target_byte = int(file_size * ratio)
+            target_piece = start_piece + (target_byte // piece_length)
 
-        win_start = max(start_piece, target_piece - window_pcs)
-        win_end = min(end_piece, target_piece + window_pcs)
+            win_start = max(start_piece, target_piece - window_pcs)
+            win_end = min(end_piece, target_piece + window_pcs)
 
-        urgent_count = 0
-        retain_count = 0
-        zero_count = 0
+            urgent_count = 0
+            retain_count = 0
+            zero_count = 0
 
-        for p in range(start_piece, end_piece + 1):
-            in_window = win_start <= p <= win_end
-            in_moov = p in moov_pieces
-            is_verified = tracker.is_verified(p) if tracker else False
+            for p in range(start_piece, end_piece + 1):
+                in_window = win_start <= p <= win_end
+                in_moov = p in moov_pieces
+                is_verified = tracker.is_verified(p) if tracker else False
 
-            if in_window or in_moov:
-                # Inside window / inside moov: urgent
-                if piece_prios[p] != 7:
-                    piece_prios[p] = 7
-                    h.set_piece_deadline(p, 0)
-                    changed = True
-                urgent_count += 1
-            elif is_verified:
-                # Downloaded: retain (priority=1), don't discard; can still seed when libtorrent is idle
-                if piece_prios[p] != 1:
-                    piece_prios[p] = 1
-                    changed = True
-                retain_count += 1
-            else:
-                # Not downloaded and outside window: stop
-                if piece_prios[p] != 0:
-                    piece_prios[p] = 0
-                    changed = True
-                zero_count += 1
+                if in_window or in_moov:
+                    # Inside window / inside moov: urgent
+                    if piece_prios[p] != 7:
+                        piece_prios[p] = 7
+                        h.set_piece_deadline(p, 0)
+                        changed = True
+                    urgent_count += 1
+                elif is_verified:
+                    # Downloaded: retain (priority=1), don't discard; can still seed when libtorrent is idle
+                    if piece_prios[p] != 1:
+                        piece_prios[p] = 1
+                        changed = True
+                    retain_count += 1
+                else:
+                    # Not downloaded and outside window: stop
+                    if piece_prios[p] != 0:
+                        piece_prios[p] = 0
+                        changed = True
+                    zero_count += 1
 
-        if changed:
-            h.prioritize_pieces(piece_prios)
-        h.set_sequential_download(False)
+            if changed:
+                h.prioritize_pieces(piece_prios)
+            h.set_sequential_download(False)
+            if was_finished:
+                # Phantom-finished escape: libtorrent dropped all peers when the
+                # torrent entered finished ("torrent finished" disconnect), and
+                # known peers carry reconnect backoff. Pull fresh peers from
+                # trackers/DHT immediately instead of waiting out the announce
+                # interval (minutes).
+                try:
+                    h.force_reannounce()
+                    h.force_dht_announce()
+                except Exception:
+                    pass
+        except RuntimeError:
+            # Handle died mid-apply (concurrent readd/remove/eviction).
+            # The next play/seek/progress call retries against the fresh handle.
+            log.debug(
+                "_set_stream_window: handle went invalid mid-apply",
+                extra={"hash": info.get("hash", "")[:12]},
+            )
+            return False
         log.debug(
             "_set_stream_window: sliding window",
             extra={
@@ -1710,7 +1758,20 @@ class TorrentEngine:
             except Exception as e:
                 log.warning(f"_readd_torrent read_resume_data failed: {e}")
 
-        new_handle = self.session.add_torrent(params)
+        try:
+            new_handle = self.session.add_torrent(params)
+        except RuntimeError as e:
+            # Stale resume data can conflict with the magnet's info-hash
+            # ("mismatching info-hash") — retry with a clean magnet-only add.
+            log.warning(f"_readd_torrent add failed ({e}); retrying clean")
+            params = lt.parse_magnet_uri(magnet)
+            params.save_path = save_path
+            params.flags &= ~lt.torrent_flags.auto_managed
+            params.flags &= ~lt.torrent_flags.seed_mode
+            params.flags &= ~lt.torrent_flags.paused
+            params.flags |= lt.torrent_flags.default_dont_download
+            params.have_pieces = []
+            new_handle = self.session.add_torrent(params)
 
         new_info = {
             "handle": new_handle,

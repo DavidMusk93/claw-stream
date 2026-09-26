@@ -69,6 +69,17 @@ class LocalSeed:
         self.session = lt.session()
         settings = self.session.get_settings()
         settings["alert_mask"] = int(lt.alert.category_t.status_notification)
+        # Localhost-only fixture. This infohash is publicly visible from past
+        # runs (DHT records + NAT-PMP port maps persist for hours), so external
+        # leechers connect inbound and steal unchoke slots, making local
+        # downloads randomly stall. Listen on loopback only, disable all
+        # discovery, and never choke the (only) local leecher.
+        settings["enable_dht"] = False
+        settings["enable_lsd"] = False
+        settings["enable_upnp"] = False
+        settings["enable_natpmp"] = False
+        settings["listen_interfaces"] = "127.0.0.1:0"
+        settings["unchoke_slots_limit"] = -1
         self.session.apply_settings(settings)
 
         video_path, torrent_path = _ensure_fixture()
@@ -134,10 +145,12 @@ def download_with_engine(
     # raise every piece's priority to override the head+moov-only window.
     engine.resume_download(hash_str, 0.0, 0.0)
 
-    # Wait for metadata
+    # Wait for metadata (retry the peer connection: the phantom-finished
+    # transition can drop the one-shot seed connection before metadata lands)
     for _ in range(int(timeout * 2)):
         if handle.status().has_metadata:
             break
+        handle.connect_peer(("127.0.0.1", seed_port), 0)
         time.sleep(0.5)
     if not handle.status().has_metadata:
         engine.shutdown()
@@ -148,16 +161,23 @@ def download_with_engine(
     for _ in range(int(timeout * 2)):
         if info.get("_metadata_done"):
             break
+        handle.connect_peer(("127.0.0.1", seed_port), 0)
         time.sleep(0.5)
     ti_tmp = handle.torrent_file()
-    if ti_tmp:
-        handle.prioritize_pieces([7] * ti_tmp.num_pieces())
+    n_pieces = ti_tmp.num_pieces() if ti_tmp else 0
 
-    # Wait for download completion (is_seed is more reliable than progress)
+    # Wait for download completion (is_seed is more reliable than progress).
+    # Re-assert the raise-all on every poll: _metadata_done is set before the
+    # engine's queued-resume window apply runs, so the engine can still
+    # re-zero middle pieces once — last writer wins, and the engine stops
+    # writing once the queued resume is consumed.
     deadline = time.time() + timeout
     while time.time() < deadline:
         if handle.is_seed():
             break
+        if n_pieces:
+            handle.prioritize_pieces([7] * n_pieces)
+        handle.connect_peer(("127.0.0.1", seed_port), 0)
         time.sleep(0.2)
 
     # Find video file

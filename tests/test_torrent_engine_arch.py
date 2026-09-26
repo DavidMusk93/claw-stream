@@ -80,6 +80,12 @@ class MockTorrentHandle:
     def force_recheck(self) -> None:
         self._force_recheck_called = True
 
+    def force_reannounce(self) -> None:
+        pass
+
+    def force_dht_announce(self) -> None:
+        pass
+
     def info_hash(self) -> MagicMock:
         return MagicMock(__str__=lambda s: self._hash)
 
@@ -116,7 +122,16 @@ class MockTorrentHandle:
 class MockTracker:
     """Minimal mock of PieceStateTracker for architecture tests."""
 
-    def __init__(self, head_ready_val: bool = False, moov_pc: int = 0) -> None:
+    def __init__(
+        self,
+        head_ready_val: bool = False,
+        moov_pc: int = 0,
+        verified: set[int] | None = None,
+        start_piece: int = 0,
+        end_piece: int = 9,
+        piece_length: int = 2_097_152,
+        file_offset: int = 512,
+    ) -> None:
         self._head_ready = head_ready_val
         self._moov_pc = moov_pc
         self._moov_vc = moov_pc if head_ready_val else 0
@@ -124,16 +139,20 @@ class MockTracker:
         self._overlay_called = False
         self._request_head_tail_called = False
         self._moov_range_set = False
-        self.start_piece = 0
-        self.end_piece = 9
-        self.piece_length = 2_097_152
-        self.file_offset = 512
+        self.verified = set(verified) if verified else set()
+        self.start_piece = start_piece
+        self.end_piece = end_piece
+        self.piece_length = piece_length
+        self.file_offset = file_offset
+        self.handle: Any = None  # optional, lets reset_priorities zero the handle
+        self.request_pieces_calls: list[tuple[int, int]] = []
+        self.reset_priorities_called = False
 
     def head_ready(self) -> bool:
         return self._head_ready
 
     def is_verified(self, p: int) -> bool:
-        return False
+        return p in self.verified
 
     def _bootstrap_from_filesystem(self) -> None:
         self._bootstrap_called = True
@@ -150,6 +169,104 @@ class MockTracker:
 
     def set_moov_range(self, moov_start: int, moov_end: int) -> None:
         self._moov_range_set = True
+
+    def request_pieces(self, start_piece: int, end_piece: int) -> int:
+        self.request_pieces_calls.append((start_piece, end_piece))
+        return 0
+
+    def reset_priorities(self) -> None:
+        self.reset_priorities_called = True
+        if self.handle is not None:
+            for p in range(self.start_piece, self.end_piece + 1):
+                self.handle._prios[p] = 0
+
+
+class WindowMockHandle:
+    """200-piece mock handle recording every priority/deadline mutation.
+
+    Used by the on-demand download discipline tests, which need a piece space
+    much larger than the ±30 sliding window to detect over-prioritization.
+    """
+
+    NUM_PIECES = 200
+    PIECE_LENGTH = 2 * 1024 * 1024
+    FILE_SIZE = NUM_PIECES * PIECE_LENGTH
+
+    def __init__(self, state, initial_prio: int = 0) -> None:
+        self._state = state
+        self._paused = False
+        self._prios: list[int] = [initial_prio] * self.NUM_PIECES
+        self._deadlines: dict[int, int] = {}
+        self._sequential_calls: list[bool] = []
+        self._file_prio_calls: list[list[int]] = []
+        self._force_recheck_called = False
+        self._hash = ""
+        self._save_path = ""
+
+    def is_valid(self) -> bool:
+        return True
+
+    def status(self) -> MagicMock:
+        m = MagicMock()
+        m.state = self._state
+        m.has_metadata = True
+        m.paused = self._paused
+        m.name = "test"
+        m.save_path = self._save_path
+        return m
+
+    def resume(self) -> None:
+        self._paused = False
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def force_recheck(self) -> None:
+        self._force_recheck_called = True
+
+    def force_reannounce(self) -> None:
+        pass
+
+    def force_dht_announce(self) -> None:
+        pass
+
+    def info_hash(self) -> MagicMock:
+        return MagicMock(__str__=lambda s: self._hash)
+
+    def torrent_file(self) -> MagicMock:
+        return MagicMock(
+            files=lambda: MagicMock(
+                num_files=lambda: 1,
+                file_path=lambda i: "video.mp4",
+                file_size=lambda i: self.FILE_SIZE,
+                file_offset=lambda i: 0,
+            ),
+            num_pieces=lambda: self.NUM_PIECES,
+            piece_length=lambda: self.PIECE_LENGTH,
+            name=lambda: "test",
+            info_section=lambda: b"fake",
+        )
+
+    def prioritize_files(self, prios: list[int]) -> None:
+        self._file_prio_calls.append(list(prios))
+
+    def prioritize_pieces(self, prios: list[int]) -> None:
+        self._prios = list(prios)
+
+    def piece_priorities(self) -> list[int]:
+        return list(self._prios)
+
+    def piece_priority(self, p: int, prio: int | None = None) -> int | None:
+        if prio is None:
+            return self._prios[p]
+        self._prios[p] = prio
+        return None
+
+    def set_piece_deadline(self, p: int, deadline: int) -> None:
+        self._deadlines[p] = deadline
+
+    def set_sequential_download(self, on: bool) -> None:
+        self._sequential_calls.append(on)
 
 
 # ── Tests ───────────────────────────────────────────────────────────
@@ -885,6 +1002,182 @@ class TestCacheUpperLimit(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class TestOnDemandDownloadDiscipline(unittest.TestCase):
+    """The playback taste: 不看不下, 看哪下哪, 绝不写满磁盘.
+
+    Regression guard against "brainless full-file download". Any change that
+    raises priorities outside the sliding window (sequential download,
+    head+tail requests without resetting the rest, window leaks on seek)
+    fails here. Piece space is 200 x 2MB so the ±30 window covers only ~15%.
+    """
+
+    PIECES = WindowMockHandle.NUM_PIECES
+    PIECE_LEN = WindowMockHandle.PIECE_LENGTH
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        self.engine = TorrentEngine(self.temp_dir, max_size_gb=1)
+
+    def tearDown(self) -> None:
+        self.engine.shutdown()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _inject(
+        self,
+        state=lt.torrent_status.downloading,
+        initial_prio: int = 0,
+        verified: set[int] | None = None,
+    ) -> tuple[WindowMockHandle, dict[str, Any], str, MockTracker]:
+        hash_str = "1" * 40
+        handle = WindowMockHandle(state=state, initial_prio=initial_prio)
+        handle._hash = hash_str
+        video_dir = os.path.join(self.temp_dir, hash_str)
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, "video.mp4")
+        _make_minimal_mp4(video_path)
+        handle._save_path = video_dir
+        tracker = MockTracker(
+            head_ready_val=False,
+            moov_pc=0,
+            verified=verified,
+            start_piece=0,
+            end_piece=self.PIECES - 1,
+            piece_length=self.PIECE_LEN,
+            file_offset=0,
+        )
+        tracker.handle = handle
+        info: dict[str, Any] = {
+            "handle": handle,
+            "magnet": f"magnet:?xt=urn:btih:{hash_str}",
+            "hash": hash_str,
+            "added_at": time.time(),
+            "last_access": time.time(),
+            "video_idx": 0,
+            "video_path": video_path,
+            "video_size": WindowMockHandle.FILE_SIZE,
+            "ready": False,
+            "prefetch": False,
+            "work_code": None,
+            "tracker": tracker,
+        }
+        self.engine.torrents[hash_str] = info
+        return handle, info, hash_str, tracker
+
+    @staticmethod
+    def _urgent(handle: WindowMockHandle) -> set[int]:
+        return {p for p, prio in enumerate(handle._prios) if prio == 7}
+
+    def test_metadata_without_play_zeroes_everything(self) -> None:
+        """不看不下: metadata arrival without a play request must leave every
+        piece at priority 0, even if file-level priority leaked into pieces."""
+        handle, info, hash_str, _ = self._inject(initial_prio=4)
+
+        self.engine._on_metadata(handle)
+
+        self.assertEqual(
+            handle._prios, [0] * self.PIECES,
+            "metadata without play must zero ALL piece priorities",
+        )
+        self.assertEqual(
+            handle._file_prio_calls, [[4]],
+            "only the video file may get a nonzero file priority",
+        )
+        self.assertNotIn(True, handle._sequential_calls)
+
+    def test_play_raises_only_head_window_and_moov(self) -> None:
+        """看就下: play from 0 raises exactly the ±30 head window (+moov piece),
+        everything else stays at 0."""
+        handle, info, hash_str, _ = self._inject()
+        self.engine._on_metadata(handle)  # zeroes all pieces first
+
+        self.assertTrue(self.engine.resume_download(hash_str, 0.0, 0.0))
+
+        self.assertEqual(
+            self._urgent(handle), set(range(0, 31)),
+            "play from 0 must raise exactly pieces 0-30 (window + head moov)",
+        )
+        self.assertTrue(all(p == 0 for p in handle._prios[31:]))
+        self.assertFalse(handle._paused, "play must resume the torrent")
+        self.assertNotIn(True, handle._sequential_calls)
+
+    def test_seek_moves_window_and_zeroes_abandoned_pieces(self) -> None:
+        """看哪下哪: seeking to 50% moves the urgent window and drops the
+        abandoned head pieces back to 0 (no priority leak across seeks)."""
+        handle, info, hash_str, _ = self._inject()
+        self.engine._on_metadata(handle)
+        self.engine.resume_download(hash_str, 0.0, 0.0)
+
+        self.assertTrue(self.engine.apply_seek_priority(hash_str, 200.0, 400.0))
+
+        # ratio 0.5 -> target piece 100, seek window ±15 -> [85,115];
+        # moov piece 0 stays urgent until head_ready.
+        self.assertEqual(self._urgent(handle), {0} | set(range(85, 116)))
+        self.assertTrue(
+            all(p == 0 for p in handle._prios[1:85]),
+            "abandoned head-window pieces must drop back to 0",
+        )
+        self.assertNotIn(True, handle._sequential_calls)
+
+    def test_verified_pieces_retained_not_zeroed(self) -> None:
+        """Downloaded pieces outside the window are retained at priority 1
+        (seedable, not re-downloaded); unverified ones are stopped at 0."""
+        handle, info, hash_str, _ = self._inject(verified={50, 60})
+        self.engine._on_metadata(handle)
+
+        self.engine.apply_seek_priority(hash_str, 200.0, 400.0)  # window [85,115]
+
+        self.assertEqual(handle._prios[50], 1, "verified piece outside window: retain(1)")
+        self.assertEqual(handle._prios[60], 1)
+        self.assertEqual(handle._prios[40], 0, "unverified piece outside window: stop(0)")
+
+    def test_range_request_raises_only_requested_pieces(self) -> None:
+        """Browser range requests (seek_priority) may only raise the pieces
+        covering the requested byte range, never the whole file."""
+        from services.video_stream import seek_priority
+
+        handle, info, hash_str, tracker = self._inject()
+        self.engine._on_metadata(handle)
+
+        seek_priority(hash_str, 100 * self.PIECE_LEN, 100 * self.PIECE_LEN + 8 * 1024 * 1024, self.engine)
+
+        self.assertEqual(self._urgent(handle), set(range(98, 107)))
+        self.assertEqual(tracker.request_pieces_calls[-1], (98, 106))
+        self.assertTrue(all(p == 0 for p in handle._prios[:98]))
+        self.assertTrue(all(p == 0 for p in handle._prios[107:]))
+
+    def test_queued_resume_at_zero_uses_full_window(self) -> None:
+        """Play clicked before metadata arrived: the queued resume must apply
+        the full ±30 window — not the minimal head-only play priority that
+        would leave playback with a one-piece buffer."""
+        handle, info, hash_str, _ = self._inject()
+        info["_resume_on_metadata"] = True
+        info["_resume_time"] = 0.0
+        info["_resume_duration"] = 0.0
+        info["_resume_window_pcs"] = 30
+
+        self.engine._on_metadata(handle)
+
+        self.assertEqual(
+            self._urgent(handle), set(range(0, 31)),
+            "queued resume at t=0 must raise the full ±30 head window",
+        )
+        self.assertNotIn(True, handle._sequential_calls)
+
+    def test_pause_zeroes_everything_and_pauses(self) -> None:
+        """不看就停: pause zeroes all video pieces and pauses the handle."""
+        handle, info, hash_str, tracker = self._inject()
+        self.engine._on_metadata(handle)
+        self.engine.resume_download(hash_str, 0.0, 0.0)
+        info["keep_cache"] = True
+
+        self.assertTrue(self.engine.pause_download(hash_str))
+
+        self.assertEqual(handle._prios, [0] * self.PIECES)
+        self.assertTrue(handle._paused)
+        self.assertTrue(tracker.reset_priorities_called)
 
 
 if __name__ == "__main__":

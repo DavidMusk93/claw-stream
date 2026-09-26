@@ -28,6 +28,10 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
         log.debug("seek_priority: torrent not found", extra={"hash": hash_str[:12]})
         return
     h = info["handle"]
+    if not h.is_valid():
+        # Handle may have been swapped/removed by a concurrent readd.
+        log.debug("seek_priority: invalid handle", extra={"hash": hash_str[:12]})
+        return
     if not h.status().has_metadata:
         log.debug("seek_priority: no metadata yet", extra={"hash": hash_str[:12]})
         return
@@ -47,20 +51,18 @@ def seek_priority(hash_str: str, start_byte: int, end_byte: int, engine: Any) ->
     status = h.status()
     state = status.state
 
-    # CRITICAL: finished-state deadlock — libtorrent 2.0 creates a sparse file
-    # of full torrent size, then reports finished even though no data was
-    # written. In finished state libtorrent ignores piece_priority and
-    # set_piece_deadline, so nudging here is useless. Trigger readd to clear
-    # stale state (uses write_resume_data with cleared pieces).
+    # Phantom finished: with POSIX storage (mmap disabled) and
+    # close_redundant_connections=False, peers stay attached and raised
+    # priorities take effect immediately — just fall through and nudge the
+    # requested pieces. (The old mmap-era readd here raced with the alert
+    # thread's _on_metadata and could kill the handle mid-flight.)
     if state == lt.torrent_status.finished:
         tracker = info.get("tracker")
         if tracker and tracker.verified_count() == 0:
-            log.warning(
-                f"finished false-positive (seek): {hash_str[:12]}... "
-                f"triggering readd to clear stale state"
+            log.debug(
+                f"phantom finished (seek): {hash_str[:12]}... "
+                f"raising priorities instead of readd"
             )
-            engine._readd_torrent(hash_str)
-            return
 
     # Skip during checking — piece_priority/deadline calls are ignored or
     # cause undefined behavior while libtorrent is verifying hashes.
