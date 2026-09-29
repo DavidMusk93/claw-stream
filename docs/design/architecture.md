@@ -1,6 +1,6 @@
-# claw-stream System Architecture
+# xstream System Architecture
 
-> Project: `claw-stream`  
+> Project: `xstream`  
 > Backend: FastAPI + libtorrent 2.0.11  
 > Goal: On-demand download, tiered cache, seamless playback.
 
@@ -220,7 +220,7 @@ If a hole is mid-chunk, return the valid prefix before the hole → player can k
 | Seek hangs | Check `video-stream.log` for hole timeout | Normal — libtorrent is urgent-downloading |
 | 100% progress but unplayable | Moov is at tail (non-faststart) | These files cannot stream while downloading |
 | Disk fills up instantly | Check piece priorities | Only moov + window = 7, others = 0 |
-| Backend 502 | `journalctl -u caddy-claw` | Check upstream timeout |
+| Backend 502 | `journalctl -u caddy` | Check upstream timeout |
 
 ### 5.1 Common Commands
 
@@ -232,7 +232,7 @@ curl -s http://localhost:8765/torrent/status/<hash> | python3 -m json.tool
 stat --format="logical=%s actual=%b*%B=%B" cache/torrent/<hash>/.../*.mp4
 
 # View backend logs
-journalctl -u star-archive-backend -f
+journalctl -u xstream-backend -f
 
 # Check piece priorities (debug)
 python3 -c "

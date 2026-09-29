@@ -22,7 +22,7 @@ export function useVideoPlayer() {
   let _currentHash = ''
 
   function traceHeaders() {
-    return { 'x-trace-id': import.meta.client ? (localStorage.getItem('claw_trace_id') || '') : '' }
+    return { 'x-trace-id': import.meta.client ? (localStorage.getItem('xstream_trace_id') || '') : '' }
   }
 
   function mergeStatus(patch: Record<string, any>) {

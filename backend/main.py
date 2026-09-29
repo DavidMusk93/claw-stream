@@ -166,7 +166,7 @@ async def _global_exception_handler(request: Request, exc: Exception):
 
 
 app = FastAPI(
-    title="Star Archive Backend",
+    title="xstream Backend",
     description="BitTorrent cache + video streaming API",
     version="1.0.0",
     lifespan=lifespan,

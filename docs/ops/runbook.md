@@ -8,8 +8,8 @@ architecture see `docs/ops/https-setup.md`.
 
 Caddy serves `cc.guohuasun.com` on 443, auto-provisions Let's Encrypt certificates:
 
-- `/images/*` → served directly from disk bind mount `/var/lib/caddy/claw-images`
-  (requires `mount --bind /root/claw-stream/images /var/lib/caddy/claw-images`),
+- `/images/*` → served directly from disk bind mount `/var/lib/caddy/xstream-images`
+  (requires `mount --bind /root/xstream/images /var/lib/caddy/xstream-images`),
   with `Cache-Control: public, max-age=604800, immutable`
 - `/api/*`, `/stream/*`, `/torrent/*`, `/cache/*` → `localhost:8765`
 - Everything else → `localhost:3000` (Nuxt SSR, 10s dial / 30s response timeout)
@@ -19,7 +19,7 @@ The live config is `/etc/caddy/Caddyfile` (unit `caddy.service`); the repo
 `Caddyfile` is the source of truth — copy it over, then reload:
 
 ```bash
-cp /root/claw-stream/Caddyfile /etc/caddy/Caddyfile
+cp /root/xstream/Caddyfile /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
 
@@ -34,7 +34,7 @@ systemctl reload caddy
 
 ## Logging
 
-- Backend log directory: `/root/claw-stream/logs/` (override with `LOG_DIR` env var)
+- Backend log directory: `/root/xstream/logs/` (override with `LOG_DIR` env var)
 - Per-module files named after the logger: `backend.log`, `backend-access.log`, `torrent-engine.log`, `video-stream.log`, `stream-router.log`, `piece-tracker.log`, `db-ops.log`, `db-write-queue.log`, `sync.log`, `events.log`, `events-router.log`…
 - 10MB rollover per file, keep 5 backups
 - trace_id chain tracking (HTTP header `x-trace-id`; middleware generates one if absent)
@@ -70,13 +70,13 @@ in-memory LRU → `title_covers` blob (+ disk backfill), so new titles never
 
 ```bash
 # View backend logs
-journalctl -u star-archive-backend -f
+journalctl -u xstream-backend -f
 
 # Check torrent status
 curl -s http://localhost:8765/torrent/status/<hash> | python3 -m json.tool
 
 # Check sparse file real size
-stat --format="logical=%s actual=%b*%B=%B" /root/claw-stream/cache/torrent/<hash>/.../*.mp4
+stat --format="logical=%s actual=%b*%B=%B" /root/xstream/cache/torrent/<hash>/.../*.mp4
 
 # View cache metrics
 curl -s http://localhost:8765/api/cache/metrics | python3 -m json.tool
@@ -91,8 +91,8 @@ curl -s http://localhost:8765/api/health
 python3 -m core.db stats
 
 # Ad-hoc SQL against the live database
-set -a; . /etc/star-archive.env; set +a
-psql "$CLAW_PG_DSN"
+set -a; . /etc/xstream.env; set +a
+psql "$XSTREAM_PG_DSN"
 
 # Table bloat: PostgreSQL autovacuum reclaims dead tuples continuously —
 # the DuckDB rewrite-on-UPDATE bloat problem is gone. If a table ever does

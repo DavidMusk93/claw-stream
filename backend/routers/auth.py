@@ -30,8 +30,8 @@ def _today_password() -> str:
 
 
 def require_auth(request: Request) -> None:
-    """Dependency that enforces the `claw_auth=ok` cookie set by /api/auth."""
-    if request.cookies.get("claw_auth") != "ok":
+    """Dependency that enforces the `xstream_auth=ok` cookie set by /api/auth."""
+    if request.cookies.get("xstream_auth") != "ok":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized",
@@ -48,7 +48,7 @@ async def auth(req: AuthRequest, response: Response):
     ok = hmac.compare_digest(req.password, _today_password())
     if ok:
         response.set_cookie(
-            "claw_auth",
+            "xstream_auth",
             "ok",
             max_age=86400,
             path="/",

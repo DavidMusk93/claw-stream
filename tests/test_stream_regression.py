@@ -76,7 +76,7 @@ class _SharedEngine:
         app.state.engine = cls._instance
         app.include_router(stream_router)
         app.include_router(check_router)
-        # Routers enforce the claw_auth cookie in production; bypass in tests.
+        # Routers enforce the xstream_auth cookie in production; bypass in tests.
         app.dependency_overrides[require_auth] = lambda: None
         cls._client = TestClient(app)
         return cls._instance, cls._video_path, cls._client
@@ -233,7 +233,7 @@ class TestCheckingFilesBlocking(unittest.TestCase):
         app.state.engine = engine
         app.include_router(stream_router)
         app.include_router(check_router)
-        # Routers enforce the claw_auth cookie in production; bypass in tests.
+        # Routers enforce the xstream_auth cookie in production; bypass in tests.
         app.dependency_overrides[require_auth] = lambda: None
         self.client = TestClient(app)
 
@@ -398,7 +398,7 @@ def _make_private_app(cache_dir: str) -> tuple[FastAPI, TorrentEngine]:
     app.state.engine = engine
     app.include_router(stream_router)
     app.include_router(check_router)
-    # Routers enforce the claw_auth cookie in production; bypass in tests.
+    # Routers enforce the xstream_auth cookie in production; bypass in tests.
     app.dependency_overrides[require_auth] = lambda: None
     return app, engine
 

@@ -1,4 +1,4 @@
-# AGENTS.md — claw-stream Developer Guide
+# AGENTS.md — xstream Developer Guide
 
 Entry point for AI coding assistants. Read this file fully; it is short on
 purpose. Detail lives in `docs/` — follow the pointers before editing an area.
@@ -7,9 +7,9 @@ purpose. Detail lives in `docs/` — follow the pointers before editing an area.
 
 ## 1. Project Overview
 
-**claw-stream** (`/root/claw-stream/`) is a BitTorrent-based local video
-streaming system (personal title tracking + stream-while-downloading player),
-internally also called "Star Archive". All code lives at the project root
+**xstream** (`/root/xstream/`) is a BitTorrent-based local video
+streaming system (personal title tracking + stream-while-downloading player).
+All code lives at the project root
 (`Project_Soul_Anchor/`, mentioned in old READMEs, does not exist).
 
 ### Tech Stack
@@ -18,7 +18,7 @@ internally also called "Star Archive". All code lives at the project root
 |---|---|---|
 | Backend | Python 3.11+, FastAPI + uvicorn | port 8765 |
 | BitTorrent | libtorrent 2.0.x | sparse files, piece download |
-| Database | PostgreSQL 18, psycopg3 + pool | DSN from `CLAW_PG_DSN` (`/etc/star-archive.env`); DBs `claw` + `claw_test` |
+| Database | PostgreSQL 18, psycopg3 + pool | DSN from `XSTREAM_PG_DSN` (`/etc/xstream.env`); DBs `xstream` + `xstream_test` |
 | Frontend | Nuxt 3.16+ / Vue 3.5+, TS + Tailwind + Pinia | port 3000, `@vite-pwa/nuxt` |
 | Scraping | httpx + Playwright + selectolax | `scrapers/v2/` pipeline; Playwright only as fallback |
 | Deploy | systemd + Caddy | Caddy auto-provisions Let's Encrypt TLS |
@@ -76,7 +76,7 @@ scrapers/v2/  cli, pipeline, schemas, sources, fetchers, extractors, sinks,
               filters.py, cover_utils, tasks/sync_titles.py
 tests/        pytest regression suite + fixtures/ (local BT seed)
 scripts/      ops scripts (run.sh, export_covers.py, check_magnets.py, cleanup_*)
-deploy/       systemd units (star-archive-backend / star-archive-frontend)
+deploy/       systemd units (xstream-backend / xstream-frontend)
 docs/         design/ ops/ analysis/ skill/ — index: docs/README.md
 config.json   actor list (personal, git-ignored, never commit)
 ```
@@ -89,7 +89,7 @@ Root-level oddities: `package.json` is vestigial (frontend deps live in
 ## 5. Build & Run
 
 ```bash
-# Install (PostgreSQL 18 + role claw + DBs claw/claw_test are prerequisites)
+# Install (PostgreSQL 18 + role xstream + DBs xstream/xstream_test are prerequisites)
 uv sync && uv pip install libtorrent
 cd frontend && npm install
 
@@ -98,7 +98,7 @@ cd frontend && npm install
 
 # Production: build, then restart both services
 cd frontend && npm run build
-systemctl restart star-archive-backend star-archive-frontend
+systemctl restart xstream-backend xstream-frontend
 ```
 
 Caddy / ports / logging / ops commands: `docs/ops/runbook.md`.
@@ -130,19 +130,19 @@ uv run python -m pytest tests/ -v            # all
 uv run python -m pytest tests/<file> -v      # single
 ```
 
-- Tests auto-skip when real cache files, local seeds, or `claw_test` are unavailable — they do not fail.
-- DB-backed tests need `CLAW_PG_DSN` in the environment (the `pg_test_db` fixture repoints it at `claw_test`; load it via `set -a; . /etc/star-archive.env; set +a`).
+- Tests auto-skip when real cache files, local seeds, or `xstream_test` are unavailable — they do not fail.
+- DB-backed tests need `XSTREAM_PG_DSN` in the environment (the `pg_test_db` fixture repoints it at `xstream_test`; load it via `set -a; . /etc/xstream.env; set +a`).
 - Each test file's docstring says what it locks; `tests/conftest.py` holds the shared fixtures (`local_seed`, `real_video_engine`, `pg_test_db`).
 
 ---
 
 ## 8. Security
 
-- DB password lives in `/etc/star-archive.env` (chmod 600, outside repo) — **never commit it or copy it into the repo**. Never commit database files or `config.json`.
+- DB password lives in `/etc/xstream.env` (chmod 600, outside repo) — **never commit it or copy it into the repo**. Never commit database files or `config.json`.
 - Cover images may contain private content; do not leak them in shared contexts.
 - `/cache` is intentionally **not** mounted as static files (prevents direct video download).
 - CORS origins from `CORS_ORIGINS` (default `localhost:3000`); `*` with credentials unsupported.
-- Login password rotates daily: `rn{YYMMDD}{day % 2}` (UTC). Cookie `claw_auth=ok`; `SECURE_COOKIES=1` in production.
+- Login password rotates daily: `rn{YYMMDD}{day % 2}` (UTC). Cookie `xstream_auth=ok`; `SECURE_COOKIES=1` in production.
 
 ---
 

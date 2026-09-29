@@ -61,17 +61,17 @@ curl /stream/<hash> -H "Range: bytes=0-1023"
 # download_rate=0 → no active peers
 
 # 3. Check sparse file status
-stat --format="logical=%s actual=%b*%B" /root/claw-stream/cache/torrent/<hash>/.../*.mp4
+stat --format="logical=%s actual=%b*%B" /root/xstream/cache/torrent/<hash>/.../*.mp4
 ```
 
 ### Symptom: Backend 502
 
 ```bash
 # 1. Check Caddy for 502 or timeout
-journalctl -u caddy-claw | grep -E "502|timeout"
+journalctl -u caddy | grep -E "502|timeout"
 
 # 2. Check frontend errors
-journalctl -u star-archive-frontend | grep -E "error|warn"
+journalctl -u xstream-frontend | grep -E "error|warn"
 
 # 3. Verify Nuxt has not crashed and restarted repeatedly
 ```
@@ -84,13 +84,13 @@ See [Timeout Debug](../analysis/timeout-debug.md) for upstream timeout analysis 
 
 ```bash
 # Tail backend logs in real time
-journalctl -u star-archive-backend -f
+journalctl -u xstream-backend -f
 
 # Query torrent status
 curl -s http://localhost:8765/torrent/status/<hash> | python3 -m json.tool
 
 # Check cache size
-du -sh /root/claw-stream/cache/torrent/* 2>/dev/null | sort -rh | head -10
+du -sh /root/xstream/cache/torrent/* 2>/dev/null | sort -rh | head -10
 
 # Test a stream range
 curl -s --range "bytes=0-1023" http://localhost:8765/stream/<hash> | wc -c

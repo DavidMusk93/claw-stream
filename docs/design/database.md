@@ -2,7 +2,7 @@
 
 Wide-table design. Schema lives in `core/db/schema.py` — `init_schema()` is
 idempotent with `ALTER TABLE ... IF NOT EXISTS` backfills. PostgreSQL 18,
-databases `claw` (production) and `claw_test` (tests); DSN from `CLAW_PG_DSN`.
+databases `xstream` (production) and `xstream_test` (tests); DSN from `XSTREAM_PG_DSN`.
 
 ## Tables
 

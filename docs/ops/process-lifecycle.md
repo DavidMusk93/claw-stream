@@ -10,8 +10,8 @@
   - [Backend](#backend)
   - [Caddy](#caddy)
 - [systemd Service Configuration](#systemd-service-configuration)
-  - [star-archive-backend.service](#star-archive-backendservice)
-  - [star-archive-frontend.service](#star-archive-frontendservice)
+  - [xstream-backend.service](#xstream-backendservice)
+  - [xstream-frontend.service](#xstream-frontendservice)
 - [Common Operations Commands](#common-operations-commands)
 - [Startup Order Dependencies](#startup-order-dependencies)
 - [Log File Locations](#log-file-locations)
@@ -35,9 +35,9 @@ Both frontend and backend are **long-running services managed by systemd**, expo
 
 | Service | Port | Process | systemd Unit | Description |
 |---------|------|---------|--------------|-------------|
-| Frontend | 3000 | `node .output/server/index.mjs` | `star-archive-frontend.service` | Nuxt 3 SSR production build |
-| Backend | 8765 | `uvicorn backend.main:app` | `star-archive-backend.service` | FastAPI + libtorrent |
-| Caddy | 443 | `caddy` | `caddy-claw.service` | HTTPS reverse proxy |
+| Frontend | 3000 | `node .output/server/index.mjs` | `xstream-frontend.service` | Nuxt 3 SSR production build |
+| Backend | 8765 | `uvicorn backend.main:app` | `xstream-backend.service` | FastAPI + libtorrent |
+| Caddy | 443 | `caddy` | `caddy.service` | HTTPS reverse proxy |
 
 ---
 
@@ -48,9 +48,9 @@ Both frontend and backend are **long-running services managed by systemd**, expo
 **Any source change under `frontend/` (Vue / TS / CSS) requires a rebuild and service restart.**
 
 ```bash
-cd /root/claw-stream/frontend
+cd /root/xstream/frontend
 npm run build
-systemctl restart star-archive-frontend
+systemctl restart xstream-frontend
 ```
 
 > Nuxt 3 production mode runs `.output/server/index.mjs`; hot reload does not apply.
@@ -60,7 +60,7 @@ systemctl restart star-archive-frontend
 **Any change under `backend/**/*.py` requires a backend service restart.**
 
 ```bash
-systemctl restart star-archive-backend
+systemctl restart xstream-backend
 ```
 
 > Do not manually `pkill` + `nohup &`. All processes are managed by systemd.
@@ -70,27 +70,27 @@ systemctl restart star-archive-backend
 **Changes to `Caddyfile` or TLS configuration require a reload or restart.**
 
 ```bash
-systemctl reload caddy-claw
+systemctl reload caddy
 # or
-systemctl restart caddy-claw
+systemctl restart caddy
 ```
 
 ---
 
 ## systemd Service Configuration
 
-### star-archive-backend.service
+### xstream-backend.service
 
 ```ini
 [Unit]
-Description=claw-stream Backend (FastAPI + BitTorrent)
+Description=xstream Backend (FastAPI + BitTorrent)
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/claw-stream
-Environment=PYTHONPATH=/root/claw-stream
-ExecStart=/root/claw-stream/.venv/bin/python \
+WorkingDirectory=/root/xstream
+Environment=PYTHONPATH=/root/xstream
+ExecStart=/root/xstream/.venv/bin/python \
           -m uvicorn backend.main:app --host 127.0.0.1 --port 8765 --log-level info
 Restart=on-failure
 RestartSec=5s
@@ -100,17 +100,17 @@ User=root
 WantedBy=multi-user.target
 ```
 
-### star-archive-frontend.service
+### xstream-frontend.service
 
 ```ini
 [Unit]
-Description=claw-stream Frontend (Nuxt production)
-After=network.target star-archive-backend.service
-Wants=star-archive-backend.service
+Description=xstream Frontend (Nuxt production)
+After=network.target xstream-backend.service
+Wants=xstream-backend.service
 
 [Service]
 Type=simple
-WorkingDirectory=/root/claw-stream/frontend
+WorkingDirectory=/root/xstream/frontend
 Environment=NITRO_HOST=0.0.0.0
 Environment=NITRO_PORT=3000
 ExecStart=/usr/bin/node .output/server/index.mjs
@@ -128,16 +128,16 @@ WantedBy=multi-user.target
 
 ```bash
 # View status
-systemctl status star-archive-backend
-systemctl status star-archive-frontend
+systemctl status xstream-backend
+systemctl status xstream-frontend
 
 # View logs
-journalctl -u star-archive-backend -f
-journalctl -u star-archive-frontend -f
+journalctl -u xstream-backend -f
+journalctl -u xstream-frontend -f
 
 # Restart
-systemctl restart star-archive-backend
-systemctl restart star-archive-frontend
+systemctl restart xstream-backend
+systemctl restart xstream-frontend
 
 # Check port usage
 ss -tlnp | grep -E '3000|8765|443'
@@ -149,9 +149,9 @@ ss -tlnp | grep -E '3000|8765|443'
 
 ```
 network.target
-    └─ star-archive-backend.service
-         └─ star-archive-frontend.service (After + Wants)
-              └─ caddy-claw.service (reverse proxy to 3000/8765)
+    └─ xstream-backend.service
+         └─ xstream-frontend.service (After + Wants)
+              └─ caddy.service (reverse proxy to 3000/8765)
 ```
 
 ---

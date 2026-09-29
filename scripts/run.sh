@@ -1,5 +1,5 @@
 #!/bin/bash
-# run.sh — 启动 Star Archive 完整服务（开发模式，自动重启 + 热重载）
+# run.sh — 启动 xstream 完整服务（开发模式，自动重启 + 热重载）
 #
 # 用法: ./scripts/run.sh
 # 特性:
@@ -64,7 +64,7 @@ wait_backend_ready() {
 }
 
 echo "========================================"
-echo "🚀 启动 Star Archive（开发模式）"
+echo "🚀 启动 xstream（开发模式）"
 echo "========================================"
 
 start_backend

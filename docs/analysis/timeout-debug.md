@@ -11,7 +11,7 @@ Users report "the page won't load." Local `curl` tests on the server return 200,
 ### Layer 1: Service Health
 
 ```bash
-systemctl is-active star-archive-backend star-archive-frontend caddy-claw
+systemctl is-active xstream-backend xstream-frontend caddy
 ss -tlnp | grep -E '3000|8765|443'
 ```
 
@@ -24,7 +24,7 @@ Result: all three services are active and listening.
 ### Layer 2: Local Direct Access (Bypass Caddy)
 
 ```bash
-curl -H "Cookie: claw_auth=ok" http://localhost:3000/     # Nuxt frontend
+curl -H "Cookie: xstream_auth=ok" http://localhost:3000/     # Nuxt frontend
 curl http://localhost:8765/api/health                      # FastAPI backend
 ```
 
@@ -37,7 +37,7 @@ Result: both return 200; the home-page HTML (143 KB) is complete.
 ### Layer 3: HTTPS End-to-End (Through Caddy)
 
 ```bash
-curl -L -b "claw_auth=ok" https://rn.guohuasun.com/
+curl -L -b "xstream_auth=ok" https://rn.guohuasun.com/
 curl https://rn.guohuasun.com/api/health
 ```
 
@@ -50,7 +50,7 @@ Result: both return 200 with normal latency (~0.1 s).
 ### Layer 4: Caddy Access Log Analysis (Key)
 
 ```bash
-journalctl -u caddy-claw --no-pager --since="1 hour ago" | grep -E "502|aborting|timeout"
+journalctl -u caddy --no-pager --since="1 hour ago" | grep -E "502|aborting|timeout"
 ```
 
 **71 errors** in one hour:
@@ -73,7 +73,7 @@ Key characteristics:
 ### Layer 5: Nuxt Process Stability
 
 ```bash
-journalctl -u star-archive-frontend --since="1 hour ago"
+journalctl -u xstream-frontend --since="1 hour ago"
 ```
 
 The frontend was restarted 10+ times during the hour (manual restarts during debugging). Logs show:
@@ -126,12 +126,12 @@ reverse_proxy localhost:3000 {
 ### 2. Rebuild Frontend and Restart
 
 ```bash
-cd /root/claw-stream/frontend
+cd /root/xstream/frontend
 npx nuxt build
-systemctl restart star-archive-frontend
+systemctl restart xstream-frontend
 ```
 
-Ensure `/root/claw-stream/frontend/.output` matches the current source tree and eliminates any middleware/router compilation drift.
+Ensure `/root/xstream/frontend/.output` matches the current source tree and eliminates any middleware/router compilation drift.
 
 ### 3. Future Optimizations
 

@@ -1,8 +1,6 @@
-# claw-stream
+# xstream
 
 > 个人作品追踪 + BitTorrent 边下边播播放器
-
-## Star Archive
 
 基于 BitTorrent 的本地视频流式播放系统。
 
@@ -14,15 +12,15 @@
 
 全部文档集中在 [`docs/`](docs/) 目录：
 
-- [docs/README.md](docs/README.md) — Star Archive 文档索引
+- [docs/README.md](docs/README.md) — xstream 文档索引
 - [AGENTS.md](AGENTS.md) — AI 编码助手工作指南
 
 ## 快速启动
 
 ```bash
 # 后端
-systemctl restart star-archive-backend
+systemctl restart xstream-backend
 
 # 前端
-systemctl restart star-archive-frontend
+systemctl restart xstream-frontend
 ```

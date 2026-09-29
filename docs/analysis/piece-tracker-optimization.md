@@ -308,11 +308,11 @@ All 40 tests pass (30 existing integration tests + 10 new unit tests), 0 skipped
 ## 6. How to Run Benchmarks
 
 ```bash
-cd /root/claw-stream
-PYTHONPATH=/root/claw-stream \
+cd /root/xstream
+PYTHONPATH=/root/xstream \
   ./.venv/bin/python backend/bench/bench_piece_tracker.py
 
-PYTHONPATH=/root/claw-stream \
+PYTHONPATH=/root/xstream \
   ./.venv/bin/python backend/bench/bench_moov_scan.py
 ```
 

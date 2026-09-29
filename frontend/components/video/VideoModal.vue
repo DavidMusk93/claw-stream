@@ -305,7 +305,7 @@ function onScrubbing(active: boolean) {
   }
 }
 
-const PROGRESS_KEY = 'claw_video_progress'
+const PROGRESS_KEY = 'xstream_video_progress'
 const PROGRESS_SAVE_INTERVAL_MS = 5000
 const PROGRESS_REPORT_INTERVAL_MS = 10000
 let lastProgressSave = 0

@@ -3,11 +3,11 @@
 
 - check_one against the local BT seed -> alive
 - check_one against a random hash -> dead (short timeout, no peers)
-- swap_primary_magnet / update_magnet_check_* CRUD against the claw_test PG database
+- swap_primary_magnet / update_magnet_check_* CRUD against the xstream_test PG database
 
 Uses the shared local_seed fixture; skips automatically when the local seed
 cannot start (consistent with the rest of the suite). DB-backed tests skip
-when CLAW_PG_DSN is unset or claw_test is unreachable.
+when XSTREAM_PG_DSN is unset or xstream_test is unreachable.
 """
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from core import db
 from psycopg.types.json import Jsonb
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("CLAW_PG_DSN"),
-    reason="CLAW_PG_DSN not set — DB tests need the claw_test database",
+    not os.environ.get("XSTREAM_PG_DSN"),
+    reason="XSTREAM_PG_DSN not set — DB tests need the xstream_test database",
 )
 
 
@@ -64,7 +64,7 @@ def test_extract_hash():
 
 @pytest.fixture()
 def temp_db(pg_test_db):
-    """claw_test with schema + one title (dead primary, one live candidate)."""
+    """xstream_test with schema + one title (dead primary, one live candidate)."""
     conn = pg_test_db
     conn.execute("INSERT INTO stars (name) VALUES ('Test Star')")
     star_id = conn.execute("SELECT id FROM stars WHERE name = 'Test Star'").fetchone()[0]

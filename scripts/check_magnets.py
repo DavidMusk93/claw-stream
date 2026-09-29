@@ -3,7 +3,7 @@
 
 Thin HTTP wrapper around POST /api/magnets/check: all DB writes go through the
 backend's serial write queue, keeping DB access single-process.
-Requires the backend (star-archive-backend) to be running.
+Requires the backend (xstream-backend) to be running.
 
 Usage:
     .venv/bin/python scripts/check_magnets.py                # scope=changed (default)

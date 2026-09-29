@@ -4,8 +4,8 @@ Root cause: extractor used wrong selector div[data-link],
 should be a[data-link], causing cover_url to always be None.
 
 Usage:
-    cd /root/claw-stream
-    PYTHONPATH=/root/claw-stream uv run python scripts/fix_missing_covers.py
+    cd /root/xstream
+    PYTHONPATH=/root/xstream uv run python scripts/fix_missing_covers.py
 """
 
 from __future__ import annotations

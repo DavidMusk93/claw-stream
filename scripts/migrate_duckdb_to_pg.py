@@ -17,7 +17,7 @@ report (row counts, titles view sum, cover blob bytes) prints at the end and
 must be all-PASS for the cutover to proceed.
 
 Usage:
-    export CLAW_PG_DSN=postgresql://claw:***@127.0.0.1:5432/claw
+    export XSTREAM_PG_DSN=postgresql://xstream:***@127.0.0.1:5432/xstream
     .venv/bin/python scripts/migrate_duckdb_to_pg.py --yes
 """
 
@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import duckdb
 from psycopg.types.json import Jsonb
 
-DUCKDB_PATH = Path(__file__).resolve().parent.parent / "data" / "claw.duckdb"
+DUCKDB_PATH = Path(__file__).resolve().parent.parent / "data" / "xstream.duckdb"
 
 # Row counts per insert batch. title_covers rows carry ~200KB base64 blobs,
 # so they use a much smaller batch to bound memory on the 4GB box.
@@ -231,7 +231,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--duckdb", default=str(DUCKDB_PATH),
-        help="path to the source DuckDB file (default: data/claw.duckdb)",
+        help="path to the source DuckDB file (default: data/xstream.duckdb)",
     )
     ap.add_argument(
         "--yes", action="store_true",
@@ -239,8 +239,8 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    if not os.environ.get("CLAW_PG_DSN"):
-        print("error: CLAW_PG_DSN environment variable is not set", file=sys.stderr)
+    if not os.environ.get("XSTREAM_PG_DSN"):
+        print("error: XSTREAM_PG_DSN environment variable is not set", file=sys.stderr)
         return 2
     if not args.yes:
         print(

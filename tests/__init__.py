@@ -1,1 +1,1 @@
-# Regression tests for star-archive video streaming pipeline
+# Regression tests for xstream video streaming pipeline

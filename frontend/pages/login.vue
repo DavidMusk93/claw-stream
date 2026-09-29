@@ -3,11 +3,11 @@
     <div class="w-full max-w-[380px] relative z-10">
       <!-- Logo area -->
       <div class="flex flex-col items-center mb-10">
-        <img src="/logo.png" alt="Star Archive logo" class="w-[96px] h-[96px] mb-6 drop-shadow-sm rounded-2xl" />
+        <img src="/logo.png" alt="xstream logo" class="w-[96px] h-[96px] mb-6 drop-shadow-sm rounded-2xl" />
         <h1
           class="text-[32px] font-semibold text-foreground tracking-[-0.02em]"
         >
-          Star Archive
+          xstream
         </h1>
         <p class="text-[15px] text-foreground-muted mt-2 font-light">
           {{ randomGreeting }}
@@ -106,7 +106,7 @@ function todayPassword(): string {
 function submit() {
   const input = password.value.trim()
   if (input === todayPassword()) {
-    const auth = useCookie('claw_auth', { maxAge: 86400, path: '/' })
+    const auth = useCookie('xstream_auth', { maxAge: 86400, path: '/' })
     auth.value = 'ok'
     navigateTo('/')
   } else {

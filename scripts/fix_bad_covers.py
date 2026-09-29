@@ -4,7 +4,7 @@
 Scans title_covers (blobs fetched one row at a time to bound memory),
 re-downloads covers that fail is_good_cover, and upserts title_covers.
 
-Usage: cd /root/claw-stream && python3 scripts/fix_bad_covers.py
+Usage: cd /root/xstream && python3 scripts/fix_bad_covers.py
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-# UI Design — Star Archive
+# UI Design — xstream
 
 ## Design Philosophy
 

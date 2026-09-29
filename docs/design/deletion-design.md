@@ -9,7 +9,7 @@ Deleting an actor (star) triggers changes across multiple data layers:
 | Layer | Data | Location |
 |---|---|---|
 | Config | Star entries in `config.json` | File system |
-| Database | `stars` / `titles` / `social_posts` | PostgreSQL `claw` database |
+| Database | `stars` / `titles` / `social_posts` | PostgreSQL `xstream` database |
 | Cache | Downloaded torrent files (video + `.torrent`) | `cache/torrent/<hash>/` |
 | Memory | Handles / trackers in `TorrentEngine.torrents` | Process memory |
 

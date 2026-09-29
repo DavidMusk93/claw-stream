@@ -11,14 +11,14 @@ let _traceId = ''
 
 function _getStored(): string {
   if (import.meta.client) {
-    return localStorage.getItem('claw_trace_id') || ''
+    return localStorage.getItem('xstream_trace_id') || ''
   }
   return ''
 }
 
 function _setStored(tid: string) {
   if (import.meta.client) {
-    localStorage.setItem('claw_trace_id', tid)
+    localStorage.setItem('xstream_trace_id', tid)
   }
 }
 

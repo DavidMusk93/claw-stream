@@ -1,11 +1,11 @@
 [Unit]
-Description=claw-stream Frontend (Nuxt production)
-After=network.target star-archive-backend.service
-Wants=star-archive-backend.service
+Description=xstream Frontend (Nuxt production)
+After=network.target xstream-backend.service
+Wants=xstream-backend.service
 
 [Service]
 Type=simple
-WorkingDirectory=/root/claw-stream/frontend
+WorkingDirectory=/root/xstream/frontend
 Environment=NITRO_HOST=0.0.0.0
 Environment=NITRO_PORT=3000
 ExecStart=/usr/bin/node .output/server/index.mjs

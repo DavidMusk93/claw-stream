@@ -1021,7 +1021,7 @@ def test_ijav_extractor_extracts_star_links():
 
 @pytest.fixture()
 def sink_db(pg_test_db, monkeypatch):
-    """claw_test + direct (unqueued) sink writes + no disk cover export."""
+    """xstream_test + direct (unqueued) sink writes + no disk cover export."""
     from core import db
     from scrapers.v2 import sinks
 

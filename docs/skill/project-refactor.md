@@ -9,11 +9,11 @@
 
 ### Problem
 
-Code was nested under `toolbox/star-archive/`, creating unnecessary depth:
+Code was nested under `toolbox/xstream/`, creating unnecessary depth:
 
 ```
 # Before (confusing)
-toolbox/star-archive/
+toolbox/xstream/
 ├── backend/
 ├── frontend/
 ├── core/
@@ -29,7 +29,7 @@ scripts/
 deploy/
 ```
 
-The `toolbox/` layer served no purpose (only one project). The `star-archive/` name was a legacy artifact.
+The `toolbox/` layer served no purpose (only one project). The `xstream/` name was a legacy artifact.
 
 ### Migration Steps
 
@@ -38,18 +38,18 @@ The `toolbox/` layer served no purpose (only one project). The `star-archive/` n
 3. **Move untracked data directories** (`data/`, `cache/`, `logs/`) — on the same filesystem, `mv` is instantaneous (inode update only).
 4. **Update systemd services** — `WorkingDirectory`, `PYTHONPATH`, `ExecStart` paths.
 5. **Update `.gitignore`** — merge root and nested ignore rules.
-6. **Update docs** — remove all `toolbox/star-archive/` path references.
+6. **Update docs** — remove all `toolbox/xstream/` path references.
 7. **Restart and verify** — health checks on both backend (8765) and frontend (3000).
 
 ### Key Insight
 
-Python files use `os.path.dirname(os.path.abspath(__file__))` for path resolution. After moving files from `toolbox/star-archive/backend/main.py` to `backend/main.py`, `SCRIPT_DIR` automatically resolves to `/root/claw-stream` instead of `/root/claw-stream/toolbox/star-archive`. No code changes needed for relative path calculations.
+Python files use `os.path.dirname(os.path.abspath(__file__))` for path resolution. After moving files from `toolbox/xstream/backend/main.py` to `backend/main.py`, `SCRIPT_DIR` automatically resolves to `/root/xstream` instead of `/root/xstream/toolbox/xstream`. No code changes needed for relative path calculations.
 
 ### Gotchas
 
-- **Absolute paths in scripts**: `scripts/fill_all_covers.py` had `sys.path.insert(0, "/root/claw-stream/toolbox/star-archive")`. Replaced with relative path.
-- **Caddyfile log path**: Hardcoded `/root/claw-stream/toolbox/star-archive/logs/...` → `/root/claw-stream/logs/...`.
-- **systemd service files in `deploy/`**: Were outdated (`/root/.openclaw/workspace/...`). Updated to match actual production paths (`/root/claw-stream/`).
+- **Absolute paths in scripts**: `scripts/fill_all_covers.py` had `sys.path.insert(0, "/root/xstream/toolbox/xstream")`. Replaced with relative path.
+- **Caddyfile log path**: Hardcoded `/root/xstream/toolbox/xstream/logs/...` → `/root/xstream/logs/...`.
+- **systemd service files in `deploy/`**: Were outdated (`/root/.openclaw/workspace/...`). Updated to match actual production paths (`/root/xstream/`).
 
 ---
 
@@ -69,7 +69,7 @@ Replace all occurrences of "女优" with **"actor"** throughout codebase and doc
 - `backend/routers/stars.py`, `sync.py`, `torrents.py`
 - `core/db/crud.py`
 - `scrapers/v2/tasks/sync_titles.py`
-- `docs/star-archive/deletion-design.md`, `diff-sync-design.md`
+- `docs/xstream/deletion-design.md`, `diff-sync-design.md`
 - `AGENTS.md`
 
 ---
@@ -103,11 +103,11 @@ User-facing strings (HTTP error details, frontend UI labels) remain in Chinese f
 
 After any layout or path change:
 
-- [ ] `systemctl restart star-archive-backend` — check `journalctl -u star-archive-backend -f`
-- [ ] `systemctl restart star-archive-frontend` — check `curl -s http://localhost:3000`
+- [ ] `systemctl restart xstream-backend` — check `journalctl -u xstream-backend -f`
+- [ ] `systemctl restart xstream-frontend` — check `curl -s http://localhost:3000`
 - [ ] `curl -s http://localhost:8765/api/health` — backend API health
 - [ ] `curl -s http://localhost:8765/api/cache/metrics` — cache metrics accessible
-- [ ] Verify database path resolves correctly (`data/claw.duckdb`)
+- [ ] Verify database path resolves correctly (`data/xstream.duckdb`)
 - [ ] Verify cache path resolves correctly (`cache/torrent/`)
 - [ ] Verify log directory writes to new location (`logs/`)
 
@@ -116,7 +116,7 @@ After any layout or path change:
 ## 5. Current Layout
 
 ```
-/root/claw-stream/
+/root/xstream/
 ├── backend/        # FastAPI + libtorrent services
 ├── core/           # Shared logger, DuckDB, CLI tools
 ├── frontend/       # Nuxt 3 + Vue 3 SPA

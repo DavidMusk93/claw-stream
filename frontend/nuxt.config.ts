@@ -29,7 +29,7 @@ export default defineNuxtConfig({
   pwa: {
     registerType: 'autoUpdate',
     manifest: {
-      name: 'Star Archive',
+      name: 'xstream',
       short_name: 'StarArchive',
       description: 'Star collection with video streaming',
       theme_color: '#F5F5F7',

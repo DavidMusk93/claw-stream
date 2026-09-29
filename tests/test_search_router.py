@@ -18,8 +18,8 @@ from backend.routers import search as search_router
 from backend.routers.auth import require_auth
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("CLAW_PG_DSN"),
-    reason="CLAW_PG_DSN not set — DB tests need the claw_test database",
+    not os.environ.get("XSTREAM_PG_DSN"),
+    reason="XSTREAM_PG_DSN not set — DB tests need the xstream_test database",
 )
 
 
@@ -105,7 +105,7 @@ def client(monkeypatch, pg_test_db):
     )
     # Config → one followed star
     monkeypatch.setattr(search_router, "_load_config", lambda: _FAKE_CONFIG)
-    # DB → claw_test with SOLO-001 in titles (pool already points there
+    # DB → xstream_test with SOLO-001 in titles (pool already points there
     # via the pg_test_db fixture)
     pg_test_db.execute("INSERT INTO titles (star_id, code) VALUES (1, 'SOLO-001')")
 

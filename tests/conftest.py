@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared fixtures for star-archive regression tests.
+"""Shared fixtures for xstream regression tests.
 
 Provides local BitTorrent seed fixtures so regression tests run against real BT-downloaded videos,
 rather than relying on external networks or synthetic files.
@@ -53,19 +53,19 @@ _PG_TABLES = ("stars, titles, title_covers, social_posts, sync_runs,"
 
 @pytest.fixture()
 def pg_test_db():
-    """Point the core.db pool at the claw_test database and reset it.
+    """Point the core.db pool at the xstream_test database and reset it.
 
-    Sets CLAW_PG_DSN (database name replaced with claw_test) before the
+    Sets XSTREAM_PG_DSN (database name replaced with xstream_test) before the
     lazily-initialized pool is first used, so all core.db calls — including
     ones made without an explicit conn — land in the test database. Yields a
     pooled connection; truncates all tables before and after the test.
 
-    Skips when CLAW_PG_DSN is unset or claw_test is unreachable.
+    Skips when XSTREAM_PG_DSN is unset or xstream_test is unreachable.
     """
-    dsn = os.environ.get("CLAW_PG_DSN")
+    dsn = os.environ.get("XSTREAM_PG_DSN")
     if not dsn:
-        pytest.skip("CLAW_PG_DSN not set — PG-backed tests need the claw_test database")
-    os.environ["CLAW_PG_DSN"] = dsn.rsplit("/", 1)[0] + "/claw_test"
+        pytest.skip("XSTREAM_PG_DSN not set — PG-backed tests need the xstream_test database")
+    os.environ["XSTREAM_PG_DSN"] = dsn.rsplit("/", 1)[0] + "/xstream_test"
 
     from core import db
 
@@ -73,7 +73,7 @@ def pg_test_db():
     try:
         db.init_schema()
     except Exception as exc:
-        pytest.skip(f"claw_test unreachable: {exc}")
+        pytest.skip(f"xstream_test unreachable: {exc}")
 
     conn = db._conn()
     try:

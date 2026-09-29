@@ -32,8 +32,8 @@ User Browser
 |----------|-------|
 | Version | v2.11.2 (static binary) |
 | Binary | `/usr/local/bin/caddy` |
-| Config | `/root/claw-stream/Caddyfile` |
-| systemd unit | `caddy-claw` |
+| Config | `/root/xstream/Caddyfile` |
+| systemd unit | `caddy` |
 | Data directory | `/root/.local/share/caddy/` (certificates, ACME account) |
 
 **Caddyfile:**
@@ -42,7 +42,7 @@ User Browser
 rn.guohuasun.com {
     reverse_proxy localhost:3000
     log {
-        output file /root/claw-stream/logs/caddy-access.log {
+        output file /root/xstream/logs/caddy-access.log {
             roll_size 10MB
             roll_keep 5
         }
@@ -83,9 +83,9 @@ Caddy manages certificates automatically:
 ### 4.2 Force Re-issue
 
 ```bash
-systemctl stop caddy-claw
+systemctl stop caddy
 rm -rf /root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/rn.guohuasun.com
-systemctl start caddy-claw
+systemctl start caddy
 ```
 
 ---
@@ -94,16 +94,16 @@ systemctl start caddy-claw
 
 ```bash
 # Check service status
-systemctl status caddy-claw
+systemctl status caddy
 
 # Restart
-systemctl restart caddy-claw
+systemctl restart caddy
 
 # Validate config and hot-reload
-caddy reload --config /root/claw-stream/Caddyfile
+caddy reload --config /root/xstream/Caddyfile
 
 # View access logs
-tail -f /root/claw-stream/logs/caddy-access.log
+tail -f /root/xstream/logs/caddy-access.log
 
 # Test HTTPS
 curl -s https://rn.guohuasun.com/ | head
@@ -116,13 +116,13 @@ curl -s https://rn.guohuasun.com/ | head
 ### 6.1 Browser Certificate Error
 
 1. Check certificate expiry: `openssl s_client -connect rn.guohuasun.com:443`
-2. Check Caddy status: `systemctl status caddy-claw`
+2. Check Caddy status: `systemctl status caddy`
 3. Verify port 80 is open: `curl -I http://rn.guohuasun.com/.well-known/acme-challenge/test`
 
 ### 6.2 HTTPS Works but Page is Blank / 404
 
 1. Check backend: `curl http://localhost:8765/api/health`
 2. Check frontend: `curl http://localhost:3000/`
-3. Check reverse proxy config: `grep reverse_proxy /root/claw-stream/Caddyfile`
+3. Check reverse proxy config: `grep reverse_proxy /root/xstream/Caddyfile`
 
 See also [Tracing and Logging](tracing-logging.md) for log analysis.

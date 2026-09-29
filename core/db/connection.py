@@ -26,9 +26,9 @@ def get_pool() -> ConnectionPool:
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                dsn = os.environ.get("CLAW_PG_DSN")
+                dsn = os.environ.get("XSTREAM_PG_DSN")
                 if not dsn:
-                    raise RuntimeError("CLAW_PG_DSN environment variable is not set")
+                    raise RuntimeError("XSTREAM_PG_DSN environment variable is not set")
                 _pool = ConnectionPool(
                     conninfo=dsn,
                     min_size=POOL_MIN_SIZE,

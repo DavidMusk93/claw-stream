@@ -1,4 +1,4 @@
-# claw-stream Documentation
+# xstream Documentation
 
 > Domain-organized knowledge base. Future development experiences should be auto-archived here.
 
