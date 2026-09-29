@@ -81,6 +81,14 @@ export interface SearchResultStar {
   followed: boolean
 }
 
+export interface SearchResultMagnet {
+  magnet: string
+  resolution?: string
+  size?: string
+  seeds?: number
+  is_hd?: boolean
+}
+
 export interface SearchResultItem {
   code: string
   title?: string
@@ -94,6 +102,7 @@ export interface SearchResultItem {
   in_library: boolean
   source?: 'ijav' | 'sukebei'
   stars: SearchResultStar[]
+  magnets?: SearchResultMagnet[]
 }
 
 export interface SearchResponse {

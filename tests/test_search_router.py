@@ -113,6 +113,15 @@ def test_search_filters_and_enriches(client):
     assert solo1["size"] == "5.2 GB"
     assert solo1["seeds"] == 10
     assert solo1["release_date"] == "01/15/2026"
+    assert solo1["magnets"] == [
+        {
+            "magnet": f"magnet:?xt=urn:btih:{'a' * 40}&dn=SOLO-001",
+            "resolution": "",
+            "size": "5.2 GB",
+            "seeds": 10,
+            "is_hd": False,
+        }
+    ]
 
 
 def test_search_code_query_keeps_exact_match_only(client):
@@ -172,6 +181,8 @@ def test_search_falls_back_to_sukebei_when_ijav_lacks_code(client, monkeypatch):
     assert items[0]["cover_url"] is None
     assert items[0]["in_library"] is False
     assert items[0]["seeds"] == 12
+    assert items[0]["magnets"][0]["magnet"].startswith(f"magnet:?xt=urn:btih:{'b' * 40}")
+    assert items[0]["magnets"][0]["seeds"] == 12
 
 
 def test_search_sukebei_failure_degrades_to_empty(client, monkeypatch):

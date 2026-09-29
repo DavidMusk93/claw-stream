@@ -53,6 +53,14 @@ class SearchResultStar(BaseModel):
     followed: bool = False
 
 
+class SearchResultMagnet(BaseModel):
+    magnet: str
+    resolution: str = ""
+    size: str = ""
+    seeds: int = 0
+    is_hd: bool = False  # hhd800.com high-quality source
+
+
 class SearchResultItem(BaseModel):
     code: str
     title: str = ""
@@ -66,6 +74,7 @@ class SearchResultItem(BaseModel):
     in_library: bool = False
     source: str = "ijav"  # "ijav" (rich metadata) or "sukebei" (fallback, no cover/actress)
     stars: list[SearchResultStar] = []
+    magnets: list[SearchResultMagnet] = []  # all candidates, best first (extractor order)
 
 
 class SearchResponse(BaseModel):
@@ -194,6 +203,16 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
             stars=[
                 SearchResultStar(name=s.name, url=s.url, followed=s.url in followed_urls)
                 for s in it.star_links
+            ],
+            magnets=[
+                SearchResultMagnet(
+                    magnet=m.magnet,
+                    resolution=m.resolution,
+                    size=m.size,
+                    seeds=m.seed,
+                    is_hd=m.is_hhd800,
+                )
+                for m in it.magnets
             ],
         )
         for it, source in items
