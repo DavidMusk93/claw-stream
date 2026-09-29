@@ -1,6 +1,7 @@
 """backend/routers/search.py — ijavtorrent catalog search
 
-Searches the ijavtorrent catalog (WordPress-style `/?s=` endpoint) and
+Searches the ijavtorrent catalog (`/?searchTerm=` endpoint — the older
+`/?s=` param silently returns the homepage since the 2026-09 redesign) and
 returns work cards enriched with local state: in-library flag and
 per-actress followed flag.
 
@@ -12,6 +13,11 @@ filters are skipped and, when ijavtorrent has no match (its catalog has
 been sparse since the 2026-08 loss), we fall back to the sukebei RSS
 source — the same hybrid pattern as sync. sukebei items carry no cover
 or actress links, so no follow button can be offered for them.
+
+Name queries also hit ijavtorrent's server-side actress directory search
+(`/actresses?searchTerm=`), so an actress is followable (with her profile
+image) even when the video search returns nothing for the name; the
+offline-crawled local index (data/actress_index.json) is the fallback.
 """
 
 from __future__ import annotations
@@ -29,7 +35,12 @@ from backend.routers.auth import require_auth
 from backend.routers.stars import _load_config
 from core import get_logger
 from core.db.connection import _conn as _db_conn
-from scrapers.v2.extractors import IJAV_BASE_URL, IJavTorrentExtractor, SukebeiRssExtractor
+from scrapers.v2.extractors import (
+    IJAV_BASE_URL,
+    IJavTorrentExtractor,
+    SukebeiRssExtractor,
+    parse_actress_directory,
+)
 from scrapers.v2.filters import hidden_reason
 from scrapers.v2.schemas import VideoItem
 from scrapers.v2.sinks import TitleSyncSink
@@ -42,7 +53,7 @@ router = APIRouter(prefix="/api/search", tags=["search"], dependencies=[Depends(
 # part). Local enrichment (in_library / followed) runs per request so a
 # follow or sync is reflected immediately.
 _CACHE_TTL = 60.0
-_items_cache: dict[str, tuple[float, list[tuple[VideoItem, str]]]] = {}
+_items_cache: dict[str, tuple[float, list[tuple[VideoItem, str]], list[dict]]] = {}
 
 # Code-like query: "SSIS-123", "ssis123", "229SCUTE-1575". WordPress search
 # is fuzzy full-text, so for code-like queries we keep only exact code
@@ -57,9 +68,9 @@ class SearchResultStar(BaseModel):
 
 
 class SearchResultActress(SearchResultStar):
-    """Directory match from the local actress index (data/actress_index.json,
-    built by scripts/build_actress_index.py) — followable even when the video
-    search returns nothing for the name."""
+    """Directory match from ijavtorrent's actress search (or the local
+    actress index fallback) — followable even when the video search
+    returns nothing for the name."""
 
     image: str = ""
 
@@ -92,16 +103,16 @@ class SearchResponse(BaseModel):
     query: str
     count: int
     items: list[SearchResultItem]
-    actresses: list[SearchResultActress] = []  # name matches from the local directory index
+    actresses: list[SearchResultActress] = []  # name matches from the actress directory
 
 
 def _norm_code(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", s).upper()
 
 
-# Local actress directory index (ijavtorrent has no actress search endpoint —
-# its /actresses listing ignores query params — so we crawl it offline with
-# scripts/build_actress_index.py). Lazy-loaded, mtime-cached.
+# Local actress directory index — offline fallback for the live
+# /actresses?searchTerm= search (ijavtorrent down or empty). Crawled by
+# scripts/build_actress_index.py; lazy-loaded, mtime-cached.
 _ACTRESS_INDEX_PATH = Path(__file__).resolve().parents[2] / "data" / "actress_index.json"
 _actress_index: tuple[float, list[dict]] | None = None
 
@@ -137,9 +148,23 @@ def _actress_matches(query: str, limit: int = 12) -> list[dict]:
 
 
 async def _ijav_items(fetcher, query: str) -> list[VideoItem]:
-    url = f"{IJAV_BASE_URL}/?s={urllib.parse.quote(query)}"
+    # ?searchTerm= is ijavtorrent's search param since the 2026-09 redesign;
+    # the old ?s= silently returns the homepage for every query.
+    url = f"{IJAV_BASE_URL}/?searchTerm={urllib.parse.quote(query)}"
     html = await fetcher.fetch(url)
     return IJavTorrentExtractor().extract(html)
+
+
+async def _ijav_actresses(fetcher, query: str) -> list[dict]:
+    """Live actress directory search; empty list on any failure (the caller
+    falls back to the offline-crawled local index)."""
+    try:
+        url = f"{IJAV_BASE_URL}/actresses?searchTerm={urllib.parse.quote(query)}"
+        html = await fetcher.fetch(url)
+        return parse_actress_directory(html)
+    except Exception as exc:
+        log.warning(f"actress directory search failed for {query!r}: {exc}")
+        return []
 
 
 async def _sukebei_exact(fetcher, query: str) -> list[VideoItem]:
@@ -156,15 +181,17 @@ async def _sukebei_exact(fetcher, query: str) -> list[VideoItem]:
     ]
 
 
-async def _fetch_items(query: str) -> list[tuple[VideoItem, str]]:
+async def _fetch_items(query: str) -> tuple[list[tuple[VideoItem, str]], list[dict]]:
     """Fetch + extract + filter search results (60s TTL cache).
 
-    Returns (item, source) pairs; source is "ijav" or "sukebei".
+    Returns (work items, directory actresses); item source is "ijav" or
+    "sukebei". Directory actresses come from ijavtorrent's live actress
+    search — empty for code-like queries and on fetch failure.
     """
     key = query.strip().lower()
     hit = _items_cache.get(key)
     if hit and (time.time() - hit[0]) < _CACHE_TTL:
-        return hit[1]
+        return hit[1], hit[2]
 
     from scrapers.v2.fetchers import HttpxFetcher
 
@@ -172,6 +199,9 @@ async def _fetch_items(query: str) -> list[tuple[VideoItem, str]]:
     want = _norm_code(query)
 
     async with HttpxFetcher() as fetcher:
+        # A code-like query can never be an actress name — skip the
+        # directory round-trip.
+        actresses = [] if code_query else await _ijav_actresses(fetcher, query.strip())
         items = await _ijav_items(fetcher, query.strip())
 
         kept: list[tuple[VideoItem, str]] = []
@@ -203,8 +233,8 @@ async def _fetch_items(query: str) -> list[tuple[VideoItem, str]]:
                     continue
                 kept.append((it, "ijav"))
 
-    _items_cache[key] = (time.time(), kept)
-    return kept
+    _items_cache[key] = (time.time(), kept, actresses)
+    return kept, actresses
 
 
 def _library_codes(codes: list[str]) -> set[str]:
@@ -227,7 +257,7 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
     query = q.strip()
 
     try:
-        items = await _fetch_items(query)
+        items, directory = await _fetch_items(query)
     except Exception as exc:
         log.warning(f"search fetch failed for {query!r}: {exc}")
         raise HTTPException(status_code=502, detail=f"检索失败: {exc}") from exc
@@ -275,6 +305,9 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
         )
 
     log.info(f"search {query!r}: {len(results)} results")
+    # Live directory search first; the offline-crawled local index is the
+    # fallback when ijavtorrent returned nothing (down or no match).
+    matches = (directory or _actress_matches(query))[:12]
     actresses = [
         SearchResultActress(
             name=a["name"],
@@ -282,6 +315,6 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
             image=a.get("image", ""),
             followed=a["url"] in followed_urls,
         )
-        for a in _actress_matches(query)
+        for a in matches
     ]
     return SearchResponse(query=query, count=len(results), items=results, actresses=actresses)

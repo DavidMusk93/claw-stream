@@ -1,9 +1,9 @@
 """scripts/build_actress_index.py — Build the local ijavtorrent actress index.
 
-ijavtorrent has no actress search endpoint (its /actresses directory ignores
-query params and spans ~900 paginated pages), so /api/search cannot resolve a
-name like "凪ひかる" to a followable actress page URL. This script crawls the
-directory once and writes data/actress_index.json:
+ijavtorrent's /actresses directory supports live name search
+(`?searchTerm=`), which /api/search uses first; this script crawls the full
+~900-page directory once and writes data/actress_index.json as the offline
+fallback for when the live search is down or returns nothing:
 
     {"built_at": "...", "actresses": [{"name", "url", "image"}, ...]}
 
@@ -23,37 +23,13 @@ from pathlib import Path
 
 import httpx
 
-BASE = "https://ijavtorrent.com"
+from scrapers.v2.extractors import IJAV_BASE_URL as BASE
+from scrapers.v2.extractors import parse_actress_directory
+
 OUT = Path(__file__).resolve().parent.parent / "data" / "actress_index.json"
 CONCURRENCY = 4
 
-# Two anchors per card share the actress URL: the first wraps the photo (or a
-# name-placeholder div for imageless actresses — most of the directory), the
-# second carries the text "Name (N movies)". Extract independently, merge.
-_IMG_RE = re.compile(
-    r'<a href="(/actress/[a-z0-9-]+-\d+/?)">\s*<img src="([^"]+)"', re.IGNORECASE
-)
-_NAME_RE = re.compile(
-    r'<a href="(/actress/[a-z0-9-]+-\d+/?)">([^<]+?)\s*\((\d+) movies?\)</a>',
-    re.IGNORECASE,
-)
 _LAST_PAGE_RE = re.compile(r'/actresses\?page=(\d+)"')
-
-
-def _parse_page(html: str) -> list[dict]:
-    images = {path: img for path, img in _IMG_RE.findall(html)}
-    return [
-        {
-            "name": name.strip(),
-            # Strip the trailing slash: POST /api/stars/add anchors its
-            # actress-URL regex at the numeric id ($).
-            "url": f"{BASE}{path.rstrip('/')}",
-            "image": images.get(path, ""),
-            "movies": int(movies),
-        }
-        for path, name, movies in _NAME_RE.findall(html)
-        if name.strip()
-    ]
 
 
 def _last_page(html: str) -> int:
@@ -71,7 +47,7 @@ async def main() -> None:
         total = _last_page(r.text)
         print(f"directory has {total} pages", flush=True)
 
-        actresses: dict[str, dict] = {a["url"]: a for a in _parse_page(r.text)}
+        actresses: dict[str, dict] = {a["url"]: a for a in parse_actress_directory(r.text)}
         sem = asyncio.Semaphore(CONCURRENCY)
 
         async def fetch_page(page: int) -> None:
@@ -80,7 +56,7 @@ async def main() -> None:
                     try:
                         resp = await client.get(f"{BASE}/actresses?page={page}")
                         resp.raise_for_status()
-                        for a in _parse_page(resp.text):
+                        for a in parse_actress_directory(resp.text):
                             actresses.setdefault(a["url"], a)
                         return
                     except Exception as exc:

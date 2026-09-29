@@ -145,6 +145,24 @@ def test_search_filters_and_enriches(client):
     ]
 
 
+def test_search_uses_searchterm_param(client, monkeypatch):
+    """Regression: ijavtorrent renamed its search param s→searchTerm in the
+    2026-09 redesign; ?s= silently returns the homepage for every query."""
+    seen: list[str] = []
+
+    async def _fetch(url: str) -> str:
+        seen.append(url)
+        return _SEARCH_PAGE
+
+    monkeypatch.setattr("scrapers.v2.fetchers.HttpxFetcher.fetch", AsyncMock(side_effect=_fetch))
+    search_router._items_cache.clear()
+
+    res = client.get("/api/search", params={"q": "sample title"})
+    assert res.status_code == 200
+    assert any(u.startswith("https://ijavtorrent.com/?searchTerm=sample") for u in seen)
+    assert not any("?s=" in u for u in seen)
+
+
 def test_search_ranks_magnets_by_sync_scoring(client, monkeypatch):
     """Best magnet follows TitleSyncSink._score_magnet (hhd800 [FHD] beats a
     higher-seed untagged candidate), not raw extractor order."""
@@ -167,9 +185,41 @@ def test_search_ranks_magnets_by_sync_scoring(client, monkeypatch):
     assert item["seeds"] == 1
 
 
+_ACTRESS_PAGE = (
+    "<html><body>"
+    '<a href="/actress/live-star-9/"><img src="https://img/live.jpg"/></a>'
+    '<a href="/actress/live-star-9/">Live Star (7 movies)</a>'
+    '<a href="/actress/imageless-10/"><div>placeholder</div></a>'
+    '<a href="/actress/imageless-10/">Imageless Star (2 movies)</a>'
+    "</body></html>"
+)
+
+
+def test_search_matches_live_actress_directory(client, monkeypatch):
+    """Name queries hit ijavtorrent's live /actresses?searchTerm= search:
+    followable (trailing slash stripped for POST /api/stars/add) and with
+    the profile image when the directory has one."""
+    async def _fetch(url: str) -> str:
+        if "/actresses" in url:
+            return _ACTRESS_PAGE
+        return _SEARCH_PAGE
+
+    monkeypatch.setattr("scrapers.v2.fetchers.HttpxFetcher.fetch", AsyncMock(side_effect=_fetch))
+    search_router._items_cache.clear()
+
+    res = client.get("/api/search", params={"q": "live star"})
+    assert res.status_code == 200
+    actresses = res.json()["actresses"]
+    assert [a["name"] for a in actresses] == ["Live Star", "Imageless Star"]
+    assert actresses[0]["url"] == "https://ijavtorrent.com/actress/live-star-9"
+    assert actresses[0]["image"] == "https://img/live.jpg"
+    assert actresses[1]["image"] == ""
+
+
 def test_search_matches_actress_directory(client, monkeypatch, tmp_path):
-    """Name queries also match the local actress directory index, so the
-    actress is followable even when the video search finds nothing."""
+    """The offline-crawled local actress index is the fallback when the
+    live directory search returns nothing, so the actress stays followable
+    even when the video search finds nothing either."""
     index = tmp_path / "actress_index.json"
     index.write_text(json.dumps({
         "built_at": "2026-09-29",

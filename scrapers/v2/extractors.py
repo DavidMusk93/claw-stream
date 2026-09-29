@@ -252,6 +252,42 @@ class IJavTorrentExtractor:
         return magnets, sizes, seeds, leeches, resolutions, hhd800_flags
 
 
+# ── ijavtorrent actress directory ─────────────────────────────────────
+# /actresses (optionally ?searchTerm=<name> for server-side name search)
+# lists actress cards. Two anchors per card share the actress URL: the
+# first wraps the photo (imageless actresses get a name-placeholder div
+# instead — most of the directory), the second carries "Name (N movies)".
+_ACTRESS_IMG_RE = re.compile(
+    r'<a href="(/actress/[a-z0-9-]+-\d+/?)">\s*<img src="([^"]+)"', re.IGNORECASE
+)
+_ACTRESS_NAME_RE = re.compile(
+    r'<a href="(/actress/[a-z0-9-]+-\d+/?)">([^<]+?)\s*\((\d+) movies?\)</a>',
+    re.IGNORECASE,
+)
+
+
+def parse_actress_directory(html: str) -> list[dict]:
+    """Parse an ijavtorrent /actresses page into [{name, url, image, movies}].
+
+    Entries are deduped by URL (the ?searchTerm= result repeats a card per
+    matched section). Trailing slashes are stripped: POST /api/stars/add
+    anchors its actress-URL regex at the numeric id.
+    """
+    images = {path.rstrip("/"): img for path, img in _ACTRESS_IMG_RE.findall(html)}
+    actresses: dict[str, dict] = {}
+    for path, name, movies in _ACTRESS_NAME_RE.findall(html):
+        name = name.strip()
+        if not name:
+            continue
+        url = f"{IJAV_BASE_URL}{path.rstrip('/')}"
+        entry = actresses.setdefault(
+            url, {"name": name, "url": url, "image": "", "movies": int(movies)}
+        )
+        if not entry["image"]:
+            entry["image"] = images.get(path.rstrip("/"), "")
+    return list(actresses.values())
+
+
 # ── sukebei.nyaa.si RSS source ────────────────────────────────────────
 # sukebei is the upstream origin of the torrents ijavtorrent used to
 # aggregate. Its RSS search exposes structured metadata (infoHash,
