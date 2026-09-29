@@ -70,7 +70,7 @@
         </div>
 
         <!-- Empty state -->
-        <div v-else-if="searched && items.length === 0" class="text-center py-32">
+        <div v-else-if="searched && items.length === 0 && actresses.length === 0" class="text-center py-32">
           <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-black/[0.04] text-foreground-muted mb-4">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8" />
@@ -81,7 +81,56 @@
         </div>
 
         <!-- Results: hero cards in the home page's StarCard language -->
-        <div v-else-if="items.length" class="space-y-6">
+        <div v-else-if="searched && (items.length || actresses.length)" class="space-y-6">
+          <!-- Actress directory matches: always followable, even when the
+               video search found nothing for the name -->
+          <div v-if="actresses.length" class="space-y-3">
+            <p class="text-[13px] text-foreground-muted px-1">Actresses matching "{{ lastQuery }}"</p>
+            <div class="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-1">
+              <div
+                v-for="a in actresses"
+                :key="a.url"
+                class="shrink-0 w-[150px] p-4 rounded-2xl bg-white border border-black/[0.06] shadow-sm flex flex-col items-center gap-2.5"
+              >
+                <div class="w-20 h-20 rounded-full overflow-hidden bg-[#F2F2F7] flex items-center justify-center">
+                  <img
+                    v-if="a.image && !failedCovers.has(a.url)"
+                    :src="a.image"
+                    :alt="a.name"
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                    decoding="async"
+                    class="w-full h-full object-cover"
+                    @error="failedCovers.add(a.url)"
+                  />
+                  <span v-else class="text-[22px] font-semibold text-foreground-muted/50">{{ a.name.charAt(0) }}</span>
+                </div>
+                <p class="text-[13px] font-medium text-foreground text-center leading-tight line-clamp-2">{{ a.name }}</p>
+                <button
+                  class="flex items-center gap-1.5 h-8 px-4 rounded-full text-[12px] font-medium transition-all active:scale-[0.97] disabled:cursor-default border"
+                  :class="isFollowed(a.url)
+                    ? 'border-[#30d158]/40 bg-[#30d158]/10 text-[#30d158]'
+                    : 'border-black/[0.08] text-foreground hover:bg-black/[0.03]'"
+                  :disabled="isFollowed(a.url) || followingUrls.has(a.url)"
+                  @click="follow(null, a)"
+                >
+                  <svg v-if="isFollowed(a.url)" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <svg v-else-if="followingUrls.has(a.url)" class="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M21 12a9 9 0 1 1-6.22-8.56" />
+                  </svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  {{ isFollowed(a.url) ? 'Following' : 'Follow' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <template v-if="items.length">
           <p class="text-[13px] text-foreground-muted px-1">{{ items.length }} results for "{{ lastQuery }}"</p>
 
           <div
@@ -185,6 +234,9 @@
                   </svg>
                   {{ isFollowed(star.url) ? `${star.name} · Following` : `Follow ${star.name}` }}
                 </button>
+                <p v-if="!item.stars.length" class="text-[12px] text-foreground-muted/60 py-1">
+                  该来源无演员信息 — 可按演员名搜索后关注
+                </p>
               </div>
 
               <!-- Magnet candidates: hash visible, one-click copy per row -->
@@ -224,6 +276,7 @@
               </div>
             </div>
           </div>
+          </template>
         </div>
       </div>
     </main>
@@ -241,7 +294,7 @@
 </template>
 
 <script setup lang="ts">
-import type { SearchResponse, SearchResultItem, SearchResultMagnet, SearchResultStar } from '~/types/api'
+import type { SearchResponse, SearchResultActress, SearchResultItem, SearchResultMagnet, SearchResultStar } from '~/types/api'
 
 const config = useRuntimeConfig()
 const { track } = useTrack()
@@ -250,6 +303,7 @@ const { add: addLog } = useEventLog()
 const query = ref('')
 const lastQuery = ref('')
 const items = ref<SearchResultItem[]>([])
+const actresses = ref<SearchResultActress[]>([])
 const loading = ref(false)
 const searched = ref(false)
 const errorMsg = ref('')
@@ -339,11 +393,13 @@ async function search() {
       params: { q },
     })
     items.value = res.items
+    actresses.value = res.actresses ?? []
     lastQuery.value = q
     searched.value = true
-    followedUrls.value = new Set(
-      res.items.flatMap(it => it.stars).filter(s => s.followed).map(s => s.url)
-    )
+    followedUrls.value = new Set([
+      ...res.items.flatMap(it => it.stars).filter(s => s.followed).map(s => s.url),
+      ...(res.actresses ?? []).filter(a => a.followed).map(a => a.url),
+    ])
     track('search', { meta: { query: q, count: res.count } })
   } catch (e: any) {
     errorMsg.value = e?.data?.detail || e?.message || 'Search failed'
@@ -353,7 +409,7 @@ async function search() {
   }
 }
 
-async function follow(item: SearchResultItem, star: SearchResultStar) {
+async function follow(item: SearchResultItem | null, star: SearchResultStar) {
   if (isFollowed(star.url) || followingUrls.value.has(star.url)) return
   followingUrls.value = new Set([...followingUrls.value, star.url])
 
@@ -366,8 +422,8 @@ async function follow(item: SearchResultItem, star: SearchResultStar) {
 
     followedUrls.value = new Set([...followedUrls.value, star.url])
     showToast(`Following ${res.name}`, `${res.titles_found} titles found, syncing in background`, 'success')
-    track('add_star', { code: res.code, meta: { name: res.name, source: 'search', via: item.code } })
-    addLog({ kind: 'action', title: `Followed ${res.name}`, detail: `via search ${item.code}`, state: 'success' })
+    track('add_star', { code: res.code, meta: { name: res.name, source: 'search', ...(item ? { via: item.code } : {}) } })
+    addLog({ kind: 'action', title: `Followed ${res.name}`, detail: item ? `via search ${item.code}` : 'via search actress match', state: 'success' })
     refreshNuxtData('stars')
   } catch (e: any) {
     if (e?.status === 409 || e?.response?.status === 409) {

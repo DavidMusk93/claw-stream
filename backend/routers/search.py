@@ -16,9 +16,11 @@ or actress links, so no follow button can be offered for them.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 import urllib.parse
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -54,6 +56,14 @@ class SearchResultStar(BaseModel):
     followed: bool = False
 
 
+class SearchResultActress(SearchResultStar):
+    """Directory match from the local actress index (data/actress_index.json,
+    built by scripts/build_actress_index.py) — followable even when the video
+    search returns nothing for the name."""
+
+    image: str = ""
+
+
 class SearchResultMagnet(BaseModel):
     magnet: str
     resolution: str = ""
@@ -82,10 +92,48 @@ class SearchResponse(BaseModel):
     query: str
     count: int
     items: list[SearchResultItem]
+    actresses: list[SearchResultActress] = []  # name matches from the local directory index
 
 
 def _norm_code(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", s).upper()
+
+
+# Local actress directory index (ijavtorrent has no actress search endpoint —
+# its /actresses listing ignores query params — so we crawl it offline with
+# scripts/build_actress_index.py). Lazy-loaded, mtime-cached.
+_ACTRESS_INDEX_PATH = Path(__file__).resolve().parents[2] / "data" / "actress_index.json"
+_actress_index: tuple[float, list[dict]] | None = None
+
+
+def _actress_matches(query: str, limit: int = 12) -> list[dict]:
+    global _actress_index
+    q = query.strip().lower()
+    if len(q) < 2:
+        return []
+    try:
+        mtime = _ACTRESS_INDEX_PATH.stat().st_mtime
+    except OSError:
+        return []
+    if _actress_index is None or _actress_index[0] != mtime:
+        try:
+            data = json.loads(_ACTRESS_INDEX_PATH.read_text())
+            _actress_index = (mtime, data.get("actresses", []))
+        except Exception as exc:
+            log.warning(f"actress index unreadable: {exc}")
+            _actress_index = (mtime, [])
+    entries = _actress_index[1]
+    # Prefix matches rank above plain substring matches; ties break by
+    # movie count so the famous names surface first.
+    starts = sorted(
+        (a for a in entries if a["name"].lower().startswith(q)),
+        key=lambda a: -a.get("movies", 0),
+    )
+    contains = sorted(
+        (a for a in entries if q in a["name"].lower() and not a["name"].lower().startswith(q)),
+        key=lambda a: -a.get("movies", 0),
+    )
+    return (starts + contains)[:limit]
 
 
 async def _ijav_items(fetcher, query: str) -> list[VideoItem]:
@@ -227,4 +275,13 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
         )
 
     log.info(f"search {query!r}: {len(results)} results")
-    return SearchResponse(query=query, count=len(results), items=results)
+    actresses = [
+        SearchResultActress(
+            name=a["name"],
+            url=a["url"],
+            image=a.get("image", ""),
+            followed=a["url"] in followed_urls,
+        )
+        for a in _actress_matches(query)
+    ]
+    return SearchResponse(query=query, count=len(results), items=results, actresses=actresses)

@@ -81,6 +81,10 @@ export interface SearchResultStar {
   followed: boolean
 }
 
+export interface SearchResultActress extends SearchResultStar {
+  image?: string
+}
+
 export interface SearchResultMagnet {
   magnet: string
   resolution?: string
@@ -109,4 +113,5 @@ export interface SearchResponse {
   query: string
   count: number
   items: SearchResultItem[]
+  actresses?: SearchResultActress[]
 }

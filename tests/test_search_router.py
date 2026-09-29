@@ -7,6 +7,7 @@ in-library and followed enrichment.
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import AsyncMock
 
@@ -164,6 +165,31 @@ def test_search_ranks_magnets_by_sync_scoring(client, monkeypatch):
     assert item["resolution"] == "[FHD]"
     assert item["size"] == "5.2 GB"
     assert item["seeds"] == 1
+
+
+def test_search_matches_actress_directory(client, monkeypatch, tmp_path):
+    """Name queries also match the local actress directory index, so the
+    actress is followable even when the video search finds nothing."""
+    index = tmp_path / "actress_index.json"
+    index.write_text(json.dumps({
+        "built_at": "2026-09-29",
+        "actresses": [
+            {"name": "Test Star", "url": "https://ijavtorrent.com/actress/test-star-1", "image": "https://img/1.jpg"},
+            {"name": "Test Starlet", "url": "https://ijavtorrent.com/actress/test-starlet-2", "image": ""},
+            {"name": "Other Person", "url": "https://ijavtorrent.com/actress/other-3", "image": ""},
+        ],
+    }))
+    monkeypatch.setattr(search_router, "_ACTRESS_INDEX_PATH", index)
+    monkeypatch.setattr(search_router, "_actress_index", None)
+
+    res = client.get("/api/search", params={"q": "test star"})
+    assert res.status_code == 200
+    actresses = res.json()["actresses"]
+    assert [a["name"] for a in actresses] == ["Test Star", "Test Starlet"]
+    # Followed state resolved from config, same as per-card stars
+    assert actresses[0]["followed"] is True
+    assert actresses[1]["followed"] is False
+    assert actresses[0]["image"] == "https://img/1.jpg"
 
 
 def test_search_code_query_keeps_exact_match_only(client):
