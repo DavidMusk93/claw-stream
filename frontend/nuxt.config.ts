@@ -128,7 +128,10 @@ export default defineNuxtConfig({
       cssCodeSplit: true,
     },
     server: {
-      allowedHosts: ['cc.guohuasun.com', 'localhost', '127.0.0.1'],
+      // Dev-server host check only. Extra hosts (e.g. a LAN or tunnel
+      // hostname) go in NUXT_DEV_ALLOWED_HOSTS=foo,bar — never hardcode a
+      // production domain here.
+      allowedHosts: process.env.NUXT_DEV_ALLOWED_HOSTS?.split(',') ?? ['localhost', '127.0.0.1'],
     },
   },
   experimental: {

@@ -6,7 +6,11 @@ architecture see `docs/ops/https-setup.md`.
 
 ## Caddy Reverse Proxy
 
-Caddy serves `cc.guohuasun.com` on 443, auto-provisions Let's Encrypt certificates:
+Caddy serves the production domain on 443 with auto-provisioned Let's Encrypt
+certificates. The domain is operational config — it lives only in the
+`XSTREAM_DOMAIN` environment variable (drop-in in
+`/etc/systemd/system/caddy.service.d/`), injected into the repo Caddyfile's
+`{$XSTREAM_DOMAIN}` placeholder at load time:
 
 - `/images/*` → served directly from disk bind mount `/var/lib/caddy/xstream-images`
   (requires `mount --bind /root/xstream/images /var/lib/caddy/xstream-images`),

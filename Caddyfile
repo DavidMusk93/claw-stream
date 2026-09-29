@@ -1,6 +1,9 @@
 # Caddy 反向代理配置
 # 443 HTTPS 服务，自动申请 Let's Encrypt 证书
 #
+# 域名是运维配置，不进仓库：通过 XSTREAM_DOMAIN 环境变量注入
+# （caddy systemd unit 的 drop-in: /etc/systemd/system/caddy.service.d/）。
+#
 # 路由规则：
 #   /api/*     → FastAPI backend (localhost:8765)
 #   /stream/*  → FastAPI backend (localhost:8765)
@@ -16,7 +19,7 @@
     }
 }
 
-cc.guohuasun.com {
+{$XSTREAM_DOMAIN} {
     # Static cover images → served directly from disk (bypass Nuxt/FastAPI)
     # Requires: mount --bind /root/xstream/images /var/lib/caddy/xstream-images
     # Covers are immutable per code — cache aggressively so refreshes don't

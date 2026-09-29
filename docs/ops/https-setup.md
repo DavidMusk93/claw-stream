@@ -39,7 +39,7 @@ User Browser
 **Caddyfile:**
 
 ```caddyfile
-rn.guohuasun.com {
+<your-domain> {
     reverse_proxy localhost:3000
     log {
         output file /root/xstream/logs/caddy-access.log {
@@ -54,7 +54,10 @@ rn.guohuasun.com {
 }
 ```
 
-- `rn.guohuasun.com` listens on 443 and serves HTTPS by default.
+- `<your-domain>` listens on 443 and serves HTTPS by default. The domain is
+  operational config, not code: it is injected into the Caddyfile via the
+  `XSTREAM_DOMAIN` environment variable (drop-in in
+  `/etc/systemd/system/caddy.service.d/`).
 - `:80` is required for Let's Encrypt HTTP-01 challenge validation and must remain open.
 
 ---
@@ -84,7 +87,7 @@ Caddy manages certificates automatically:
 
 ```bash
 systemctl stop caddy
-rm -rf /root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/rn.guohuasun.com
+rm -rf /root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<your-domain>  # per-domain dir
 systemctl start caddy
 ```
 
@@ -106,7 +109,7 @@ caddy reload --config /root/xstream/Caddyfile
 tail -f /root/xstream/logs/caddy-access.log
 
 # Test HTTPS
-curl -s https://rn.guohuasun.com/ | head
+curl -s https://<your-domain>/ | head
 ```
 
 ---
@@ -115,9 +118,9 @@ curl -s https://rn.guohuasun.com/ | head
 
 ### 6.1 Browser Certificate Error
 
-1. Check certificate expiry: `openssl s_client -connect rn.guohuasun.com:443`
+1. Check certificate expiry: `openssl s_client -connect <your-domain>:443`
 2. Check Caddy status: `systemctl status caddy`
-3. Verify port 80 is open: `curl -I http://rn.guohuasun.com/.well-known/acme-challenge/test`
+3. Verify port 80 is open: `curl -I http://<your-domain>/.well-known/acme-challenge/test`
 
 ### 6.2 HTTPS Works but Page is Blank / 404
 
