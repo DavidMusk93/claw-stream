@@ -11,6 +11,8 @@ System architecture, module design, and algorithm specifications.
 | Document | Content |
 |----------|---------|
 | [architecture.md](design/architecture.md) | System architecture, playback flow, state machine, component interaction, troubleshooting |
+| [architecture-decisions.md](design/architecture-decisions.md) | Load-bearing architectural decisions & rationale (storage, on-demand discipline, libtorrent tuning, sync) |
+| [database.md](design/database.md) | PostgreSQL schema (wide tables), pool access rules, DB CLI |
 | [cache-architecture.md](design/cache-architecture.md) | Cache module architecture (first principle: smooth playback), lifecycle, eviction strategy, best practices |
 | [tiered-cache.md](design/tiered-cache.md) | Four-tier cache policy & scoring formula |
 | [bootstrap-first.md](design/bootstrap-first.md) | Skip-recheck verification mechanism |
@@ -38,6 +40,7 @@ systemd, Caddy, HTTPS, logging, and production runbooks.
 | Document | Content |
 |----------|---------|
 | [process-lifecycle.md](ops/process-lifecycle.md) | systemd service config & process lifecycle |
+| [runbook.md](ops/runbook.md) | Caddy reverse proxy, ports, logging, data refresh & covers, common ops commands |
 | [https-setup.md](ops/https-setup.md) | HTTPS architecture, Caddy + TLS, maintenance |
 | [tracing-logging.md](ops/tracing-logging.md) | Logging system, trace_id flow, per-module log files |
 
