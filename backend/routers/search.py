@@ -30,6 +30,7 @@ from core.db.connection import _conn as _db_conn
 from scrapers.v2.extractors import IJAV_BASE_URL, IJavTorrentExtractor, SukebeiRssExtractor
 from scrapers.v2.filters import hidden_reason
 from scrapers.v2.schemas import VideoItem
+from scrapers.v2.sinks import TitleSyncSink
 from scrapers.v2.tasks.sync_titles import SUKEBEI_RSS_URL
 
 log = get_logger("search-router")
@@ -74,7 +75,7 @@ class SearchResultItem(BaseModel):
     in_library: bool = False
     source: str = "ijav"  # "ijav" (rich metadata) or "sukebei" (fallback, no cover/actress)
     stars: list[SearchResultStar] = []
-    magnets: list[SearchResultMagnet] = []  # all candidates, best first (extractor order)
+    magnets: list[SearchResultMagnet] = []  # all candidates, best first (sync scoring)
 
 
 class SearchResponse(BaseModel):
@@ -187,36 +188,43 @@ async def search_titles(q: str = Query(..., min_length=2, max_length=100)) -> Se
     followed_urls = {s.get("star_page_url") for s in config.get("stars", [])}
     in_library = _library_codes([it.code for it, _ in items])
 
-    results = [
-        SearchResultItem(
-            code=it.code,
-            title=it.title,
-            release_date=it.release_date,
-            views=it.views,
-            likes=it.likes,
-            cover_url=it.cover_url,
-            resolution=it.magnets[0].resolution,
-            size=it.magnets[0].size,
-            seeds=it.magnets[0].seed,
-            in_library=it.code in in_library,
-            source=source,
-            stars=[
-                SearchResultStar(name=s.name, url=s.url, followed=s.url in followed_urls)
-                for s in it.star_links
-            ],
-            magnets=[
-                SearchResultMagnet(
-                    magnet=m.magnet,
-                    resolution=m.resolution,
-                    size=m.size,
-                    seeds=m.seed,
-                    is_hd=m.is_hhd800,
-                )
-                for m in it.magnets
-            ],
+    results = []
+    for it, source in items:
+        # Same best-magnet selection as the sync pipeline (hhd800 bonus,
+        # resolution tier, seeds, size) — not raw extractor order.
+        scored = sorted(
+            it.magnets, key=lambda m: TitleSyncSink._score_magnet(m), reverse=True
         )
-        for it, source in items
-    ]
+        best = scored[0]
+        results.append(
+            SearchResultItem(
+                code=it.code,
+                title=it.title,
+                release_date=it.release_date,
+                views=it.views,
+                likes=it.likes,
+                cover_url=it.cover_url,
+                resolution=best.resolution,
+                size=best.size,
+                seeds=best.seed,
+                in_library=it.code in in_library,
+                source=source,
+                stars=[
+                    SearchResultStar(name=s.name, url=s.url, followed=s.url in followed_urls)
+                    for s in it.star_links
+                ],
+                magnets=[
+                    SearchResultMagnet(
+                        magnet=m.magnet,
+                        resolution=m.resolution,
+                        size=m.size,
+                        seeds=m.seed,
+                        is_hd=m.is_hhd800,
+                    )
+                    for m in scored
+                ],
+            )
+        )
 
     log.info(f"search {query!r}: {len(results)} results")
     return SearchResponse(query=query, count=len(results), items=results)

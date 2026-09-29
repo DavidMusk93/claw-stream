@@ -42,6 +42,26 @@ def _card(code: str, actresses: list[tuple[str, str]], magnet: bool = True) -> s
     )
 
 
+# Two candidates where extractor order ≠ sync scoring: the first row has
+# more seeds but no resolution tag; the second is an hhd800 [FHD] source,
+# which _score_magnet ranks far higher (hhd800 bonus + res tier).
+_MULTI_CARD = (
+    '<div class="video-item">'
+    '<a href="/movie/multi-005-12345"><img alt="MULTI-005 sample title"/></a>'
+    '<div class="mb-2">Released 01/15/2026</div>'
+    '<div class="mb-1"><a href="/actress/test-star-1">Test Star</a></div><table>'
+    '<tr style="vertical-align: middle"><td>'
+    f'<a href="magnet:?xt=urn:btih:{"d" * 40}&dn=MULTI-005">dl</a>'
+    '<i class="fa-weight-hanging"></i> 1.0 GB <strong>S:</strong> 99'
+    "</td></tr>"
+    '<tr style="vertical-align: middle"><td>'
+    f'<a href="magnet:?xt=urn:btih:{"e" * 40}&dn=%2B%2B%2B%20%5BFHD%5D%20MULTI-005">dl</a>'
+    '<i class="fa-weight-hanging"></i> 5.2 GB <strong>S:</strong> 1'
+    "</td></tr>"
+    "</table></div>"
+)
+
+
 _SEARCH_PAGE = (
     "<html><body>"
     # Kept: solo work, in the test DB, actress already followed
@@ -122,6 +142,28 @@ def test_search_filters_and_enriches(client):
             "is_hd": False,
         }
     ]
+
+
+def test_search_ranks_magnets_by_sync_scoring(client, monkeypatch):
+    """Best magnet follows TitleSyncSink._score_magnet (hhd800 [FHD] beats a
+    higher-seed untagged candidate), not raw extractor order."""
+    page = f"<html><body>{_MULTI_CARD}</body></html>"
+    monkeypatch.setattr(
+        "scrapers.v2.fetchers.HttpxFetcher.fetch",
+        AsyncMock(return_value=page),
+    )
+    search_router._items_cache.clear()
+
+    res = client.get("/api/search", params={"q": "MULTI-005"})
+    assert res.status_code == 200
+    (item,) = res.json()["items"]
+
+    assert [m["magnet"][20:28] for m in item["magnets"]] == ["eeeeeeee", "dddddddd"]
+    assert item["magnets"][0]["is_hd"] is True
+    # Top-level fields describe the scored best, not the first extractor row
+    assert item["resolution"] == "[FHD]"
+    assert item["size"] == "5.2 GB"
+    assert item["seeds"] == 1
 
 
 def test_search_code_query_keeps_exact_match_only(client):
